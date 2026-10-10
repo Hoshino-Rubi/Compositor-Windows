@@ -6,6 +6,12 @@ The goal was to create a full-featured image editor that is completely free and 
 
 Because it’s open source, you can download the Xcode project and add, remove, or modify any feature to fit your workflow.
 
+## Windows native port
+
+**Windows download:** [Latest Windows release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) · [中文说明](windows/README.zh-CN.md) · [Build instructions](windows/README.md#build)
+
+A C++20 / Qt 6 Windows port is available in [windows/](windows/README.md), with English, Simplified Chinese, and Traditional Chinese interfaces. Version 0.3.0 adds PSD/PSB and RAW import, Camera Raw, liquify/smudge, soft selections, local subject selection, rich text and group transforms to the native workspace. See [中文说明](windows/README.zh-CN.md) for running, building and compatibility details.
+
 ## Installation
 
 ### Download

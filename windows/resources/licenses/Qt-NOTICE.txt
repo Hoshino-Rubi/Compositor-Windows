@@ -1,0 +1,18 @@
+This distribution uses dynamically linked Qt 6.8.3 libraries.
+Qt is copyright The Qt Company Ltd. and its contributors.
+The LGPL-3.0-only and GPL-3.0-only license texts are included here.
+Qt's SPDX records include bundled third-party library copyright and license notices.
+
+Qt library DLLs are separate from Compositor and may be replaced with compatible
+builds. Compositor's complete source and CMake build instructions are provided
+in the accompanying repository. No Qt source changes were made.
+
+Corresponding Qt sources and build instructions:
+https://download.qt.io/official_releases/qt/6.8/6.8.3/submodules/
+https://code.qt.io/cgit/qt/qtbase.git/?h=v6.8.3
+https://code.qt.io/cgit/qt/qtimageformats.git/?h=v6.8.3
+https://code.qt.io/cgit/qt/qtsvg.git/?h=v6.8.3
+https://doc.qt.io/qt-6.8/windows-building.html
+
+Microsoft Visual C++ runtime components are included by Qt's deployment tool.
+Their use and redistribution are covered by the Visual Studio runtime license.

@@ -1,0 +1,164 @@
+#include "Effects.h"
+#include "Filters.h"
+#include <QPainter>
+#include <QPainterPathStroker>
+#include <cmath>
+namespace comp {
+void validateEffects(const QJsonObject &effects) {
+    for (auto it = effects.begin(); it != effects.end(); ++it) {
+        if (it.value().isNull())
+            continue;
+        if (!QStringList{"stroke", "shadow", "colorOverlay", "innerShadow", "outerGlow", "innerGlow"}.contains(
+                it.key()) ||
+            !it.value().isObject())
+            throw Error("unsupportedFeature", "effects");
+        const auto o = it.value().toObject();
+        for (auto field = o.begin(); field != o.end(); ++field) {
+            if (field.key() == "enabled" || field.key() == "inside") {
+                if (!field.value().isBool() && !field.value().isNull())
+                    throw Error("invalidProject");
+                continue;
+            }
+            double low = 0, high = 1;
+            if (field.key() == "angle") {
+                low = -360;
+                high = 360;
+            } else if (field.key() == "distance")
+                high = 5000;
+            else if (field.key() == "size" || field.key() == "blur")
+                high = 500;
+            if (!field.value().isDouble() || !std::isfinite(field.value().toDouble()) ||
+                field.value().toDouble() < low || field.value().toDouble() > high)
+                throw Error("invalidProject");
+        }
+    }
+}
+static QColor effectColor(const QJsonObject &e, bool white = false) {
+    return QColor::fromRgbF(e["red"].toDouble(white ? 1 : 0), e["green"].toDouble(white ? 1 : 0),
+                            e["blue"].toDouble(white ? 1 : 0), e["opacity"].toDouble(1));
+}
+static QImage tint(QImage image, QColor color) {
+    QPainter p(&image);
+    p.setCompositionMode(QPainter::CompositionMode_SourceIn);
+    p.fillRect(image.rect(), color);
+    return image;
+}
+static QImage shifted(const QImage &source, QPointF offset) {
+    QImage image(source.size(), QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull())
+        throw Error("tooLarge");
+    image.fill(Qt::transparent);
+    QPainter p(&image);
+    p.drawImage(offset, source);
+    return image;
+}
+QImage applyEffects(const QImage &source, const QJsonObject &effects, double scale) {
+    if (effects.isEmpty())
+        return source;
+    QImage result(source.size(), QImage::Format_ARGB32_Premultiplied);
+    if (result.isNull())
+        throw Error("tooLarge");
+    result.fill(Qt::transparent);
+    auto enabled = [&](QString key) {
+        return effects[key].isObject() && effects[key].toObject()["enabled"].toBool(true);
+    };
+    auto shadow = [&](QString key, bool inside) {
+        auto e = effects[key].toObject();
+        const double angle = e["angle"].toDouble(90) * 3.141592653589793 / 180.,
+                     distance = e["distance"].toDouble(inside ? 10 : 20) * scale;
+        QImage alpha = source;
+        if (inside) {
+            for (int y = 0; y < alpha.height(); ++y) {
+                auto *row = reinterpret_cast<QRgb *>(alpha.scanLine(y));
+                for (int x = 0; x < alpha.width(); ++x) {
+                    const int a = 255 - qAlpha(row[x]);
+                    row[x] = qRgba(a, a, a, a);
+                }
+            }
+        }
+        auto image = shifted(blurImage(alpha, e["blur"].toDouble(inside ? 10 : 20) * scale),
+                             {-cos(angle) * distance, sin(angle) * distance});
+        if (inside) {
+            QPainter p(&image);
+            p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+            p.drawImage(0, 0, source);
+        }
+        return tint(image, effectColor(e));
+    };
+    if (enabled("shadow")) {
+        QPainter p(&result);
+        p.drawImage(0, 0, shadow("shadow", false));
+    }
+    if (enabled("outerGlow")) {
+        auto e = effects["outerGlow"].toObject();
+        auto image = tint(blurImage(source, e["size"].toDouble(20) * scale), effectColor(e, true));
+        QPainter p(&result);
+        p.drawImage(0, 0, image);
+    }
+    QPainterPath edge;
+    if (enabled("stroke")) {
+        auto e = effects["stroke"].toObject();
+        if (!e["inside"].toBool()) {
+            edge = alphaPath(source);
+            QPainterPathStroker stroke;
+            stroke.setWidth(2 * e["size"].toDouble(4) * scale);
+            stroke.setJoinStyle(Qt::RoundJoin);
+            QPainter p(&result);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.fillPath(stroke.createStroke(edge).united(edge), effectColor(e));
+        }
+    }
+    QImage foreground = source;
+    if (enabled("colorOverlay")) {
+        auto e = effects["colorOverlay"].toObject();
+        QPainter p(&foreground);
+        p.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+        p.fillRect(foreground.rect(), effectColor(e));
+    }
+    if (enabled("innerShadow")) {
+        QPainter p(&foreground);
+        p.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+        p.drawImage(0, 0, shadow("innerShadow", true));
+    }
+    if (enabled("innerGlow")) {
+        auto e = effects["innerGlow"].toObject();
+        auto alpha = source;
+        for (int y = 0; y < alpha.height(); ++y) {
+            auto *row = reinterpret_cast<QRgb *>(alpha.scanLine(y));
+            for (int x = 0; x < alpha.width(); ++x) {
+                int a = 255 - qAlpha(row[x]);
+                row[x] = qRgba(a, a, a, a);
+            }
+        }
+        auto image = blurImage(alpha, e["size"].toDouble(10) * scale);
+        {
+            QPainter p(&image);
+            p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+            p.drawImage(0, 0, source);
+        }
+        image = tint(image, effectColor(e, true));
+        QPainter p(&foreground);
+        p.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+        p.drawImage(0, 0, image);
+    }
+    if (enabled("stroke")) {
+        auto e = effects["stroke"].toObject();
+        if (e["inside"].toBool()) {
+            if (edge.isEmpty())
+                edge = alphaPath(source);
+            QPainterPathStroker stroke;
+            stroke.setWidth(2 * e["size"].toDouble(4) * scale);
+            stroke.setJoinStyle(Qt::RoundJoin);
+            QPainter p(&foreground);
+            p.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.fillPath(stroke.createStroke(edge).intersected(edge), effectColor(e));
+        }
+    }
+    {
+        QPainter p(&result);
+        p.drawImage(0, 0, foreground);
+    }
+    return result;
+}
+} // namespace comp

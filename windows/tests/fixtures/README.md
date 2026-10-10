@@ -1,0 +1,1 @@
+All PSD/PSB/DNG/SVG fixtures in this directory are generated specifically for these tests; they contain no user documents. Run `python windows/tests/generate_fixtures.py` from the repository root to reproduce them. The generator uses only Python standard-library code.

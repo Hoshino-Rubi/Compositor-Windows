@@ -1,0 +1,14 @@
+Compositor 0.3.0 uses unmodified dynamically linked native dependencies.
+LibRaw 0.22.2: LGPL-2.1 or CDDL-1.0 / BSD components, https://github.com/LibRaw/LibRaw/tree/0.22.2
+libheif 1.23.5: LGPL-3.0 / MIT, https://github.com/strukturag/libheif/tree/v1.23.5
+libde265: LGPL-3.0, https://github.com/strukturag/libde265
+JasPer: JasPer license, https://github.com/jasper-software/jasper
+Little CMS: MIT, https://github.com/mm2/Little-CMS
+libjpeg-turbo: IJG / BSD / zlib, https://github.com/libjpeg-turbo/libjpeg-turbo
+zlib: zlib license, https://github.com/madler/zlib/tree/v1.3.2
+ONNX Runtime 1.22.1: MIT, https://github.com/microsoft/onnxruntime/tree/v1.22.1
+U²-Netp: Apache-2.0, https://github.com/xuebinqin/U-2-Net
+Model artifact: https://github.com/danielgatis/rembg/releases/tag/v0.0.0
+
+Exact source revisions and build recipes are in windows/vcpkg.json, dependencies.lock.json and scripts/prepare-dependencies.ps1.
+The corresponding copyright/license notices are included alongside this file. Libraries remain replaceable separate DLLs. No x265 encoder is included.

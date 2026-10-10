@@ -1,0 +1,1 @@
+u2netp.onnx is the local U²-Netp foreground segmentation model, downloaded from the rembg v0.0.0 release. Its SHA-256 and source URL are pinned in ../../dependencies.lock.json. U²-Net is licensed under Apache-2.0; the license is in ../licenses/U2Net-Apache-2.0.txt. Model inference uses ONNX Runtime CPU. No network calls occur during selection.

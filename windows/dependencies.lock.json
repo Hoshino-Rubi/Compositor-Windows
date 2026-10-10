@@ -1,0 +1,8 @@
+{
+  "vcpkgCommit": "434307da09bc05b2c86996dccc8b2351fc0d5d37",
+  "onnxVersion": "1.22.1",
+  "onnxUrl": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.22.1/microsoft.ml.onnxruntime.1.22.1.nupkg",
+  "onnxSha256": "7b091e012dcfef2f9cc965f2252041101b1840c748ffbc1c18ba047bd6508b1c",
+  "modelUrl": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx",
+  "modelSha256": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8"
+}

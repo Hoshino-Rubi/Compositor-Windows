@@ -22,3 +22,12 @@ xcuserdata/
 # Claude Code settings personal to this machine
 .claude/settings.local.json
 BUILD_PLAN.md
+
+
+# Native Windows build and local SDK
+.tools/
+windows/build*/
+windows/dist/
+windows/test-results/
+windows/resources/app.ico
+aqtinstall.log
