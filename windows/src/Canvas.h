@@ -160,6 +160,9 @@ class Canvas : public QWidget {
     QImage retouchSource_;
     int retouchMode_ = 0;
     bool polygonal_ = false, objectMode_ = false;
+    bool middleZoom_ = false, navigatorDrag_ = false;
+    QRectF navigatorRect() const;
+    void navigateTo(QPointF point);
     QPolygonF polygonPoints_;
     QPainterPath selectionDraft_, selectionStart_;
 

@@ -14,6 +14,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QUuid>
+#include <QtEndian>
 #include <cmath>
 #include <functional>
 
@@ -323,6 +324,27 @@ QImage readImage(const QString &path) {
     QFileInfo info(path);
     require(info.size() <= 512ll * 1024 * 1024, "tooLarge");
     QImageReader reader(path);
+    QBuffer tinyWebp;
+    // Qt 6.8's WebP handler peeks sizeof(WebPBitstreamFeatures) (40 bytes),
+    // although valid lossless images can be shorter. A legal ignored RIFF
+    // chunk supplies that lookahead without changing the image bitstream.
+    if (info.size() >= 20 && info.size() < 40 && reader.format() == "webp") {
+        QFile file(path);
+        require(file.open(QIODevice::ReadOnly), "fileError");
+        auto bytes = file.readAll();
+        if (bytes.startsWith("RIFF") && bytes.mid(8, 4) == "WEBP" &&
+            qFromLittleEndian<quint32>(bytes.constData() + 4) == quint32(bytes.size() - 8)) {
+            bytes.append("JUNK", 4);
+            const quint32 length = qToLittleEndian(quint32(16));
+            bytes.append(reinterpret_cast<const char *>(&length), 4);
+            bytes.append(QByteArray(16, 0));
+            qToLittleEndian(quint32(bytes.size() - 8), bytes.data() + 4);
+            tinyWebp.setData(bytes);
+            tinyWebp.open(QIODevice::ReadOnly);
+            reader.setDevice(&tinyWebp);
+            reader.setFormat("webp");
+        }
+    }
     reader.setAutoTransform(true);
     if (!QList<QByteArray>{"png", "jpeg", "bmp", "webp", "tiff"}.contains(reader.format().toLower()))
         throw Error("unsupportedImport");

@@ -1,16 +1,18 @@
-# Windows 0.3.0 verification
+# Windows 0.3.1 verification
 
-Built and verified locally on Windows x64 with MSVC 2022 and Qt 6.8.3.
+Built and verified on Windows x64 with MSVC 2022 and Qt 6.8.3, October 11, 2026 (Asia/Taipei).
+Upstream: Compositor 1.4.9, b4bfdea87f9dc0cbc9eabfa63683eb1b9c2bca60 (76 merged commits).
 
-- `windows/build-native/native-tests.xml`: 45 tests passed, 0 failed/skipped.
-- `windows/test-results/package-native-0.3.0.xml`: 45 tests passed, 0 failed/skipped.
-- Final ZIP SHA-256: `5a48d80ee0ab8e06311747c7de6043466efa58908910207ed4d5aeaad887e1c4`.
-- Extracted ZIP started and rendered a project using only the Windows/System32 PATH.
-- The complete 45-test suite also passed beside the extracted application's DLLs/plugins, with its bundled local model.
-- English/Simplified/Traditional Chinese screenshots and 150%/200% DPI captures were inspected. All 11 Camera Raw sections have translated labels and accessible controls.
+- `windows/build-native/native-tests.xml`: 54 tests passed, 0 failed/skipped.
+- `windows/test-results/native-windows-tests.xml`: 54 tests passed, 0 failed/skipped.
+- `windows/test-results/package-native-0.3.1.xml`: 54 tests passed, 0 failed/skipped.
+- Final ZIP SHA-256: `3ab7b4827dd784dfac70d085a5bae643bef306ad3f0c9a519c86980f3ab6231b`.
+- The extracted ZIP started and rendered a project using only the Windows/System32 PATH.
+- All 54 tests passed beside the extracted application's DLLs/plugins, with the bundled local model and embedded Camera Raw tables.
+- English, Simplified Chinese and Traditional Chinese widget captures, including 150%/200% DPI, were inspected. New command search and navigator captures were inspected.
 
-Tests exercise PSD/PSB raw/RLE/ZIP/prediction, grouped masks, curves, text/vector metadata, sensor-data DNG development, HEIC alpha, SVG, Camera Raw output/preset bounds and apply/cancel/undo, actual canvas liquify/polygon gestures, free distort, group transform/effects, feathered masks, inline text, shortcut persistence, local foreground inference, PSD/RAW UI import and clean/dirty external reload. Earlier project, mask, blend, brush, clipboard, layer, effect and localization regressions are retained.
+New regressions cover upstream Camera Raw reference values and tone ordering, deterministic RAW gradient quantization, exact quarter-turn pixel rendering with masks/selection/guides and undo, translucent inner effects and effect scaling, Scanlines alpha and undo, sized PNG/JPEG/PDF output, tiny lossless WebP alpha, translated command invocation and repeat-filter, physical canvas units and middle-drag zoom/navigation.
 
-PSD/PSB/DNG/SVG inputs are synthetic and reproducible. The optional HEIC test used libheif's `with-alpha-512x512.heic` fixture from the pinned source tree; set COMPOSITOR_HEIC_FIXTURE to enable it when rebuilding. This verification does not establish compatibility with every Photoshop document or camera model. macOS tests were not run.
+Existing PSD/PSB/DNG/HEIC/SVG import, Camera Raw controls, liquify, selections, model inference, rich text, transforms, layers/effects, project round trips, external reload and localization regressions remain covered. The optional HEIC test used the pinned libheif `with-alpha-512x512.heic` fixture; set COMPOSITOR_HEIC_FIXTURE to repeat it. Synthetic fixtures are reproducible. These checks do not establish support for every camera or Photoshop structure.
 
-Runtime artifacts and screenshots are in the ignored `windows/test-results/` folder; build log is `.tools/build-delivery.log`. Run `windows/scripts/build.ps1` with PowerShell 7 to repeat the native suite.
+macOS tests are handled by the GitHub Verify workflow; they were not run locally on Windows. Runtime reports and widget captures are under ignored `windows/test-results/`. Rebuild with PowerShell 7 and `windows/scripts/build.ps1`.

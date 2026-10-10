@@ -39,6 +39,7 @@ if ($LASTEXITCODE -ne 0) { throw 'CMake configuration failed.' }
 & $cmake --build $BuildDir --config $Configuration --parallel 6
 if ($LASTEXITCODE -ne 0) { throw 'Native build failed.' }
 if (-not $SkipTests) {
+    $env:QT_PLUGIN_PATH = Join-Path $QtDir 'plugins'
     $env:PATH = (Join-Path $QtDir 'bin') + [IO.Path]::PathSeparator + (Join-Path $repoRoot '.tools/vcpkg/installed/x64-windows/bin') + [IO.Path]::PathSeparator + (Join-Path $repoRoot '.tools/onnxruntime/package/runtimes/win-x64/native') + [IO.Path]::PathSeparator + $env:PATH
     & $ctest --test-dir $BuildDir -C $Configuration --output-on-failure
     if ($LASTEXITCODE -ne 0) { throw 'Native tests failed.' }

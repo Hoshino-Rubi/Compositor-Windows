@@ -8,6 +8,9 @@
 #include <libheif/heif.h>
 #include <memory>
 #include <cmath>
+extern "C" {
+#include "DitherPixels.h"
+}
 namespace comp {
 static QByteArray fileBytes(const QString &path) {
     QFile file(path);
@@ -67,8 +70,9 @@ QImage developRaw(const RawFrame &frame, double exposure, double temperature, do
     QImage source = frame.linear;
     if (limit > 0 && (source.width() > limit || source.height() > limit))
         source = source.scaled(limit, limit, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    QImage result(source.size(), QImage::Format_ARGB32_Premultiplied);
-    if (result.isNull())
+    QImage wide(source.size(), QImage::Format_RGBA64);
+    QImage result(source.size(), QImage::Format_RGBA8888_Premultiplied);
+    if (result.isNull() || wide.isNull())
         throw Error("tooLarge");
     const double warmth = std::clamp(log(std::clamp(temperature, 2000., 50000.) / 6500.), -1.5, 1.5);
     const double gain = std::pow(2., std::clamp(exposure, -10., 10.));
@@ -79,15 +83,18 @@ QImage developRaw(const RawFrame &frame, double exposure, double temperature, do
         double srgb = v <= .0031308 ? v * 12.92 : 1.055 * std::pow(v, 1 / 2.4) - .055;
         const double contrast = std::clamp(boost, 0., 2.) - 1;
         srgb = std::clamp((srgb - .5) * (1 + contrast * .25) + .5, 0., 1.);
-        return qRound(srgb * 255);
+        return quint16(qRound(srgb * 65535));
     };
     for (int y = 0; y < source.height(); ++y) {
         const auto *src = reinterpret_cast<const QRgba64 *>(source.constScanLine(y));
-        auto *dst = reinterpret_cast<QRgb *>(result.scanLine(y));
+        auto *dst = reinterpret_cast<QRgba64 *>(wide.scanLine(y));
         for (int x = 0; x < source.width(); ++x)
-            dst[x] = qRgb(encode(src[x].red() / 65535., 0), encode(src[x].green() / 65535., 1),
-                          encode(src[x].blue() / 65535., 2));
+            dst[x] = QRgba64::fromRgba64(encode(src[x].red() / 65535., 0), encode(src[x].green() / 65535., 1),
+                                         encode(src[x].blue() / 65535., 2), 65535);
     }
+    dither_quantize16(reinterpret_cast<const uint16_t *>(wide.constBits()), result.bits(), result.width(),
+                      result.height(), result.bytesPerLine());
+    result = result.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     result.setColorSpace(QColorSpace::SRgb);
     return result;
 }

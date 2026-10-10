@@ -119,6 +119,22 @@ QPolygonF Canvas::selectedPolygon() const {
     const QSize source = l.image.isNull() ? l.placement.size.toSize() : l.image.size();
     return l.placement.matrix(source).map(QPolygonF(QRectF(QPointF(0, 0), source)));
 }
+QRectF Canvas::navigatorRect() const {
+    if (!document_->hasDocument() || zoom_ < 3)
+        return {};
+    const auto size = QSizeF(document_->state().size).scaled(180, 130, Qt::KeepAspectRatio);
+    return QRectF(QPointF(width() - size.width() - 16, height() - size.height() - 16), size);
+}
+void Canvas::navigateTo(QPointF point) {
+    const auto box = navigatorRect();
+    if (box.isEmpty())
+        return;
+    const auto size = document_->state().size;
+    const QPointF target(std::clamp((point.x() - box.left()) / box.width(), 0., 1.) * size.width(),
+                         std::clamp((point.y() - box.top()) / box.height(), 0., 1.) * size.height());
+    offset_ = QPointF(width() / 2., height() / 2.) - target * zoom_;
+    update();
+}
 void Canvas::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.fillRect(rect(), QColor("#1c1c1c"));
@@ -251,6 +267,20 @@ void Canvas::paintEvent(QPaintEvent *) {
         p.setPen(QPen(Qt::black, 1, Qt::DotLine));
         p.drawEllipse(mouse_, brushSize_ * zoom_ / 2 + 1, brushSize_ * zoom_ / 2 + 1);
     }
+    const auto nav = navigatorRect();
+    if (!nav.isEmpty()) {
+        p.fillRect(nav.adjusted(-5, -5, 5, 5), QColor(20, 20, 20, 235));
+        p.fillRect(nav, QBrush(checker));
+        p.drawImage(nav, preview_);
+        const QRectF visible(documentPoint(QPointF(0, 0)), documentPoint(QPointF(width(), height())));
+        const QRectF clipped = visible.intersected(QRectF(QPointF(), size));
+        QRectF viewport(nav.x() + clipped.x() / size.width() * nav.width(),
+                        nav.y() + clipped.y() / size.height() * nav.height(),
+                        clipped.width() / size.width() * nav.width(), clipped.height() / size.height() * nav.height());
+        p.setBrush(QColor(255, 255, 255, 30));
+        p.setPen(QPen(Qt::white, 1.5));
+        p.drawRect(viewport);
+    }
 }
 void Canvas::resizeEvent(QResizeEvent *e) {
     QWidget::resizeEvent(e);
@@ -263,6 +293,16 @@ void Canvas::mousePressEvent(QMouseEvent *e) {
         return;
     setFocus();
     mouse_ = e->position();
+    if (e->button() == Qt::LeftButton && navigatorRect().contains(mouse_)) {
+        navigatorDrag_ = true;
+        navigateTo(mouse_);
+        return;
+    }
+    if (e->button() == Qt::MiddleButton && e->modifiers().testFlag(Qt::ControlModifier)) {
+        middleZoom_ = true;
+        last_ = mouse_;
+        return;
+    }
     if (e->button() == Qt::MiddleButton || (e->button() == Qt::LeftButton && (space_ || tool_ == Tool::Hand))) {
         panning_ = true;
         last_ = e->position();
@@ -583,6 +623,19 @@ void Canvas::paintStroke(QPointF from, QPointF to) {
 }
 void Canvas::mouseMoveEvent(QMouseEvent *e) {
     mouse_ = e->position();
+    if (navigatorDrag_) {
+        navigateTo(mouse_);
+        return;
+    }
+    if (middleZoom_) {
+        const auto point = documentPoint(last_);
+        zoom_ = std::clamp(zoom_ * std::exp((mouse_.x() - last_.x() - mouse_.y() + last_.y()) * .01), .02, 32.);
+        offset_ = last_ - point * zoom_;
+        last_ = mouse_;
+        emit zoomChanged(zoom_);
+        scheduleRender();
+        return;
+    }
     if (guideDrag_) {
         last_ = documentPoint(mouse_);
         update();
@@ -852,6 +905,14 @@ void Canvas::mouseDoubleClickEvent(QMouseEvent *e) {
     QWidget::mouseDoubleClickEvent(e);
 }
 void Canvas::mouseReleaseEvent(QMouseEvent *e) {
+    if (navigatorDrag_) {
+        navigatorDrag_ = false;
+        return;
+    }
+    if (middleZoom_) {
+        middleZoom_ = false;
+        return;
+    }
     if (guideDrag_) {
         guideDrag_ = false;
         const auto point = documentPoint(e->position());
@@ -905,6 +966,7 @@ void Canvas::cancelGesture() {
         document_->cancel();
     dragging_ = false;
     panning_ = false;
+    middleZoom_ = navigatorDrag_ = false;
     guideDrag_ = false;
     rotating_ = false;
     healingPath_ = {};

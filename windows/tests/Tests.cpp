@@ -8,6 +8,11 @@
 #include "Selection.h"
 #include "Warp.h"
 #include "Text.h"
+#include "Export.h"
+#include <QListWidget>
+#include <QLineEdit>
+#include <QImageReader>
+#include <cmath>
 #include <QTabWidget>
 #include <QMessageBox>
 #include <QKeySequenceEdit>
@@ -64,6 +69,252 @@ bool rejects(const QString &key, const std::function<void()> &f) {
 class Tests : public QObject {
     Q_OBJECT
   private slots:
+    void upstream149CameraRawReferenceValues() {
+        struct Case {
+            QColor input, expected;
+            QJsonObject settings;
+        };
+        const QList<Case> cases{
+            {QColor(128, 128, 128), QColor(181, 181, 181), {{"exposure", 1}}},
+            {QColor(128, 128, 128), QColor(235, 189, 117), {{"temperature", 100}}},
+            {QColor(128, 128, 128), QColor(102, 146, 210), {{"temperature", -50}}},
+            {QColor(128, 128, 128), QColor(159, 125, 215), {{"tint", 100}}},
+            {QColor(92, 92, 230), QColor(164, 164, 210), {{"vibrance", -100}}},
+            {QColor(230, 115, 0),
+             QColor(189, 130, 107),
+             {{"mixer", QJsonObject{{"saturation", QJsonArray{0, -60, 0, 0, 0, 0, 0, 0}}}}}},
+            {QColor(92, 92, 230), QColor(149, 149, 226), {{"calibration", QJsonObject{{"blueSaturation", -60}}}}},
+            {QColor(130, 130, 130), QColor(101, 101, 101), {{"curve", QJsonObject{{"darks", -60}}}}}};
+        for (const auto &c : cases) {
+            QImage input(8, 8, QImage::Format_ARGB32_Premultiplied);
+            input.fill(c.input);
+            auto out = cameraRaw(input, c.settings).pixelColor(3, 3);
+            const auto detail = QString::fromUtf8(QJsonDocument(c.settings).toJson()) + out.name();
+            QVERIFY2(std::abs(out.red() - c.expected.red()) <= 4 && std::abs(out.green() - c.expected.green()) <= 4 &&
+                         std::abs(out.blue() - c.expected.blue()) <= 4,
+                     qPrintable(detail));
+        }
+        QImage ramp(256, 2, QImage::Format_ARGB32_Premultiplied);
+        for (int x = 0; x < 256; ++x)
+            for (int y = 0; y < 2; ++y)
+                ramp.setPixelColor(x, y, QColor(x, x, x, y ? 128 : 255));
+        for (auto pair : {std::pair{100, 0}, std::pair{-100, 0}, std::pair{0, 100}, std::pair{0, -100}}) {
+            auto out = cameraRaw(ramp, {{"shadows", pair.first}, {"highlights", pair.second}});
+            for (int x = 1; x < 256; ++x)
+                QVERIFY(out.pixelColor(x, 0).green() >= out.pixelColor(x - 1, 0).green());
+            for (int x = 0; x < 256; ++x)
+                QCOMPARE(out.pixelColor(x, 1).alpha(), 128);
+        }
+    }
+    void rawDitherFollowsGradient() {
+        RawFrame frame;
+        frame.linear = QImage(400, 64, QImage::Format_RGBA64);
+        for (int y = 0; y < 64; ++y) {
+            const double encoded = .30 + .02 * (y + .5) / 64.;
+            const auto linear = quint16(qRound(std::pow((encoded + .055) / 1.055, 2.4) * 65535));
+            auto *row = reinterpret_cast<QRgba64 *>(frame.linear.scanLine(y));
+            for (int x = 0; x < 400; ++x)
+                row[x] = QRgba64::fromRgba64(linear, linear, linear, 65535);
+        }
+        const auto first = developRaw(frame, 0, 6500, 0, 1), second = developRaw(frame, 0, 6500, 0, 1);
+        QCOMPARE(first, second);
+        for (int y = 0; y < 64; ++y) {
+            double sum = 0;
+            for (int x = 0; x < 400; ++x) {
+                sum += first.pixelColor(x, y).red();
+                QCOMPARE(first.pixelColor(x, y).alpha(), 255);
+            }
+            QVERIFY(std::abs(sum / 400 - (.30 + .02 * (y + .5) / 64.) * 255) < .25);
+        }
+    }
+    void canvasQuarterTurnKeepsPixelsMasksAndUndo() {
+        auto s = fixture({12, 8});
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 12; ++x)
+                s.layers[0].image.setPixelColor(x, y, QColor(x * 20, y * 30, 60));
+        s.layers[0].originalPng = pngBytes(s.layers[0].image);
+        s.layers[0].mask = QImage(12, 8, QImage::Format_Grayscale8);
+        s.layers[0].mask.fill(255);
+        s.layers[0].maskLinked = false;
+        s.layers[0].maskPlacement = s.layers[0].placement;
+        s.layers[0].metadata["text"] = QJsonObject{{"content", "Keep text"}, {"fontName", "Arial"}, {"fontSize", 12}};
+        s.guides = {QJsonObject{{"id", newId()}, {"axis", "horizontal"}, {"position", 2}}};
+        s.selection.addRect(2, 1, 3, 2);
+        s.selectionActive = true;
+        s.selectionMask = QImage(s.size, QImage::Format_Grayscale8);
+        s.selectionMask.fill(127);
+        const auto image = render(s);
+        Document doc;
+        doc.reset(s, true);
+        doc.rotateCanvas(true);
+        QCOMPARE(doc.state().size, QSize(8, 12));
+        const auto rotated = render(doc.state()), expected = image.transformed(QTransform().rotate(90));
+        for (int y = 0; y < rotated.height(); ++y)
+            for (int x = 0; x < rotated.width(); ++x)
+                QVERIFY2(rotated.pixelColor(x, y) == expected.pixelColor(x, y),
+                         qPrintable(QString("pixel %1,%2: %3 expected %4")
+                                        .arg(x)
+                                        .arg(y)
+                                        .arg(rotated.pixelColor(x, y).name(QColor::HexArgb))
+                                        .arg(expected.pixelColor(x, y).name(QColor::HexArgb))));
+        QCOMPARE(doc.state().layers[0].originalPng, s.layers[0].originalPng);
+        QCOMPARE(doc.state().layers[0].metadata, s.layers[0].metadata);
+        QCOMPARE(doc.state().selectionMask.size(), QSize(8, 12));
+        QCOMPARE(doc.state().guides[0].toObject()["position"].toDouble(), 6.);
+        doc.undo();
+        QCOMPARE(render(doc.state()), image);
+        QVERIFY(!doc.dirty());
+        doc.redo();
+        doc.rotateCanvas(false);
+        QCOMPARE(render(doc.state()), image);
+    }
+    void scanlinesKeepAlphaAndUndo() {
+        auto s = fixture({80, 64});
+        s.layers[0].image.fill(QColor(180, 100, 70, 128));
+        s.layers[0].image.setPixelColor(0, 0, Qt::transparent);
+        s.layers[0].metadata["effects"] = QJsonObject{{"colorOverlay", QJsonObject{{"red", 1}, {"opacity", .2}}}};
+        Document doc;
+        doc.reset(s, true);
+        QJsonObject settings{{"kind", "Scanlines"}, {"colors", 1}, {"displace", 20},
+                             {"split", 2},          {"dots", 50},  {"glow", 20}};
+        doc.applyFilter(settings);
+        const auto &out = doc.state().layers[0].image;
+        QVERIFY(out != s.layers[0].image);
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 80; ++x)
+                QCOMPARE(out.pixelColor(x, y).alpha(), s.layers[0].image.pixelColor(x, y).alpha());
+        QCOMPARE(doc.state().layers[0].metadata["effects"], s.layers[0].metadata["effects"]);
+        doc.undo();
+        QCOMPARE(doc.state().layers[0].image, s.layers[0].image);
+        doc.resizeCanvas({160, 128}, true);
+        QVERIFY(doc.state().layers[0].metadata.contains("effects"));
+    }
+    void translucentInnerEffectsAndResize() {
+        QImage source(20, 20, QImage::Format_ARGB32_Premultiplied);
+        source.fill(QColor(255, 0, 0, 128));
+        for (auto key : {"innerGlow", "innerShadow"}) {
+            const auto image = applyEffects(source,
+                                            {{key, QJsonObject{{"red", 0},
+                                                               {"green", 0},
+                                                               {"blue", 1},
+                                                               {"opacity", 1},
+                                                               {"size", 0},
+                                                               {"blur", 0},
+                                                               {"distance", 0}}}},
+                                            1);
+            QCOMPARE(image.pixelColor(10, 10).alpha(), 128);
+            QVERIFY(image.pixelColor(10, 10).blue() >= 120);
+        }
+        auto s = fixture({20, 20});
+        s.layers[0].metadata["effects"] =
+            QJsonObject{{"shadow", QJsonObject{{"distance", 8}, {"blur", 4}}}, {"stroke", QJsonObject{{"size", 3}}}};
+        Document doc;
+        doc.reset(s, true);
+        doc.resizeCanvas({40, 40}, true);
+        const auto effects = doc.state().layers[0].metadata["effects"].toObject();
+        QCOMPARE(effects["shadow"].toObject()["distance"].toDouble(), 16.);
+        QCOMPARE(effects["shadow"].toObject()["blur"].toDouble(), 8.);
+        QCOMPARE(effects["stroke"].toObject()["size"].toDouble(), 6.);
+        doc.undo();
+        QCOMPARE(doc.state().layers[0].metadata, s.layers[0].metadata);
+    }
+    void sizedPngJpegAndPdfExport() {
+        QTemporaryDir dir;
+        auto s = fixture({80, 40});
+        s.resolution = 300;
+        for (const auto &format : QList<QByteArray>{"png", "jpeg", "pdf"}) {
+            QString path = dir.path() + "/export." + format;
+            exportDocument(s, path, format, {120, 60}, 90);
+            QFile f(path);
+            QVERIFY(f.open(QIODevice::ReadOnly));
+            auto data = f.readAll();
+            if (format == "pdf") {
+                QVERIFY(data.startsWith("%PDF-"));
+                QVERIFY(data.contains("/Type /Page"));
+                QVERIFY(data.contains("/MediaBox"));
+            } else {
+                const auto image = readImage(path);
+                QCOMPARE(image.size(), QSize(120, 60));
+            }
+        }
+    }
+    void webpImportKeepsAlpha() {
+        QTemporaryDir dir;
+        QImage image(12, 8, QImage::Format_ARGB32);
+        image.fill(QColor(30, 150, 80, 90));
+        auto path = dir.path() + "/transparent.webp";
+        QVERIFY(image.save(path, "webp", 100));
+        const auto result = readImage(path);
+        QCOMPARE(result.size(), image.size());
+        QCOMPARE(result.pixelColor(3, 3).alpha(), 90);
+    }
+    void paletteInvokesTranslatedCommandAndRepeatsFilter() {
+        MainWindow window;
+        window.show();
+        window.document()->reset(fixture({64, 48}), true);
+        window.localization()->setLanguage("zh-CN");
+        QTimer::singleShot(80, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            auto *search = dialog->findChild<QLineEdit *>("commandSearch");
+            QVERIFY(search);
+            search->setText("顺时针");
+            const auto capture = qEnvironmentVariable("COMPOSITOR_TEST_CAPTURE_DIR");
+            if (!capture.isEmpty())
+                dialog->grab().save(capture + "/command-palette-031.png");
+            auto *list = dialog->findChild<QListWidget *>("commandResults");
+            QVERIFY(list);
+            QCOMPARE(list->count(), 1);
+            QTest::keyClick(search, Qt::Key_Return);
+        });
+        window.findChild<QAction *>("searchCommandsAction")->trigger();
+        QCOMPARE(window.document()->state().size, QSize(48, 64));
+        window.document()->undo();
+        const auto before = window.document()->state().layers[0].image;
+        QTimer::singleShot(80, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            dialog->accept();
+        });
+        window.findChild<QAction *>("filter.invertAction")->trigger();
+        QVERIFY(window.document()->state().layers[0].image != before);
+        auto *repeat = window.findChild<QAction *>("lastFilterAction");
+        QVERIFY(repeat->isEnabled());
+        repeat->trigger();
+        QCOMPARE(window.document()->state().layers[0].image, before);
+        window.document()->markSaved(window.document()->revision());
+    }
+    void physicalCanvasAndMiddleZoom() {
+        MainWindow window;
+        window.show();
+        QTimer::singleShot(80, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dialog);
+            dialog->findChild<QComboBox *>("canvasUnits")->setCurrentIndex(1);
+            dialog->findChild<QComboBox *>("canvasDpi")->setCurrentIndex(1);
+            dialog->findChild<QDoubleSpinBox *>("canvasWidth")->setValue(2);
+            dialog->findChild<QDoubleSpinBox *>("canvasHeight")->setValue(1);
+            dialog->accept();
+        });
+        window.findChild<QAction *>("newAction")->trigger();
+        QCOMPARE(window.document()->state().size, QSize(600, 300));
+        QCOMPARE(window.document()->state().resolution, 300.);
+        auto *canvas = window.canvas();
+        canvas->fit();
+        double original = canvas->zoom();
+        QTest::mousePress(canvas, Qt::MiddleButton, Qt::ControlModifier, {100, 100});
+        QTest::mouseMove(canvas, {150, 100});
+        QTest::mouseRelease(canvas, Qt::MiddleButton, Qt::ControlModifier, {150, 100});
+        QVERIFY(canvas->zoom() > original);
+        canvas->setZoom(4);
+        const auto capture = qEnvironmentVariable("COMPOSITOR_TEST_CAPTURE_DIR");
+        if (!capture.isEmpty())
+            window.grab().save(capture + "/navigator-031.png");
+        const auto center = canvas->documentPoint(QPointF(canvas->width() / 2., canvas->height() / 2.));
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(canvas->width() - 25, canvas->height() - 25));
+        QVERIFY(canvas->documentPoint(QPointF(canvas->width() / 2., canvas->height() / 2.)) != center);
+        window.document()->markSaved(window.document()->revision());
+    }
     void projectRoundTrip() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

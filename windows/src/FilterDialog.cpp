@@ -31,7 +31,8 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                                          {"Gradient Map", "filter.gradientMap"},
                                          {"Grain", "filter.grain"},
                                          {"Camera Raw", "filter.cameraRaw"},
-                                         {"Motion Blur", "filter.motionBlur"}};
+                                         {"Motion Blur", "filter.motionBlur"},
+                                         {"Scanlines", "filter.scanlines"}};
     const int active = document_.state().index(document_.state().active);
     if (active < 0 && !adjustment)
         return;
@@ -156,13 +157,35 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         field("amount", v["amount"].toDouble(25), 0, 100);
         field("size", v["size"].toDouble(1.5), .5, 20);
         field("roughness", v["roughness"].toDouble(50), 0, 100);
+    } else if (kind == "Scanlines") {
+        field("lineSpacing", 4, 2, 32, "scan.lineSpacing");
+        field("thickness", 70, 5, 100, "scan.thickness");
+        field("dots", 0, 0, 100, "scan.dots");
+        field("wobble", 0, 0, 64, "scan.wobble");
+        field("displace", 0, -100, 100, "scan.displace");
+        field("smoothness", 50, 0, 100, "scan.smoothness");
+        field("threshold", 0, 0, 100, "scan.threshold");
+        field("split", 0, 0, 16, "scan.split");
+        field("density", 0, -100, 100, "scan.density");
+        field("contrast", 0, -100, 100, "contrast");
+        field("blackLevel", 0, 0, 100, "scan.blackLevel");
+        field("glow", 0, 0, 100, "raw.glow");
+        channel.clear();
+        channel.addItems({t("scan.monochrome"), t("scan.original"), t("scan.twoColors")});
+        form->addRow(t("color"), &channel);
     } else if (kind == "Camera Raw") {
         for (const auto &key : QStringList{"temperature", "tint", "exposure", "contrast", "highlights", "shadows",
                                            "whites", "blacks", "vibrance", "saturation"})
             field(key, 0, key == "exposure" ? -5 : -100, key == "exposure" ? 5 : 100);
     } else
         form->addRow(new QLabel(t("filterNote")));
-    row->addLayout(form);
+    auto *formWidget = new QWidget;
+    formWidget->setLayout(form);
+    auto *formScroll = new QScrollArea;
+    formScroll->setWidgetResizable(true);
+    formScroll->setWidget(formWidget);
+    formScroll->setMinimumWidth(285);
+    row->addWidget(formScroll);
     auto *preview = new QLabel;
     preview->setObjectName("filterPreview");
     preview->setMinimumSize(330, 300);
@@ -295,6 +318,11 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         } else
             for (auto it = v.begin(); it != v.end(); ++it)
                 settings[it.key()] = it.value();
+        if (kind == "Scanlines") {
+            settings["colors"] = channel.currentIndex();
+            settings["dark"] = canvas_->color().name();
+            settings["light"] = backgroundColorValue_.name();
+        }
         if (adjustment || !editLayer.isEmpty()) {
             if (!settings.contains("hue"))
                 settings["hue"] = 0;
@@ -416,8 +444,11 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                 s.layers.insert(position, l);
                 s.active = l.id;
             });
-        else
+        else {
             document_.applyFilter(settings, mask_->isChecked());
+            lastFilter_ = settings;
+            refreshSelection();
+        }
     });
 }
 } // namespace comp

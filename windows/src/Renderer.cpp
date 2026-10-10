@@ -100,13 +100,21 @@ QImage surface(QSize size) {
     result.setColorSpace(QColorSpace::SRgb);
     return result;
 }
+bool pixelAligned(const QTransform &t) {
+    auto whole = [](double v) { return std::abs(v - std::round(v)) < 1e-9; };
+    const bool unitAxes = (std::abs(std::abs(t.m11()) - 1) < 1e-9 && std::abs(std::abs(t.m22()) - 1) < 1e-9 &&
+                           std::abs(t.m12()) < 1e-9 && std::abs(t.m21()) < 1e-9) ||
+                          (std::abs(std::abs(t.m12()) - 1) < 1e-9 && std::abs(std::abs(t.m21()) - 1) < 1e-9 &&
+                           std::abs(t.m11()) < 1e-9 && std::abs(t.m22()) < 1e-9);
+    return unitAxes && whole(t.dx()) && whole(t.dy());
+}
 void paintImage(QPainter &p, const Layer &l, const State &s, QSize target, double opacity = 1) {
     if (l.image.isNull())
         return;
     p.save();
     p.scale(double(target.width()) / s.size.width(), double(target.height()) / s.size.height());
     p.setTransform(l.placement.matrix(l.image.size()), true);
-    p.setRenderHint(QPainter::SmoothPixmapTransform, l.placement.sampling != "Nearest");
+    p.setRenderHint(QPainter::SmoothPixmapTransform, l.placement.sampling != "Nearest" && !pixelAligned(p.transform()));
     p.setOpacity(opacity);
     p.drawImage(QPointF(0, 0), l.image);
     p.restore();
@@ -191,7 +199,7 @@ QImage renderMask(const Layer &l, QSize canvas, QSize target) {
     QPainter p(&result);
     p.scale(double(target.width()) / canvas.width(), double(target.height()) / canvas.height());
     p.setTransform((l.maskLinked ? l.placement : l.maskPlacement).matrix(alpha.size()), true);
-    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    p.setRenderHint(QPainter::SmoothPixmapTransform, !pixelAligned(p.transform()));
     p.drawImage(0, 0, alpha);
     return result;
 }

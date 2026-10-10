@@ -104,24 +104,25 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     menu("file", {"new", "open", "import", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
     menu("edit", {"undo", "redo", "", "cut", "copy", "copyMerged", "paste", "", "fillForeground", "fillBackground",
                   "clearPixels", "contentFill", "", "shortcuts"});
-    menu("image", {"imageSize", "canvasSize", "trim", "", "flipCanvasX", "flipCanvasY"});
+    menu("image",
+         {"imageSize", "canvasSize", "trim", "", "flipCanvasX", "flipCanvasY", "rotateCanvasCW", "rotateCanvasCCW"});
     menu("layer", {"addLayer",   "addGroup",   "groupSelection",  "ungroup",     "",           "duplicate", "merge",
                    "rename",     "editText",   "layerEffects",    "delete",      "",           "moveUp",    "moveDown",
                    "flipX",      "flipY",      "transformLayers", "freeDistort", "",           "addMask",   "hideMask",
                    "invertMask", "enableMask", "linkMask",        "applyMask",   "deleteMask", "clipMask"});
     menu("select", {"selectSubject", "removeBackground", "selectAll", "deselect", "invertSelection", "selectPixels",
                     "selectMask", "expandSelection", "contractSelection", "featherSelection"});
-    auto *adjust =
-        menu("adjustments", {"filter.hsv", "filter.levels", "filter.curves", "filter.exposure", "filter.grayscale",
-                             "filter.invert", "filter.blur", "filter.motionBlur", "filter.noise", "filter.grain",
-                             "filter.colorBalance", "filter.gradientMap", "filter.cameraRaw"});
+    auto *adjust = menu("adjustments", {"filter.hsv", "filter.levels", "filter.curves", "filter.exposure",
+                                        "filter.grayscale", "filter.invert", "filter.blur", "filter.motionBlur",
+                                        "filter.noise", "filter.grain", "filter.colorBalance", "filter.gradientMap",
+                                        "filter.cameraRaw", "filter.scanlines", "", "lastFilter"});
     auto *adjustLayer = adjust->addMenu("");
     adjustLayer->setObjectName("adjustmentLayerMenu");
     for (const auto &key : QStringList{"hsv", "levels", "curves", "exposure", "grayscale", "colorBalance",
                                        "gradientMap", "grain", "noise", "blur", "motionBlur", "invert"})
         adjustLayer->addAction(actions_["adjustment." + key]);
     menu("view", {"fit", "actualSize", "zoomIn", "zoomOut", "", "showRulers", "showGuides", "showGrid", "snap",
-                  "gridSettings", "addGuide", "clearGuides"});
+                  "gridSettings", "addGuide", "clearGuides", "", "toggleFullscreen", "searchCommands"});
     menu("help", {"shortcuts", "about"});
     auto *root = new QWidget;
     auto *outer = new QVBoxLayout(root);
@@ -863,10 +864,12 @@ void MainWindow::refreshSelection() {
     const bool hasMask = active && !s.layers[i].mask.isNull();
     actions_["undo"]->setEnabled(!busy_ && document_.canUndo());
     actions_["redo"]->setEnabled(!busy_ && document_.canRedo());
-    for (const auto &key :
-         QStringList{"save", "saveAs", "export", "addLayer", "addGroup", "imageSize", "canvasSize", "trim",
-                     "flipCanvasX", "flipCanvasY", "selectSubject", "removeBackground", "selectAll", "invertSelection",
-                     "addGuide", "clearGuides", "closeDocument", "paste", "copyMerged"})
+    for (const auto &key : QStringList{"save",          "saveAs",           "export",         "addLayer",
+                                       "addGroup",      "imageSize",        "canvasSize",     "trim",
+                                       "flipCanvasX",   "flipCanvasY",      "rotateCanvasCW", "rotateCanvasCCW",
+                                       "selectSubject", "removeBackground", "selectAll",      "invertSelection",
+                                       "addGuide",      "clearGuides",      "closeDocument",  "paste",
+                                       "copyMerged"})
         actions_[key]->setEnabled(!busy_ && doc);
     for (const auto &key :
          QStringList{"duplicate", "delete", "rename", "transformLayers", "freeDistort", "moveUp", "moveDown",
@@ -885,6 +888,7 @@ void MainWindow::refreshSelection() {
         if (it.key().startsWith("adjustment."))
             it.value()->setEnabled(!busy_ && doc);
     }
+    actions_["lastFilter"]->setEnabled(!busy_ && pixels && !lastFilter_.isEmpty());
     actions_["layerEffects"]->setEnabled(!busy_ && active);
     actions_["ungroup"]->setEnabled(!busy_ && active && s.layers[i].group);
     actions_["editText"]->setEnabled(!busy_ && pixels && s.layers[i].metadata.contains("text"));
@@ -905,7 +909,10 @@ void MainWindow::refreshSelection() {
         QTreeWidgetItemIterator it(layers_);
         while (*it) {
             if ((*it)->data(0, Qt::UserRole).toString() == s.active) {
+                for (auto *parent = (*it)->parent(); parent; parent = parent->parent())
+                    parent->setExpanded(true);
                 layers_->setCurrentItem(*it, 1);
+                layers_->scrollToItem(*it, QAbstractItemView::EnsureVisible);
                 (*it)->setSelected(true);
                 break;
             }

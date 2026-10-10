@@ -6,6 +6,7 @@
 extern "C" {
 #include "AdjustPixels.h"
 #include "NoisePixels.h"
+#include "DitherPixels.h"
 }
 
 namespace comp {
@@ -168,6 +169,44 @@ QImage filtered(const QImage &source, const QJsonObject &settings) {
     const QString kind = settings["kind"].toString();
     if (kind == "Camera Raw")
         return cameraRaw(source, settings);
+    if (kind == "Scanlines") {
+        auto rgba = source.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+        auto number = [&](const char *key, double fallback, double low, double high) {
+            return std::clamp(settings[key].toDouble(fallback), low, high);
+        };
+        ScanlinesParams params{};
+        params.spacing = qRound(number("lineSpacing", 4, 2, 32));
+        params.thickness = float(number("thickness", 70, 5, 100) / 100);
+        params.dots = float(number("dots", 0, 0, 100) / 100);
+        params.wobble = float(number("wobble", 0, 0, 64));
+        params.displace = float(number("displace", 0, -100, 100));
+        params.smoothness = float(number("smoothness", 50, 0, 100) / 100);
+        params.threshold = float(number("threshold", 0, 0, 100) / 100);
+        params.split = float(number("split", 0, 0, 16));
+        params.density = float(number("density", 0, -100, 100) / 100);
+        params.contrast = float(number("contrast", 0, -100, 100) / 100);
+        params.blackLevel = float(number("blackLevel", 0, 0, 100) / 100);
+        params.originalColors = settings["colors"].toInt() == 1;
+        QColor dark =
+            settings["colors"].toInt() == 2 ? QColor(settings["dark"].toString("#000000")) : QColor(Qt::black);
+        QColor light =
+            settings["colors"].toInt() == 2 ? QColor(settings["light"].toString("#ffffff")) : QColor(Qt::white);
+        params.dark[0] = dark.red();
+        params.dark[1] = dark.green();
+        params.dark[2] = dark.blue();
+        params.light[0] = light.red();
+        params.light[1] = light.green();
+        params.light[2] = light.blue();
+        if (!scanlines_apply(rgba.bits(), rgba.width(), rgba.height(), rgba.bytesPerLine(), &params))
+            throw Error("tooLarge");
+        const double glow = number("glow", 0, 0, 100);
+        if (glow > 0) {
+            auto bloom = blurImage(rgba, params.spacing * 3 + 3).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+            dither_glow(rgba.bits(), bloom.constBits(), rgba.width(), rgba.height(), rgba.bytesPerLine(),
+                        float(glow / 100 * 2.5));
+        }
+        return rgba.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    }
     if (kind == "Motion Blur") {
         auto image = source.convertToFormat(QImage::Format_ARGB32_Premultiplied);
         double distance = std::clamp(settings["motionDistance"].toDouble(10), 1., 2000.),
@@ -258,13 +297,6 @@ QImage filtered(const QImage &source, const QJsonObject &settings) {
             const auto v = settings["grainSettings"].toObject();
             adjust_grain(data, w, h, stride, v["amount"].toDouble(25), v["size"].toDouble(1.5),
                          v["roughness"].toDouble(50), quint32(v["seed"].toDouble()), 0, 0, 1);
-        } else if (kind == "Camera Raw") {
-            const auto v = settings;
-            const double temp = v["temperature"].toDouble() / 100., tint = v["tint"].toDouble() / 100.;
-            adjust_camera_raw(data, w, h, stride, 1 + temp * .2 + tint * .1, 1 - tint * .1, 1 - temp * .2 + tint * .1,
-                              v["exposure"].toDouble(), v["contrast"].toDouble(), v["highlights"].toDouble(),
-                              v["shadows"].toDouble(), v["whites"].toDouble(), v["blacks"].toDouble(),
-                              v["vibrance"].toDouble(), v["saturation"].toDouble(), 0);
         } else
             noise_add(data, w, h, stride, float(settings["noiseAmount"].toDouble(10)),
                       settings["noiseGaussian"].toBool(), settings["noiseMonochromatic"].toBool(),

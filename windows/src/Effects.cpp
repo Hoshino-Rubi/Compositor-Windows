@@ -78,11 +78,6 @@ QImage applyEffects(const QImage &source, const QJsonObject &effects, double sca
         }
         auto image = shifted(blurImage(alpha, e["blur"].toDouble(inside ? 10 : 20) * scale),
                              {-cos(angle) * distance, sin(angle) * distance});
-        if (inside) {
-            QPainter p(&image);
-            p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-            p.drawImage(0, 0, source);
-        }
         return tint(image, effectColor(e));
     };
     if (enabled("shadow")) {
@@ -131,11 +126,6 @@ QImage applyEffects(const QImage &source, const QJsonObject &effects, double sca
             }
         }
         auto image = blurImage(alpha, e["size"].toDouble(10) * scale);
-        {
-            QPainter p(&image);
-            p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-            p.drawImage(0, 0, source);
-        }
         image = tint(image, effectColor(e, true));
         QPainter p(&foreground);
         p.setCompositionMode(QPainter::CompositionMode_SourceAtop);

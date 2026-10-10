@@ -17,6 +17,7 @@
 #include <exception>
 #include <QTabBar>
 #include <QCheckBox>
+#include <QJsonObject>
 namespace comp {
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -60,6 +61,8 @@ class MainWindow : public QMainWindow {
     std::exception_ptr pendingError_;
     std::function<void()> completion_;
     QString t(const QString &key) const { return localization_.text(key); }
+    void commandPalette();
+    QJsonObject lastFilter_;
     void buildActions();
     void buildUi();
     void retranslate();

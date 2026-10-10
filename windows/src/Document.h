@@ -59,6 +59,7 @@ class Document : public QObject {
     void merge(const QStringList &ids);
     void resizeCanvas(QSize size, bool rescale, bool centered = true);
     void flipCanvas(bool horizontal);
+    void rotateCanvas(bool clockwise);
     void trim();
     void addGuide(bool horizontal, double position);
     void contentFill();

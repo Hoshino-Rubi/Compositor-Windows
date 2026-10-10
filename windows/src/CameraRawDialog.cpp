@@ -769,7 +769,7 @@ void MainWindow::cameraRawDialog() {
     settings.remove("sharpenMask");
     auto output = std::make_shared<QImage>();
     runIO([output, full, settings] { *output = cameraRaw(full, settings); },
-          [this, output, index, original] {
+          [this, output, index, original, settings] {
               invoke([&] {
                   document_.edit([&](State &s) {
                       auto &l = s.layers[index];
@@ -780,6 +780,9 @@ void MainWindow::cameraRawDialog() {
                       l.metadata.remove("text");
                       l.metadata.remove("shape");
                   });
+                  lastFilter_ = settings;
+                  lastFilter_["kind"] = "Camera Raw";
+                  refreshSelection();
               });
           });
 }

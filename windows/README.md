@@ -1,19 +1,35 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.3.0**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.3.1**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
 Download the portable application from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.3.0-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.3.1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. English, Simplified Chinese and Traditional Chinese switch immediately.
+
+## Version 0.3.1
+
+Merged all 76 upstream commits through Compositor 1.4.9 (`b4bfdea87f9dc0cbc9eabfa63683eb1b9c2bca60`, October 10, 2026).
+The native Windows implementation now includes:
+
+- Updated Camera Raw measured tables for Light/Color, Mixer, Calibration, parametric curves and Color Grading; upstream noise reduction, optics and detail fixes. Pixel work uses Windows parallel scheduling.
+- RAW 16-to-8-bit dithered quantization and corrected inner effects on translucent pixels.
+- Search Commands (`Ctrl+F`), including tools and modes; Last Filter (`Ctrl+Alt+F`); fullscreen (`F`, Escape to leave).
+- Scanlines with spacing, thickness, dots, wobble, displacement, smoothing, threshold, color split, density, contrast, black level, colors and glow.
+- Lossless 90° canvas placement rotation, including masks, guides and selection; image-size changes scale layer effects.
+- Export As with size, aspect ratio and transparency preview; PNG/JPEG and one-page raster PDF at document DPI.
+- New Canvas in pixels/inches/cm/mm at 72 or 300 DPI, transparent/white/black backgrounds; navigator at 300% zoom and above; Ctrl+middle-drag zoom; reveal selected layers.
+- Tiny lossless WebP import compatibility with Qt 6.8.
+
+All new controls are translated in English, Simplified Chinese and Traditional Chinese. The upstream Swift source is merged intact; Windows-specific behavior still follows the compatibility limits below. macOS update UI and platform-specific rendering are not Windows implementations.
 
 ## Editing and import
 
 The native workspace follows the upstream tabs, tool options, 58px tool rail and layer panel. Icons are 24 logical pixels with 36px hit targets.
-Independent tabs, undo, selection, layers/groups, 24 blend modes, brushes, retouching, shapes, rich text, masks, adjustments, effects, guides and full-resolution PNG/JPEG export are available.
+Independent tabs, undo, selection, layers/groups, 24 blend modes, brushes, retouching, shapes, rich text, masks, adjustments, effects, guides and sized PNG/JPEG/PDF export are available.
 
 Version 0.3 adds:
 
@@ -45,6 +61,8 @@ pwsh -File ./windows/scripts/prepare-dependencies.ps1
 pwsh -File ./windows/scripts/build.ps1 -QtDir C:/Qt/6.8.3/msvc2022_64
 pwsh -File ./windows/scripts/package.ps1 -QtDir C:/Qt/6.8.3/msvc2022_64 -SkipBuild
 ```
+
+The upstream pixel sources are translated at CMake configure time from Apple blocks to synchronous MSVC parallel loops without editing their math. If upstream changes `CameraRawTables.bin`, run `python windows/scripts/repack-camera-raw.py`; CMake rejects a stale packed resource. The generated Qt resource preserves the exact upstream table bytes.
 
 Dependency revisions and download checksums are pinned in dependencies.lock.json and vcpkg.json. Setup needs network; application use is offline.
 The build runs Qt Test, covering import/development, pixel output, Camera Raw, gestures/undo, selection, groups, model inference, document reload, translations and the original editing regressions.

@@ -1,15 +1,31 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.3.0**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.3.1**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
 从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) 下载便携包。
 
-解压 `Compositor-0.3.0-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.3.1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 右上角即时切换 English、简体中文、繁體中文，语言选择会保存。
 
-## 本次补齐的功能
+## 0.3.1 更新
+
+合并上游 Compositor 1.4.9，截至 2026-10-10 的 `b4bfdea87f9dc0cbc9eabfa63683eb1b9c2bca60`，包含此前缺少的 76 个提交。
+Windows 原生端同步适配：
+
+- Camera Raw 新版实测颜色表：光线/颜色、混合器、相机校准、参数曲线和色彩分级；同步降噪、光学、细节处理修正。像素计算接入 Windows 原生并行调度。
+- RAW 显影采用 16→8 位抖动量化，减轻渐变色带；修正半透明像素上的内阴影和内发光。
+- `Ctrl+F` 搜索菜单命令、工具与模式；`Ctrl+Alt+F` 用相同参数重复上次滤镜；`F` 切换全屏、`Esc` 退出。
+- 独立扫描线滤镜，提供间距、厚度、点状程度、摆动、位移、平滑、阈值、色彩分离、密度、对比度、黑位、颜色与辉光控制。
+- 顺/逆时针 90° 画布旋转，连同图层、蒙版、参考线和选区一起旋转，可撤销；原图不重采样。图像大小调整同步缩放图层效果。
+- 导出对话框新增尺寸、比例锁定和透明预览，支持 PNG、JPEG、按文档 DPI 生成的单页栅格 PDF。
+- 新画布支持像素/英寸/厘米/毫米、72/300 DPI、透明/白/黑背景；300% 及以上显示可点击的导航缩略图；Ctrl+鼠标中键拖动缩放；自动展开并定位选中图层。
+- 兼容 Qt 6.8 无法探测的极小无损 WebP 文件。
+
+新增界面文案覆盖 English、简体中文和繁體中文。Swift 上游源码完整合并；Windows 的平台渲染与兼容限制仍见下文，macOS 自动更新界面没有移植到 Windows。
+
+## 0.3 已有功能
 
 - **PSD / PSB**：8 位 RGB 分层导入，Raw / PackBits RLE / ZIP / ZIP Prediction，Unicode 名称、组、显隐、不透明度、混合模式、像素/矢量蒙版和剪贴关系。色阶、曲线、色相/饱和度、反相可成为调整层。矩形、圆角矩形和椭圆可成为形状层；文本导入内容、字体与颜色片段，保留原始栅格外观。
 - **RAW**：使用 LibRaw 解码实际传感器数据。相机白平衡、16 位线性数据、曝光、色温、色调和增强控制，显影后进入图层；没有用嵌入式缩略图代替 RAW。具体相机及压缩格式取决于 LibRaw 0.22.2。
@@ -27,7 +43,7 @@ C++20 / Qt 6 Widgets，版本 **0.3.0**。保留原版 Swift / AppKit / Metal �
 文档标签栏、随工具变化的参数栏、58px 左侧工具轨、可调宽度的图层面板。矢量工具图标 24 逻辑像素、按钮 36 逻辑像素，支持 DPI 缩放。小窗口的工具与参数可滚动。
 每个标签分别保留撤销、选区和缩放。图层支持多选、拖放排序/嵌套、编组、合并、复制、24 种混合模式及不透明度。
 
-移动与吸附、旋转/缩放手柄；矩形/椭圆选框、魔棒、加选/减选/交集、反选、扩展/收缩；画笔/橡皮、克隆、修复、渐变、内容识别填充；文字与形状；像素蒙版和剪贴蒙版；色相/饱和度、色阶、曲线、曝光、黑白、色彩平衡、渐变映射、颗粒/杂色、模糊；六类图层效果；标尺、参考线、网格、裁剪、画布/图像大小和透明边缘裁切。PNG、JPEG、WebP、BMP、TIFF 导入，全分辨率 PNG/JPEG 导出。
+移动与吸附、旋转/缩放手柄；矩形/椭圆选框、魔棒、加选/减选/交集、反选、扩展/收缩；画笔/橡皮、克隆、修复、渐变、内容识别填充；文字与形状；像素蒙版和剪贴蒙版；色相/饱和度、色阶、曲线、曝光、黑白、色彩平衡、渐变映射、颗粒/杂色、模糊；六类图层效果；标尺、参考线、网格、裁剪、画布/图像大小和透明边缘裁切。PNG、JPEG、WebP、BMP、TIFF 导入，可指定尺寸的 PNG/JPEG/PDF 导出。
 
 ## 常用操作
 
@@ -64,6 +80,8 @@ pwsh -File ./windows/scripts/prepare-dependencies.ps1
 pwsh -File ./windows/scripts/build.ps1 -QtDir C:/Qt/6.8.3/msvc2022_64
 pwsh -File ./windows/scripts/package.ps1 -QtDir C:/Qt/6.8.3/msvc2022_64 -SkipBuild
 ```
+
+构建时由 CMake 将上游 Apple blocks 调度转换为 MSVC 并行循环，保留像素算法。上游 `CameraRawTables.bin` 更新后执行 `python windows/scripts/repack-camera-raw.py`；CMake 会检查原始文件哈希，拒绝使用过期资源。重打包只更换压缩格式，颜色表字节保持一致。
 
 首次准备依赖需要联网，后续运行不需要。vcpkg 提交、ONNX Runtime 1.22.1 和模型哈希固定在 dependencies.lock.json。构建运行 Qt Test；测试包括实际 PSD/PSB/DNG 解码、分层/文本/矢量、Camera Raw、液化手势及撤销、软选区、组效果与变换、主体模型、导入流程、外部重载、国际化与原有编辑回归。
 fixtures 是自行生成的小型测试图；可从仓库根目录用 Python 执行 `windows/tests/generate_fixtures.py` 再生成。Python 不是应用运行依赖。

@@ -1,4 +1,5 @@
 #include "CameraRaw.h"
+#include "CameraRawTables.h"
 #include <QPainter>
 #include <cmath>
 #include <array>
@@ -224,21 +225,18 @@ QImage cameraRaw(const QImage &source, const QJsonObject &settings, double scale
         return result;
     auto *pixels = result.bits();
     const int w = result.width(), h = result.height(), stride = result.bytesPerLine();
+    auto composed = rawtables::compose(rawtables::stages(s, result));
     const auto calibration = s["calibration"].toObject();
-    if (s["enableCalibration"].toBool(true))
-        adjust_camera_raw_calibration(
-            pixels, w, h, stride, value(calibration, "shadowTint"), value(calibration, "redHue"),
-            value(calibration, "redSaturation"), value(calibration, "greenHue"), value(calibration, "greenSaturation"),
-            value(calibration, "blueHue"), value(calibration, "blueSaturation"), int(value(calibration, "process", 6)));
-    auto light = s["enableLight"].toBool(true) ? s : QJsonObject();
-    auto color = s["enableColor"].toBool(true) ? s : QJsonObject();
-    double temp = value(color, "temperature") / 100, tint = value(color, "tint") / 100;
-    adjust_camera_raw(pixels, w, h, stride, 1 + .35 * temp + .15 * tint, 1 - .30 * tint, 1 - .35 * temp + .15 * tint,
-                      value(light, "exposure"), value(light, "contrast"), value(light, "highlights"),
-                      value(light, "shadows"), value(light, "whites"), value(light, "blacks"), value(color, "vibrance"),
-                      value(color, "saturation"), clipping);
+    if (!clipping && !s["sharpenMask"].toBool() && s["enableCalibration"].toBool(true))
+        adjust_camera_raw_calibration(pixels, w, h, stride, value(calibration, "shadowTint"), 0, 0, 0, 0, 0, 0,
+                                      int(value(calibration, "process", 6)));
+    if (clipping)
+        adjust_camera_raw(pixels, w, h, stride, composed.isEmpty() ? nullptr : composed.constData(), rawtables::Grid,
+                          clipping);
     if (!clipping) {
         if (s["sharpenMask"].toBool()) {
+            if (!composed.isEmpty())
+                adjust_camera_raw(pixels, w, h, stride, composed.constData(), rawtables::Grid, 0);
             auto d = s["detail"].toObject();
             adjust_camera_raw_sharpen_mask_overlay(pixels, w, h, stride, value(d, "sharpenRadius", 10),
                                                    value(d, "sharpenDetail", 25), value(d, "sharpenMasking"), scale);
@@ -268,23 +266,10 @@ QImage cameraRaw(const QImage &source, const QJsonObject &settings, double scale
         for (int c = 0; c < 4; ++c)
             for (int i = 0; i < 256; ++i) {
                 double t = i / 255.;
-                if (c == 0)
+                if (c == 0 && !rawtables::measuredCurve(curve))
                     t = curveValue(t, anchors);
                 tables[c][i] = float(curveValue(t, curve[curves[c]].toArray()));
             }
-        const QStringList components{"hue", "saturation", "luminance"};
-        for (int c = 0; c < 3; ++c) {
-            auto a = mixer[components[c]].toArray();
-            for (int i = 0; i < std::min(8, int(a.size())); ++i)
-                mix[c * 8 + i] = float(a[i].toDouble() / 100.);
-        }
-        int wheel = 0;
-        for (const auto &key : QStringList{"shadows", "midtones", "highlights", "global"}) {
-            auto g = grade[key].toObject();
-            grading[wheel++] = float(value(g, "hue") / 360.);
-            grading[wheel++] = float(value(g, "saturation") / 100.);
-            grading[wheel++] = float(value(g, "luminance") / 100.);
-        }
         QVector<float> points;
         for (const auto &entry : mixer["points"].toArray()) {
             if (points.size() >= 72)
@@ -300,10 +285,35 @@ QImage cameraRaw(const QImage &source, const QJsonObject &settings, double scale
             points.append(float(value(p, "saturationRange", .4)));
             points.append(float(value(p, "luminanceRange", .4)));
         }
-        adjust_camera_raw_curve_color(pixels, w, h, stride, tables[0], tables[1], tables[2], tables[3],
-                                      value(curve, "refineSaturation") / 100, mix, int(points.size() / 9),
-                                      points.constData(), grading, value(grade, "blending", 50) / 100,
-                                      value(grade, "balance") / 100, int(value(s, "visualizePoint", -1)));
+        const auto mixerStages = rawtables::mixer(mixer), gradeStages = rawtables::grading(grade);
+        if (points.isEmpty() && value(curve, "refineSaturation") == 0 && value(s, "visualizePoint", -1) < 0) {
+            bool curvesChanged = false;
+            for (int c = 0; c < 4; ++c)
+                for (int i = 0; i < 256; ++i)
+                    curvesChanged |= std::abs(tables[c][i] - i / 255.f) > .00001f;
+            if (curvesChanged || !mixerStages.isEmpty() || !gradeStages.isEmpty()) {
+                if (composed.isEmpty())
+                    composed = rawtables::compose({}, true);
+                if (curvesChanged)
+                    camera_raw_table_curves(composed.data(), rawtables::Grid, tables[0], tables[1], tables[2],
+                                            tables[3]);
+                const auto stages = mixerStages + gradeStages;
+                camera_raw_compose_onto(composed.data(), rawtables::Grid, stages.constData(), int(stages.size()),
+                                        rawtables::Size);
+            }
+            if (!composed.isEmpty())
+                adjust_camera_raw(pixels, w, h, stride, composed.constData(), rawtables::Grid, 0);
+        } else {
+            if (!composed.isEmpty())
+                adjust_camera_raw(pixels, w, h, stride, composed.constData(), rawtables::Grid, 0);
+            const auto mixerTable = rawtables::compose(mixerStages), gradeTable = rawtables::compose(gradeStages);
+            adjust_camera_raw_curve_color(pixels, w, h, stride, tables[0], tables[1], tables[2], tables[3],
+                                          value(curve, "refineSaturation") / 100, mix, int(points.size() / 9),
+                                          points.constData(), grading, value(grade, "blending", 50) / 100,
+                                          value(grade, "balance") / 100, int(value(s, "visualizePoint", -1)),
+                                          mixerTable.isEmpty() ? nullptr : mixerTable.constData(),
+                                          gradeTable.isEmpty() ? nullptr : gradeTable.constData(), rawtables::Grid);
+        }
         if (s["enableEffects"].toBool(true)) {
             adjust_camera_raw_effects(
                 pixels, w, h, stride, value(s, "texture"), value(s, "clarity"), value(s, "dehaze"), value(s, "glow"),
@@ -323,7 +333,8 @@ QImage cameraRaw(const QImage &source, const QJsonObject &settings, double scale
                 (value(optics, "distortion") + (profile ? value(optics, "profileDistortion", 100) : 0)) / 100 * .35,
                 value(optics, "purpleAmount"), value(optics, "purpleHueLow", 270), value(optics, "purpleHueHigh", 310),
                 value(optics, "greenAmount"), value(optics, "greenHueLow", 60), value(optics, "greenHueHigh", 120),
-                value(optics, "vignetteAmount"), value(optics, "vignetteMidpoint", 50), scale);
+                value(optics, "vignetteAmount"), value(optics, "vignetteMidpoint", 50), scale, rawtables::exposure(),
+                rawtables::Size);
         }
         auto d = s["detail"].toObject();
         if (s["enableDetail"].toBool(true))
@@ -353,11 +364,7 @@ QJsonObject autoWhiteBalance(const QImage &input) {
         }
     if (n == 0)
         return {};
-    double r = sum[0] / n, g = sum[1] / n, b = sum[2] / n, a1 = .35 * r, b1 = .15 * r + .30 * g, c1 = g - r,
-           a2 = -.35 * b, b2 = .15 * b + .30 * g, c2 = g - b, det = a1 * b2 - a2 * b1;
-    if (abs(det) < 1e-8)
-        return {};
-    return {{"temperature", std::clamp((c1 * b2 - c2 * b1) / det * 100, -100., 100.)},
-            {"tint", std::clamp((a1 * c2 - a2 * c1) / det * 100, -100., 100.)}};
+    auto encode = [](double x) { return x <= .0031308 ? x * 12.92 : 1.055 * pow(x, 1 / 2.4) - .055; };
+    return rawtables::neutralize(encode(sum[0] / n), encode(sum[1] / n), encode(sum[2] / n));
 }
 } // namespace comp

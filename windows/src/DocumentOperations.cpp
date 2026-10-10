@@ -5,6 +5,7 @@
 #include <QPainter>
 #include <QPainterPathStroker>
 #include <QSet>
+#include <cmath>
 extern "C" {
 #include "ContentFill.h"
 }
@@ -384,6 +385,20 @@ void Document::resizeCanvas(QSize size, bool rescale, bool centered) {
                 if (rescale)
                     p->size = {p->size.width() * sx, p->size.height() * sy};
             }
+        if (rescale)
+            for (auto &layer : s.layers) {
+                auto effects = layer.metadata["effects"].toObject();
+                for (auto it = effects.begin(); it != effects.end(); ++it) {
+                    auto effect = it.value().toObject();
+                    for (auto key : {"size", "distance", "blur"})
+                        if (effect.contains(key))
+                            effect[key] = std::min(QString(key) == "distance" ? 5000. : 500.,
+                                                   effect[key].toDouble() * std::sqrt(sx * sy));
+                    it.value() = effect;
+                }
+                if (!effects.isEmpty())
+                    layer.metadata["effects"] = effects;
+            }
         s.selection = mapping.map(s.selection);
         if (!s.selectionMask.isNull()) {
             QImage mapped(size, QImage::Format_Grayscale8);
@@ -403,6 +418,37 @@ void Document::resizeCanvas(QSize size, bool rescale, bool centered) {
             s.guides[i] = g;
         }
         s.size = size;
+    });
+}
+void Document::rotateCanvas(bool clockwise) {
+    if (!hasDocument())
+        return;
+    edit([&](State &s) {
+        const auto old = s.size;
+        QTransform turn =
+            clockwise ? QTransform(0, 1, -1, 0, old.height(), 0) : QTransform(0, -1, 1, 0, 0, old.width());
+        for (auto &layer : s.layers)
+            for (auto *p : {&layer.placement, &layer.maskPlacement}) {
+                const QPointF half(p->size.width() / 2, p->size.height() / 2);
+                p->origin = turn.map(p->origin + half) - half;
+                p->rotation = std::fmod(p->rotation + (clockwise ? 90 : -90), 360.);
+            }
+        s.selection = turn.map(s.selection);
+        if (!s.selectionMask.isNull())
+            s.selectionMask = s.selectionMask.transformed(QTransform().rotate(clockwise ? 90 : -90));
+        for (int i = 0; i < s.guides.size(); ++i) {
+            auto guide = s.guides[i].toObject();
+            const bool horizontal = guide["axis"] == "horizontal";
+            double position = guide["position"].toDouble();
+            if (horizontal && clockwise)
+                position = old.height() - position;
+            if (!horizontal && !clockwise)
+                position = old.width() - position;
+            guide["axis"] = horizontal ? "vertical" : "horizontal";
+            guide["position"] = position;
+            s.guides[i] = guide;
+        }
+        s.size.transpose();
     });
 }
 void Document::flipCanvas(bool horizontal) {

@@ -110,6 +110,33 @@ void MainWindow::buildEditingActions() {
     add("imageSize", "", [this] { sizeDialog(true); });
     add("canvasSize", "", [this] { sizeDialog(false); });
     add("trim", "", [this] { document_.trim(); });
+    add("rotateCanvasCW", "", [this] {
+        document_.rotateCanvas(true);
+        canvas_->fit();
+    });
+    add("rotateCanvasCCW", "", [this] {
+        document_.rotateCanvas(false);
+        canvas_->fit();
+    });
+    add("searchCommands", "Ctrl+F", [this] { commandPalette(); });
+    add("lastFilter", "Ctrl+Alt+F", [this] {
+        if (!lastFilter_.isEmpty())
+            document_.applyFilter(lastFilter_, mask_->isChecked());
+    });
+    add("toggleFullscreen", "F", [this] {
+        if (isFullScreen())
+            showNormal();
+        else
+            showFullScreen();
+    });
+    auto *leaveFullscreen = new QAction(this);
+    leaveFullscreen->setShortcut(Qt::Key_Escape);
+    connect(leaveFullscreen, &QAction::triggered, this, [this] {
+        if (isFullScreen())
+            showNormal();
+        canvas_->cancelGesture();
+    });
+    addAction(leaveFullscreen);
     add("flipCanvasX", "", [this] { document_.flipCanvas(true); });
     add("flipCanvasY", "", [this] { document_.flipCanvas(false); });
     add("showRulers", "Ctrl+R", [this] { canvas_->setRulers(actions_["showRulers"]->isChecked()); });
@@ -156,7 +183,8 @@ void MainWindow::buildEditingActions() {
                                                             {"grain", "Grain"},
                                                             {"colorBalance", "Color Balance"},
                                                             {"gradientMap", "Gradient Map"},
-                                                            {"cameraRaw", "Camera Raw"}}) {
+                                                            {"cameraRaw", "Camera Raw"},
+                                                            {"scanlines", "Scanlines"}}) {
         const QString key = "filter." + entry.first;
         add(key, "", [this, kind = entry.second] { filterDialog(kind, false); });
     }

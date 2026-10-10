@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "Export.h"
 #include "Renderer.h"
 #include "Icons.h"
 #include "Filters.h"
@@ -354,17 +355,51 @@ void MainWindow::newDialog() {
     outer->addWidget(title);
     outer->addWidget(new QLabel(t("newSubtitle")));
     auto *form = new QFormLayout;
-    QSpinBox width, height;
-    for (auto *box : {&width, &height})
-        box->setRange(1, MaxSide);
+    QDoubleSpinBox width, height;
+    for (auto *box : {&width, &height}) {
+        box->setRange(.01, MaxSide);
+        box->setDecimals(2);
+    }
+    width.setObjectName("canvasWidth");
+    height.setObjectName("canvasHeight");
     width.setValue(1600);
     height.setValue(1000);
+    QComboBox units, dpi;
+    units.setObjectName("canvasUnits");
+    dpi.setObjectName("canvasDpi");
+    units.addItems({t("units.pixels"), t("units.inches"), t("units.cm"), t("units.mm")});
+    dpi.addItem("72 DPI", 72);
+    dpi.addItem("300 DPI", 300);
+    auto factor = [&] {
+        double resolution = dpi.currentData().toDouble();
+        switch (units.currentIndex()) {
+        case 1:
+            return resolution;
+        case 2:
+            return resolution / 2.54;
+        case 3:
+            return resolution / 25.4;
+        default:
+            return 1.;
+        }
+    };
+    double oldFactor = 1;
+    connect(&units, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] {
+        const double next = factor();
+        width.setValue(width.value() * oldFactor / next);
+        height.setValue(height.value() * oldFactor / next);
+        oldFactor = next;
+    });
+    connect(&dpi, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { oldFactor = factor(); });
+    auto pixels = [&] { return QSize(qRound(width.value() * factor()), qRound(height.value() * factor())); };
     QComboBox background;
     background.addItem(t("transparent"), 0);
     background.addItem(t("white"), 1);
     background.addItem(t("dark"), 2);
     form->addRow(t("width"), &width);
     form->addRow(t("height"), &height);
+    form->addRow(t("units"), &units);
+    form->addRow(t("resolution"), &dpi);
     form->addRow(t("background"), &background);
     outer->addLayout(form);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -372,7 +407,8 @@ void MainWindow::newDialog() {
     outer->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        if (qint64(width.value()) * height.value() > MaxCanvasPixels) {
+        if (!pixels().isValid() || pixels().width() > MaxSide || pixels().height() > MaxSide ||
+            qint64(pixels().width()) * pixels().height() > MaxCanvasPixels) {
             showError("invalidSize");
             return;
         }
@@ -382,7 +418,8 @@ void MainWindow::newDialog() {
         return;
     State s;
     s.id = newId();
-    s.size = {width.value(), height.value()};
+    s.size = pixels();
+    s.resolution = dpi.currentData().toDouble();
     if (background.currentData().toInt() != 0) {
         Layer l;
         l.id = newId();
@@ -391,7 +428,7 @@ void MainWindow::newDialog() {
         l.image = QImage(s.size, QImage::Format_ARGB32_Premultiplied);
         if (l.image.isNull())
             throw Error("tooLarge");
-        l.image.fill(background.currentData().toInt() == 1 ? Qt::white : QColor("#20252c"));
+        l.image.fill(background.currentData().toInt() == 1 ? Qt::white : Qt::black);
         s.layers.append(l);
         s.active = l.id;
     }
@@ -542,62 +579,93 @@ void MainWindow::exportImage() {
     if (!document_.hasDocument() || busy_)
         return;
     QDialog dialog(this);
+    dialog.setObjectName("exportDialog");
     dialog.setWindowTitle(t("export"));
+    dialog.resize(660, 600);
     auto *layout = new QVBoxLayout(&dialog);
-    layout->addWidget(new QLabel(t("exportTitle")));
-    auto *note = new QLabel(t("exportNote"));
-    note->setWordWrap(true);
-    layout->addWidget(note);
+    auto *form = new QFormLayout;
     QComboBox format;
     format.addItem("PNG", "png");
     format.addItem("JPEG", "jpeg");
-    QSpinBox quality;
+    format.addItem("PDF", "pdf");
+    QSpinBox width, height, quality;
+    width.setRange(1, MaxSide);
+    height.setRange(1, MaxSide);
     quality.setRange(1, 100);
     quality.setValue(92);
-    auto *form = new QFormLayout;
+    width.setValue(document_.state().size.width());
+    height.setValue(document_.state().size.height());
+    QCheckBox aspect(t("keepAspect"));
+    aspect.setChecked(true);
     form->addRow(t("format"), &format);
+    form->addRow(t("width"), &width);
+    form->addRow(t("height"), &height);
+    form->addRow(&aspect);
     form->addRow(t("quality"), &quality);
     layout->addLayout(form);
-    layout->addWidget(new QLabel(t("jpegNote")));
+    auto *preview = new QLabel;
+    preview->setMinimumSize(460, 250);
+    preview->setAlignment(Qt::AlignCenter);
+    layout->addWidget(preview, 1);
+    const auto image = comp::render(document_.state(), document_.state().size.scaled(540, 280, Qt::KeepAspectRatio));
+    auto update = [&] {
+        quality.setEnabled(format.currentData() == "jpeg");
+        QImage tile(16, 16, QImage::Format_RGB32);
+        tile.fill(QColor("#dddddd"));
+        {
+            QPainter p(&tile);
+            p.fillRect(0, 0, 8, 8, QColor("#f0f0f0"));
+            p.fillRect(8, 8, 8, 8, QColor("#f0f0f0"));
+        }
+        const auto size = QSize(width.value(), height.value()).scaled(540, 280, Qt::KeepAspectRatio);
+        QImage picture(size, QImage::Format_RGB32);
+        QPainter p(&picture);
+        p.fillRect(picture.rect(), format.currentData() == "png" ? QBrush(tile) : QBrush(Qt::white));
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.drawImage(picture.rect(), image);
+        p.end();
+        preview->setPixmap(QPixmap::fromImage(picture));
+    };
+    const double ratio = double(document_.state().size.width()) / document_.state().size.height();
+    connect(&width, qOverload<int>(&QSpinBox::valueChanged), &dialog, [&](int v) {
+        if (aspect.isChecked()) {
+            QSignalBlocker block(&height);
+            height.setValue(qRound(v / ratio));
+        }
+        update();
+    });
+    connect(&height, qOverload<int>(&QSpinBox::valueChanged), &dialog, [&](int v) {
+        if (aspect.isChecked()) {
+            QSignalBlocker block(&width);
+            width.setValue(qRound(v * ratio));
+        }
+        update();
+    });
+    connect(&format, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, update);
+    update();
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     buttons->button(QDialogButtonBox::Ok)->setText(t("exportAction"));
     layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        if (qint64(width.value()) * height.value() > MaxCanvasPixels) {
+            showError("invalidSize");
+            return;
+        }
+        dialog.accept();
+    });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     if (dialog.exec() != QDialog::Accepted)
         return;
-    const QByteArray encoding = format.currentData().toByteArray();
-    const QString extension = encoding == "jpeg" ? ".jpg" : ".png";
-    const QString file = QFileDialog::getSaveFileName(this, t("export"), name_ + extension,
-                                                      encoding == "jpeg" ? "JPEG (*.jpg *.jpeg)" : "PNG (*.png)");
+    const auto encoding = format.currentData().toByteArray();
+    const QString extension = encoding == "jpeg" ? "jpg" : QString::fromLatin1(encoding);
+    const QString file = QFileDialog::getSaveFileName(this, t("export"), name_ + "." + extension,
+                                                      format.currentText() + " (*." + extension + ")");
     if (file.isEmpty())
         return;
     const State snapshot = document_.state();
-    const int q = quality.value();
-    runIO(
-        [snapshot, file, encoding, q] {
-            auto image = comp::render(snapshot);
-            if (encoding == "jpeg") {
-                QImage white(image.size(), QImage::Format_RGB32);
-                if (white.isNull())
-                    throw Error("tooLarge");
-                white.fill(Qt::white);
-                QPainter p(&white);
-                p.drawImage(0, 0, image);
-                p.end();
-                image = white;
-            }
-            image.setDotsPerMeterX(qRound(snapshot.resolution / .0254));
-            image.setDotsPerMeterY(qRound(snapshot.resolution / .0254));
-            QSaveFile out(file);
-            if (!out.open(QIODevice::WriteOnly))
-                throw Error("fileError");
-            QImageWriter writer(&out, encoding);
-            writer.setQuality(q);
-            if (!writer.write(image) || !out.commit())
-                throw Error("fileError");
-        },
-        [this] { statusBar()->showMessage(t("exported"), 3000); });
+    runIO([snapshot, file, encoding, size = QSize(width.value(), height.value()),
+           q = quality.value()] { exportDocument(snapshot, file, encoding, size, q); },
+          [this] { statusBar()->showMessage(t("exported"), 3000); });
 }
 void MainWindow::sample() {
     State s;
