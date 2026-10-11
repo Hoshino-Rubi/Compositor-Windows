@@ -1,3 +1,4 @@
+#include "PreviewRenderer.h"
 #include "Pixels.h"
 #include "MainWindow.h"
 #include "Filters.h"
@@ -413,6 +414,7 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
     const QSize sourceSize = source.size();
     if (!source.isNull())
         source = source.scaled(500, 500, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    const QString previewLayerId = newId();
     auto update = [&] {
         try {
             State candidate = base;
@@ -423,7 +425,7 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                         candidate.layers[editIndex].metadata["adjustment"] = settings;
                     else {
                         Layer l;
-                        l.id = newId();
+                        l.id = previewLayerId;
                         l.name = "preview";
                         l.placement.size = base.size;
                         l.metadata["adjustment"] = settings;
@@ -464,7 +466,7 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                         candidate.layers[active].image = output;
                 }
             }
-            preview->setPixmap(QPixmap::fromImage(comp::render(candidate, target)));
+            preview->setPixmap(QPixmap::fromImage(comp::renderPreview(candidate, target)));
         } catch (const Error &error) {
             preview->setText(t(error.key));
         }

@@ -64,6 +64,34 @@ State fixture(QSize size = {8, 8}) {
     s.active = l.id;
     return s;
 }
+State blurFixture(QSize size, int depth, double radius = 10) {
+    auto state = fixture(size); state.bitDepth = depth;
+    auto &image = state.layers[0].image;
+    image = QImage(size,pixelFormat(depth));
+    const int maximum = depth == 16 ? 65535 : 255;
+    for (int y=0; y<size.height(); ++y) for (int x=0; x<size.width(); ++x) {
+        const int alpha = (x*971+y*307+107) % (maximum+1);
+        const int r=(x*313+y*17)%(alpha+1), g=(x*71+y*541)%(alpha+1), b=(x*997+y*31)%(alpha+1);
+        if (depth == 16) reinterpret_cast<QRgba64 *>(image.scanLine(y))[x] = rgba64(r,g,b,alpha);
+        else reinterpret_cast<QRgb *>(image.scanLine(y))[x] = qRgba(r,g,b,alpha);
+    }
+    Layer blur; blur.id = newId(); blur.name = "Gaussian Blur"; blur.placement.size = size;
+    blur.metadata["adjustment"] = QJsonObject{{"kind","Gaussian Blur"},{"blurRadius",radius}};
+    state.layers.append(blur);
+    return state;
+}
+int sampleDifference(const QImage &a, const QImage &b) {
+    if (a.size() != b.size() || a.isNull() || b.isNull()) return 65536;
+    const auto left = a.convertToFormat(QImage::Format_RGBA64_Premultiplied);
+    const auto right = b.convertToFormat(QImage::Format_RGBA64_Premultiplied);
+    int difference = 0;
+    for (int y=0; y<a.height(); ++y) {
+        const auto *l = reinterpret_cast<const quint16 *>(left.constScanLine(y));
+        const auto *r = reinterpret_cast<const quint16 *>(right.constScanLine(y));
+        for (int x=0; x<a.width()*4; ++x) difference = std::max(difference,std::abs(int(l[x])-int(r[x])));
+    }
+    return difference;
+}
 void rewrite(const QString &directory, const std::function<void(QJsonObject &)> &change) {
     QFile file(directory + "/manifest.json");
     if (!file.open(QIODevice::ReadOnly))
@@ -117,6 +145,189 @@ PickResult pickFile(MainWindow &window, const char *action, const QString &path 
 class Tests : public QObject {
     Q_OBJECT
   private slots:
+    void gpuBlurKernelMatchesCpuAtBothDepths() {
+        for (int depth : {8,16}) for (QSize size : {QSize(1,1),QSize(7,5),QSize(257,17),QSize(513,33)})
+            for (double radius : {.1,1.,8.,31.,250.}) {
+                clearGpuPreviewCache(); resetGpuPreviewMetrics();
+                const auto state = blurFixture(size,depth,radius);
+                const auto output = renderGpuPreview(state,size);
+                if (output.isNull()) {
+                    QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+                    QSKIP(qPrintable(gpuPreviewStatus()));
+                }
+                const auto expected = render(state);
+                const int difference = sampleDifference(output,expected);
+                QVERIFY2(difference == 0,qPrintable(QString("depth=%1 size=%2x%3 radius=%4 difference=%5")
+                    .arg(depth).arg(size.width()).arg(size.height()).arg(radius).arg(difference)));
+                const auto metrics = gpuPreviewMetrics();
+                QCOMPARE(metrics.blurDispatches,quint64(6));
+                QCOMPARE(metrics.blurredPixels,quint64(size.width())*size.height()*6);
+                QCOMPARE(metrics.adjustmentDispatches,quint64(1));
+                QCOMPARE(metrics.readbacks,quint64(1));
+            }
+    }
+    void gpuBlurMasksClippingAndStacksMatchCpu() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        for (int depth : {8,16}) {
+            clearGpuPreviewCache();
+            auto state = blurFixture({291,129},depth,13);
+            auto &blur = state.layers[1]; blur.opacity = .71;
+            blur.mask = QImage(state.size,maskFormat(depth)); blur.mask.fill(Qt::white);
+            { QPainter p(&blur.mask); p.fillRect(QRect(23,11,77,51),QColor(31,31,31)); }
+            blur.maskSource = state.layers[0].id; blur.maskLinked = false;
+            blur.maskPlacement.size = state.size; blur.maskPlacement.origin = QPointF(3.5,-4.25);
+            Layer group; group.id=newId(); group.name="Folder"; group.group=true; group.opacity=.83;
+            group.placement.size=state.size; group.mask=blur.mask; group.maskPlacement=group.placement;
+            blur.parent=group.id; state.layers.append(group);
+            Layer raster=state.layers[0]; raster.id=newId(); raster.image.fill(QColor(13,77,101,83));
+            raster.placement.origin=QPointF(21,13); state.layers.append(raster);
+            Layer last=state.layers[1]; last.id=newId(); last.parent.clear(); last.maskSource.clear();
+            last.mask={}; last.opacity=.37; state.layers.append(last);
+            for (bool masked : {true,false}) {
+                state.layers[1].maskEnabled=masked; state.layers[2].maskEnabled=masked;
+                const auto actual=renderGpuPreview(state,state.size);
+                QVERIFY2(!actual.isNull(),qPrintable(gpuPreviewStatus()));
+                const int difference=sampleDifference(actual,render(state));
+                QVERIFY2(difference <= (depth==8 ? 514 : 4),qPrintable(QString("depth=%1 difference=%2").arg(depth).arg(difference)));
+            }
+            // An adjustment before any raster must read a transparent backdrop.
+            state.layers = {last};
+            const auto empty=renderGpuPreview(state,state.size);
+            QCOMPARE(empty,render(state));
+            QCOMPARE(empty.pixelColor(2,3),QColor(Qt::transparent));
+        }
+    }
+    void gpuBlurCacheSettingsHistoryAndFallback() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        const auto previous=qgetenv("COMPOSITOR_GPU_CACHE_MB");
+        const auto restore=qScopeGuard([&] {
+            if(previous.isNull()) qunsetenv("COMPOSITOR_GPU_CACHE_MB"); else qputenv("COMPOSITOR_GPU_CACHE_MB",previous);
+            clearGpuPreviewCache();
+        });
+        clearGpuPreviewCache();
+        auto state=blurFixture({256,256},16,5);
+        Document document; document.reset(state,true);
+        const auto original=renderGpuPreview(state,state.size);
+        QVERIFY2(!original.isNull(),qPrintable(gpuPreviewStatus()));
+        resetGpuPreviewMetrics();
+        QCOMPARE(renderGpuPreview(state,state.size).cacheKey(),original.cacheKey());
+        QCOMPARE(gpuPreviewMetrics().blurDispatches,quint64(0));
+        document.edit([](State &s) { s.layers[1].metadata["adjustment"]=QJsonObject{{"kind","Gaussian Blur"},{"blurRadius",19}}; });
+        resetGpuPreviewMetrics();
+        const auto changed=renderGpuPreview(document.state(),state.size);
+        QVERIFY(changed!=original); QCOMPARE(changed,render(document.state()));
+        auto m=gpuPreviewMetrics(); QCOMPARE(m.preparedLayers,quint64(0)); QCOMPARE(m.sourceUploads,quint64(0));
+        QCOMPARE(m.textureAllocations,quint64(0)); QCOMPARE(m.blurDispatches,quint64(6));
+        QCOMPARE(m.readbackBytes,quint64(256*256*8));
+        document.undo(); QCOMPARE(renderGpuPreview(document.state(),state.size),original);
+        document.redo(); QCOMPARE(renderGpuPreview(document.state(),state.size),changed);
+        document.edit([](State &s) {
+            QPainter p(&s.layers[0].image); p.fillRect(QRect(103,112,7,5),Qt::red);
+        });
+        resetGpuPreviewMetrics(); const auto edit=renderGpuPreview(document.state(),state.size);
+        QCOMPARE(edit,render(document.state()));
+        QCOMPARE(gpuPreviewMetrics().uploadedBytes,quint64(7*5*8));
+        QCOMPARE(gpuPreviewMetrics().readbackBytes,quint64(256*256*8));
+        const auto bytes=gpuPreviewMetrics().residentBytes;
+        auto plain=document.state(); plain.layers.removeLast();
+        renderGpuPreview(plain,plain.size);
+        QVERIFY(gpuPreviewMetrics().residentBytes < bytes);
+        auto unsupported=state; unsupported.layers[1].blend="Multiply";
+        QVERIFY(renderGpuPreview(unsupported,unsupported.size).isNull());
+        QCOMPARE(renderPreview(unsupported),render(unsupported));
+        unsupported.layers[1].blend="Normal";
+        unsupported.layers[1].metadata["adjustment"]=QJsonObject{{"kind","Exposure"}};
+        QVERIFY(renderGpuPreview(unsupported,unsupported.size).isNull());
+        QCOMPARE(renderPreview(unsupported),render(unsupported));
+        clearGpuPreviewCache(); qputenv("COMPOSITOR_GPU_CACHE_MB","5");
+        QVERIFY(!renderGpuPreview(plain,plain.size).isNull());
+        QVERIFY(renderGpuPreview(state,state.size).isNull());
+        QCOMPARE(renderPreview(state),render(state));
+        QVERIFY(gpuPreviewMetrics().residentBytes <= gpuPreviewMetrics().budgetBytes);
+    }
+    void gpuBlurRegionsAndScaledPreviewMatchReference() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        for (int depth : {8,16}) {
+            clearGpuPreviewCache();
+            auto state=blurFixture({773,691},depth,12);
+            Layer blur=state.layers[1]; blur.id=newId(); state.layers.append(blur);
+            const auto full=renderGpuPreview(state,state.size);
+            QVERIFY2(!full.isNull(),qPrintable(gpuPreviewStatus()));
+            QCOMPARE(full,render(state));
+            for (QRect region : {QRect(0,0,256,256),QRect(245,193,273,285),QRect(501,409,272,282)}) {
+                resetGpuPreviewMetrics();
+                QCOMPARE(renderRegion(state,region,true),full.copy(region));
+                QCOMPARE(gpuPreviewMetrics().blurDispatches,quint64(12));
+            }
+            const QSize scaled(389,347);
+            QCOMPARE(renderGpuPreview(state,scaled),render(state,scaled));
+        }
+    }
+    void gpuBlurAdjustmentDialogUsesHardwareAndCancelsCleanly() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        clearGpuPreviewCache();
+        auto state=blurFixture({512,512},8); state.layers.removeLast();
+        QVERIFY2(!renderGpuPreview(state,state.size).isNull(),qPrintable(gpuPreviewStatus()));
+        MainWindow window; window.document()->reset(state,true); window.show();
+        bool shown=false,preview=false; quint64 dispatches=0;
+        QTimer::singleShot(50,&window,[&] {
+            auto *dialog=window.findChild<QDialog *>("filterDialog");
+            if(dialog) {
+                shown=true;
+                if(auto *label=dialog->findChild<QLabel *>("filterPreview")) preview=!label->pixmap().isNull();
+                dispatches=gpuPreviewMetrics().blurDispatches;
+                dialog->reject();
+            }
+        });
+        QTimer timeout; timeout.setSingleShot(true);
+        connect(&timeout,&QTimer::timeout,&window,[&] {
+            if(auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget())) dialog->reject();
+        }); timeout.start(5000);
+        resetGpuPreviewMetrics(); window.findChild<QAction *>("adjustment.blurAction")->trigger();
+        QVERIFY(shown); QVERIFY(preview); QVERIFY(dispatches>=6);
+        QCOMPARE(window.document()->state().layers.size(),1);
+        QVERIFY(!window.document()->dirty()); QVERIFY(!window.document()->canUndo());
+        QCOMPARE(window.document()->state().layers[0].image,state.layers[0].image);
+    }
+    void gpuBlurPerformanceReport() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        if(!qEnvironmentVariableIntValue("COMPOSITOR_GPU_BENCHMARK")) return;
+        for(int depth : {8,16}) {
+            auto base=blurFixture({1024,1024},depth,10); clearGpuPreviewCache();
+            QVERIFY2(!renderGpuPreview(base,base.size).isNull(),qPrintable(gpuPreviewStatus()));
+            QVector<QImage> reference;
+            for(bool accelerated : {false,true}) {
+                auto state=base; resetGpuPreviewMetrics(); qint64 elapsed=0;
+                for(int frame=0;frame<6;++frame) {
+                    state.layers[1].metadata["adjustment"]=QJsonObject{{"kind","Gaussian Blur"},{"blurRadius",5.+frame*4}};
+                    QElapsedTimer timer; timer.start();
+                    const auto result=accelerated ? renderGpuPreview(state,state.size) : render(state);
+                    elapsed+=timer.nsecsElapsed();
+                    if(accelerated) QCOMPARE(result,reference[frame]); else reference.append(result);
+                }
+                auto m=gpuPreviewMetrics();
+                if(accelerated) { QCOMPARE(m.blurDispatches,quint64(36)); QCOMPARE(m.sourceUploads,quint64(0)); }
+                qInfo().noquote()<<QString("GPU_BLUR_BENCHMARK depth=%1 backend=%2 frames=6 total_ms=%3 blur_dispatches=%4 uploads=%5 readback_bytes=%6 allocations=%7")
+                    .arg(depth).arg(accelerated?"gpu":"cpu").arg(elapsed/1000000.,0,'f',3)
+                    .arg(m.blurDispatches).arg(m.sourceUploads).arg(m.readbackBytes).arg(m.textureAllocations);
+            }
+        }
+    }
     void gpuPackedReadbackPreservesNativeSamples() {
         for (int depth : {8,16}) {
             clearGpuPreviewCache(); resetGpuPreviewMetrics();

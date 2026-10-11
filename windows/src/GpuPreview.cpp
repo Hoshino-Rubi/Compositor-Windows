@@ -1,6 +1,8 @@
 #include "GpuPreview.h"
 #include "Renderer.h"
 #include "Pixels.h"
+#include "GpuBlurShader.h"
+#include <bit>
 #include <QColorSpace>
 #include <QPainter>
 #include <algorithm>
@@ -109,7 +111,7 @@ static_assert(sizeof(Settings) == 32);
 struct Device {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
-    ComPtr<ID3D11ComputeShader> shader, packShader;
+    ComPtr<ID3D11ComputeShader> shader, packShader, blurShader, blurMixShader;
     ComPtr<ID3D11Buffer> settings;
     QString status;
     Device() {
@@ -138,6 +140,20 @@ struct Device {
             shader.Reset(); status = "Preview shader initialization failed"; return;
         }
         status = "Direct3D 11 hardware compute";
+    }
+    bool prepareBlur() {
+        if (blurShader && blurMixShader) return true;
+        auto compile = [&](const char *source, size_t size, ComPtr<ID3D11ComputeShader> &out) {
+            ComPtr<ID3DBlob> code, errors;
+            HRESULT hr = D3DCompile(source, size, "CompositorBlur", nullptr, nullptr, "main", "cs_5_0",
+                                   D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
+            if (SUCCEEDED(hr)) hr = device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &out);
+            if (FAILED(hr)) status = errors ? QString::fromUtf8(static_cast<const char *>(errors->GetBufferPointer()), int(errors->GetBufferSize()))
+                                           : "Blur shader initialization failed";
+            return SUCCEEDED(hr);
+        };
+        return compile(gpuBlurShader, sizeof(gpuBlurShader)-1, blurShader) &&
+               compile(gpuBlurMixShader, sizeof(gpuBlurMixShader)-1, blurMixShader);
     }
     bool ready() const { return shader && packShader && settings && SUCCEEDED(device->GetDeviceRemovedReason()); }
 };
@@ -175,7 +191,7 @@ struct FrameCache {
     QSize canvas, target;
     QPoint origin;
     int depth = 8;
-    Texture buffers[2], packed;
+    Texture buffers[2], packed, blur[2];
     ComPtr<ID3D11Texture2D> staging;
     std::map<QString, SourceCache> layers;
     QByteArray signature, stackSignature;
@@ -255,7 +271,28 @@ struct VisibleLayer {
     int index;
     QVector<int> ancestors;
     QByteArray signature;
+    bool adjustment = false;
+    double opacity = 1;
 };
+QImage adjustmentCoverage(const State &state, const VisibleLayer &entry, QSize target) {
+    const auto &layer = state.layers[entry.index];
+    QImage result(target, pixelFormat(state.bitDepth));
+    if (result.isNull()) throw Error("tooLarge");
+    result.fill(Qt::white);
+    auto multiply = [&](const QImage &mask) {
+        QPainter painter(&result);
+        painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+        painter.drawImage(0, 0, mask);
+    };
+    if (!layer.mask.isNull() && layer.maskEnabled) multiply(renderMask(layer, state.size, target));
+    for (int index : entry.ancestors) {
+        const auto &group = state.layers[index];
+        if (!group.mask.isNull() && group.maskEnabled) multiply(renderMask(group, state.size, target));
+    }
+    const int source = state.index(layer.maskSource);
+    if (source >= 0) multiply(layerSurface(state, source, target));
+    return result;
+}
 } // namespace
 #endif
 QString gpuPreviewStatus() {
@@ -296,20 +333,25 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         return {};
     }
     if (!target.isValid() || qint64(target.width()) * target.height() > 8 * 1024 * 1024) return {};
-    for (const auto &layer : state.layers)
-        if (layer.metadata["adjustment"].isObject() || !layer.metadata["effects"].toObject().isEmpty()) return {};
+    for (const auto &layer : state.layers) {
+        if (!layer.metadata["effects"].toObject().isEmpty()) return {};
+        if (layer.metadata["adjustment"].isObject() &&
+            (layer.metadata["adjustment"].toObject()["kind"] != "Gaussian Blur" || layer.blend != "Normal")) return {};
+    }
     std::lock_guard lock(gpuMutex);
     auto &d = gpu();
     if (!d.ready()) { frames.clear(); return {}; }
     QVector<VisibleLayer> visibleLayers;
     QSet<QString> visibleIds;
+    bool hasBlur = false;
     QByteArray signature, stackSignature;
     QDataStream key(&signature, QIODevice::WriteOnly);
     QDataStream stackKey(&stackSignature, QIODevice::WriteOnly);
     key << state.resolution;
     for (int index : state.drawOrder()) {
         const auto &layer = state.layers[index];
-        if (layer.group || !layer.visible || layer.image.isNull()) continue;
+        const bool adjustment = layer.metadata["adjustment"].isObject();
+        if (layer.group || !layer.visible || (layer.image.isNull() && !adjustment)) continue;
         double opacity = layer.opacity;
         bool visible = true;
         QVector<int> ancestors;
@@ -321,15 +363,21 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             visible = visible && state.layers[i].visible; parent = state.layers[i].parent;
         }
         if (!visible || opacity <= 0) continue;
-        const auto fingerprint = sourceSignature(state, index, ancestors);
-        visibleLayers.append({index, ancestors, fingerprint});
+        auto fingerprint = sourceSignature(state, index, ancestors);
+        fingerprint.append(adjustment ? 'A' : 'R');
+        visibleLayers.append({index, ancestors, fingerprint, adjustment, opacity});
+        hasBlur = hasBlur || adjustment;
         visibleIds.insert(layer.id);
         key << layer.id << layer.blend << fingerprint;
-        stackKey << layer.id << layer.blend;
+        stackKey << layer.id << layer.blend << adjustment;
+        if (adjustment) {
+            key << layer.metadata["adjustment"].toObject() << opacity;
+            stackKey << layer.metadata["adjustment"].toObject() << opacity;
+        }
     }
     const quint64 area = quint64(target.width()) * target.height();
     const quint64 sampleBytes = state.bitDepth == 16 ? 8 : 4;
-    const quint64 required = area * (32 + sampleBytes * 3 + visibleLayers.size() * sampleBytes * 2);
+    const quint64 required = area * (32 + (hasBlur ? 32 : 0) + sampleBytes * 3 + visibleLayers.size() * sampleBytes * 2);
     const quint64 budget = cacheBudget(d);
     metrics.budgetBytes = budget;
     trimCache(budget);
@@ -360,6 +408,14 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         return frame.result;
     }
     auto failed = [&]() -> QImage { frames.erase(found); return {}; };
+    if (hasBlur) {
+        if (!d.prepareBlur()) return failed();
+        if (!frame.blur[0].texture &&
+            (!createTexture(d, target, DXGI_FORMAT_R32G32B32A32_FLOAT, frame.blur[0]) ||
+             !createTexture(d, target, DXGI_FORMAT_R32G32B32A32_FLOAT, frame.blur[1]))) return failed();
+    } else {
+        frame.blur[0] = {}; frame.blur[1] = {};
+    }
     const DXGI_FORMAT packedFormat = state.bitDepth == 16 ? DXGI_FORMAT_R16G16B16A16_UINT : DXGI_FORMAT_R8G8B8A8_UINT;
     if (!frame.buffers[0].texture) {
         UINT support = 0;
@@ -377,7 +433,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     // A changed stack can affect every pixel. Otherwise the prepared surface diff
     // includes both old/new geometry and all mask/clipping dependencies.
     QRect dirty;
-    if (frame.result.isNull() || frame.stackSignature != stackSignature ||
+    if (frame.result.isNull() || frame.stackSignature != stackSignature || hasBlur ||
         forceFull) dirty = QRect(QPoint(), target);
     for (const auto &entry : visibleLayers) {
         const int index = entry.index;
@@ -385,21 +441,23 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         auto &cached = frame.layers[layer.id];
         if (cached.signature != entry.signature || !cached.source.texture) {
             ++metrics.preparedLayers;
-            auto image = layerSurface(state, index, target);
-            double groupOpacity = 1;
-            for (int ancestor : entry.ancestors) {
-                const auto &group = state.layers[ancestor];
-                groupOpacity *= group.opacity;
-                if (!group.mask.isNull() && group.maskEnabled) {
+            auto image = entry.adjustment ? adjustmentCoverage(state, entry, target) : layerSurface(state, index, target);
+            if (!entry.adjustment) {
+                double groupOpacity = 1;
+                for (int ancestor : entry.ancestors) {
+                    const auto &group = state.layers[ancestor];
+                    groupOpacity *= group.opacity;
+                    if (!group.mask.isNull() && group.maskEnabled) {
+                        QPainter painter(&image);
+                        painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                        painter.drawImage(0, 0, renderMask(group, state.size, target));
+                    }
+                }
+                if (groupOpacity < 1) {
                     QPainter painter(&image);
                     painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-                    painter.drawImage(0, 0, renderMask(group, state.size, target));
+                    painter.fillRect(image.rect(), QColor::fromRgbF(0, 0, 0, groupOpacity));
                 }
-            }
-            if (groupOpacity < 1) {
-                QPainter painter(&image);
-                painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-                painter.fillRect(image.rect(), QColor::fromRgbF(0, 0, 0, groupOpacity));
             }
             image = image.convertToFormat(state.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
                                                              : QImage::Format_RGBA8888_Premultiplied);
@@ -431,10 +489,10 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         auto *constants = d.settings.Get();
         d.context->CSSetConstantBuffers(0, 1, &constants);
         d.context->CSSetShader(d.shader.Get(), nullptr, 0);
-        ID3D11ShaderResourceView *noViews[2]{};
+        ID3D11ShaderResourceView *noViews[3]{};
         ID3D11UnorderedAccessView *noOutput = nullptr;
         auto unbind = [&] {
-            d.context->CSSetShaderResources(0, 2, noViews);
+            d.context->CSSetShaderResources(0, 3, noViews);
             d.context->CSSetUnorderedAccessViews(0, 1, &noOutput, nullptr);
         };
         Settings params{UINT(dirty.width()), UINT(dirty.height()), 0, state.bitDepth == 16 ? 65535.f : 255.f,
@@ -443,6 +501,46 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         int current = 0;
         for (const auto &entry : visibleLayers) {
             const auto &layer = state.layers[entry.index];
+            if (entry.adjustment) {
+                if (params.firstLayer) {
+                    const float transparent[4]{};
+                    d.context->ClearUnorderedAccessViewFloat(frame.buffers[current].output.Get(), transparent);
+                }
+                const double radius = layer.metadata["adjustment"].toObject()["blurRadius"].toDouble(10) *
+                                      target.width() / state.size.width();
+                Settings blurParams{UINT(target.width()), UINT(target.height()), 0, params.maximum,
+                                    UINT(std::clamp(qRound(radius * .58), 1, 250)), 0, 0};
+                auto *input = frame.buffers[current].view.Get();
+                if (radius > 0) for (int pass = 0; pass < 6; ++pass) {
+                    blurParams.mode = UINT(pass % 2);
+                    d.context->CSSetShader(d.blurShader.Get(), nullptr, 0);
+                    d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &blurParams, 0, 0);
+                    d.context->CSSetShaderResources(0, 1, &input);
+                    auto *out = frame.blur[pass % 2].output.Get();
+                    d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
+                    const UINT length = blurParams.mode ? blurParams.height : blurParams.width;
+                    const UINT rows = blurParams.mode ? blurParams.width : blurParams.height;
+                    d.context->Dispatch((length+255)/256, rows, 1);
+                    ++metrics.blurDispatches;
+                    metrics.blurredPixels += area;
+                    unbind();
+                    input = frame.blur[pass % 2].view.Get();
+                }
+                Settings mixParams = params;
+                mixParams.padding = std::bit_cast<UINT>(float(entry.opacity));
+                d.context->CSSetShader(d.blurMixShader.Get(), nullptr, 0);
+                d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &mixParams, 0, 0);
+                ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), input, frame.layers[layer.id].source.view.Get()};
+                d.context->CSSetShaderResources(0, 3, views);
+                auto *out = frame.buffers[1-current].output.Get();
+                d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
+                d.context->Dispatch((params.width+15)/16, (params.height+15)/16, 1);
+                ++metrics.adjustmentDispatches;
+                unbind();
+                current = 1-current; params.firstLayer = 0;
+                continue;
+            }
+            d.context->CSSetShader(d.shader.Get(), nullptr, 0);
             params.mode = UINT(std::max(0, int(blendModes().indexOf(layer.blend))));
             d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &params, 0, 0);
             ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), frame.layers[layer.id].source.view.Get()};

@@ -1,13 +1,22 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a2（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a3（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a2) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a3) 下载便携包。
 
-解压 `Compositor-0.4.1a2-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a3-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a3 — GPU 高斯模糊调整层（预发布）
+
+- 在 Direct3D 11 上计算 **Normal（正常）混合模式的高斯模糊调整层**，支持 8／16 位以及多个模糊层与普通图层交错。六次横／纵整数盒式模糊保留 CPU 近似算法的边缘夹取与逐次截断；共享内存前缀和避免每个像素的工作量随半径线性增长。
+- 调整结果支持图层蒙版、关联／独立蒙版位置、剪贴来源、祖先组蒙版及图层／组综合不透明度。蒙版覆盖率仍由 CPU 准备并缓存。非 Normal 模糊调整层、其他调整类型或实时图层效果保守回退 CPU。
+- 只修改模糊半径时复用源图和覆盖纹理；相同预览跳过模糊与回读。两个可复用模糊临时纹理计入原有缓存预算，硬件／资源／预算不足时回退 CPU。
+- 调整对话框预览接入加速渲染，临时调整层在控件变化之间使用稳定 ID；取消不改变文档像素、撤销记录或修改状态。高倍率区域预览保留模糊边界扩展，避免分块接缝。
+
+**范围：** 本批迁移高斯模糊的**预览计算**，不迁移直接修改像素的滤镜应用或导出。含可见模糊的变化预览因空间依赖而完整重算请求的视口／区域；仅含普通图层的预览继续使用 a2 局部矩形。蒙版／图层表面准备、画笔／修复内核、其他滤镜／Camera Raw、图层效果和导出仍使用 CPU。仍为同步回读，不是零拷贝显示。项目格式、八种语言及运行时依赖不变。**仅发布为 Pre-release**，稳定版 Latest 保持 0.4.0。
 
 ## 0.4.1a2 — 局部重合成与紧凑回读（预发布）
 

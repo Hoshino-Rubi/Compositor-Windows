@@ -1,14 +1,23 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a2 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a3 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a2). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a3). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a2-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a3-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a3 — GPU Gaussian Blur adjustments (pre-release)
+
+- Run **Normal-blend Gaussian Blur adjustment layers** on Direct3D 11 compute in 8/16-bit previews, including multiple blur layers interleaved with raster layers. The six horizontal/vertical integer box passes preserve the CPU approximation's edge clamping and per-pass truncation; a shared-memory prefix scan avoids per-pixel work proportional to blur radius.
+- Composite the adjusted result with the layer mask, linked/unlinked mask placement, clipping source, ancestor masks and combined layer/folder opacity. Mask coverage remains CPU-prepared and cached. Non-Normal blur adjustments, other adjustment types, or live layer effects conservatively use the CPU renderer.
+- Reuse source/coverage textures while changing blur radius; unchanged frames skip both blur and readback. Two reusable blur scratch textures count toward the existing cache budget. Insufficient hardware/resources or budget fall back to CPU.
+- Adjustment-dialog previews now use the accelerated preview renderer, with a stable temporary layer identity across control changes. Cancel leaves document pixels, history and dirty state unchanged. High-zoom region previews retain blur halos to prevent tile seams.
+
+**Scope:** this batch migrates Gaussian Blur **preview computation**, not destructive filter application or export. A changed preview containing a visible blur recomputes the entire requested viewport/region because blur has spatial dependencies; raster-only previews retain a2's dirty rectangles. CPU mask/surface preparation, brush/retouch kernels, other filters/Camera Raw, effects and export remain. Readback is synchronous, not zero-copy. The `.comp` format, eight interface languages and runtime dependencies are unchanged. Published **only as a pre-release**; stable Latest remains 0.4.0.
 
 ## Version 0.4.1a2 — Dirty-region compositing and packed readback (pre-release)
 
