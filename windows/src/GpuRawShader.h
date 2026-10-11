@@ -132,17 +132,6 @@ float detailEdge(Texture2D<float4> plane,int2 p,int radius) {
         sum+=abs(plane.Load(int3(q,0)).r-center);++count;
     } return count?sum/count:0;
 }
-[numthreads(1,1,1)]
-void rawNoiseLuma(uint3 tid:SV_DispatchThreadID) {
-    for(int y=(int)P[1].x;y<(int)P[1].y;++y)for(int x=0;x<dimensions.x;++x) {
-        int2 at=int2(x,y);if(source.Load(int3(at,0)).a==0)continue;float l=result[at].r,sum=0;int count=0;
-        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx){int2 q=at+int2(dx,dy);if((dx==0&&dy==0)||any(q<0)||any(q>=dimensions))continue;sum+=abs(result[q].r-l);++count;}
-        float edge=count?sum/count:0,local=P[1].z*(1-P[1].w*min(1,edge*6)),coarse=auxiliary.Load(int3(at,0)).r;
-        float target=lerp(l,coarse,local);target+=P[2].x*.25*(l-coarse);result[at]=target.xxxx;
-    }
-}
-[numthreads(16,16,1)]
-void rawRelight(uint3 tid:SV_DispatchThreadID){if(any(tid.xy>=dimensions))return;float4 p=source.Load(int3(tid.xy,0));result[tid.xy]=writeColor(relight(straight(p),auxiliary.Load(int3(tid.xy,0)).r),p.a);}
 [numthreads(16,16,1)]
 void rawChromaPlanes(uint3 tid:SV_DispatchThreadID){if(any(tid.xy>=dimensions))return;float4 p=source.Load(int3(tid.xy,0));float3 c=straight(p);float l=luminance709(c);result[tid.xy]=float4((c.r-l)*p.a,(c.b-l)*p.a,p.a,0);}
 [numthreads(16,16,1)]

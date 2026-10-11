@@ -1,14 +1,22 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a5 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a5p1 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a5). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a5p1). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a5-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a5p1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a5p1 — Sequential filter performance fix (pre-release)
+
+- Atkinson and Floyd–Steinberg dithering use the reference CPU implementation instead of serial GPU dispatches. The other eight Dither styles retain their GPU paths.
+- Camera Raw requests with active luminance denoising run entirely on the CPU, avoiding serial GPU work and intermediate transfers while preserving reference pixels. Camera Raw without active luminance denoising, disabled Detail, temporary clipping previews and sharpening-mask previews retain the GPU path.
+- Routing happens before GPU initialization, upload or cache eviction. Filter/Camera Raw previews and Apply share the policy; 8/16-bit editing, selections and undo/redo are preserved. No new setting, dependency or project-format change.
+
+Other a5 GPU features and alpha limitations remain. **Pre-release only; stable Latest stays 0.4.0.** See [patch release notes](releases/0.4.1a5p1.md) for validation and timings. The sections below describe previous releases.
 
 ## Version 0.4.1a5 — GPU filters, effects and Camera Raw (pre-release)
 

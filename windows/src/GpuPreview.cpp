@@ -362,6 +362,8 @@ namespace {
 QImage processGpuImage(const QImage &source, const QJsonObject &settings, double scale, int clipping, bool effects) {
 #ifdef Q_OS_WIN
     if (source.isNull() || qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU")) return {};
+    // Route before device initialization, cache eviction, uploads or shader compilation.
+    if (!effects && GpuProcessor::prefersCpu(settings, clipping)) return {};
     const quint64 area=quint64(source.width())*source.height();
     if(area>8*1024*1024) return {};
     std::lock_guard lock(gpuMutex);auto &d=gpu();if(!d.ready())return {};

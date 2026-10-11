@@ -1,13 +1,21 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a5（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a5p1（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a5) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a5p1) 下载便携包。
 
-解压 `Compositor-0.4.1a5-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a5p1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a5p1 — 顺序滤镜性能修复（预发布）
+
+- Atkinson 与 Floyd–Steinberg 抖动恢复使用 CPU 参考实现，不再执行串行 GPU 调度；其余八种抖动样式保留 GPU 路径。
+- 实际启用亮度降噪的 Camera Raw 请求整体使用 CPU，避免串行 GPU 计算及中间传输，保留参考像素结果。不启用亮度降噪、关闭“细节”、临时剪切预览和锐化蒙版预览仍可使用 GPU。
+- 在初始化 GPU、上传数据或淘汰缓存之前完成路由。滤镜／Camera Raw 的预览与应用共用此策略，保留 8／16 位、选区及撤销／重做。没有新增设置、依赖或项目格式变更。
+
+a5 的其他 GPU 功能及 Alpha 限制仍然适用。**仅预发布，稳定版 Latest 保持 0.4.0。**验证及计时见[补丁发布说明](releases/0.4.1a5p1.md)。下方章节为历史版本记录。
 
 ## 0.4.1a5 — GPU 滤镜、图层效果与 Camera Raw（预发布）
 

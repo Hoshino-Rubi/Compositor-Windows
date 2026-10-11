@@ -174,9 +174,19 @@ class Tests : public QObject {
             auto source=blurFixture({67,53},depth).layers[0].image;
             for(int style=0;style<10;++style) for(int colors=0;colors<3;++colors) {
                 QJsonObject s{{"kind","Dither"},{"style",style},{"pixelSize",1},{"colors",colors},{"levels",4},{"density",17},{"contrast",-13}};
-                const auto gpu=filterGpuImage(source,s);QVERIFY2(!gpu.isNull(),qPrintable(gpuPreviewStatus()));
-                const int delta=sampleDifference(gpu,filtered(source,s));qInfo()<<"DITHER_PARITY"<<depth<<style<<colors<<delta;
-                parity &= delta<=(depth==8?257:257);
+                resetGpuPreviewMetrics();
+                const auto gpu=filterGpuImage(source,s);
+                if(style<=1){
+                    QVERIFY(gpu.isNull());
+                    QCOMPARE(filteredAccelerated(source,s),filtered(source,s));
+                    QCOMPARE(gpuPreviewMetrics().processingDispatches,quint64(0));
+                    QCOMPARE(gpuPreviewMetrics().readbacks,quint64(0));
+                }else{
+                    QVERIFY2(!gpu.isNull(),qPrintable(gpuPreviewStatus()));
+                    const int delta=sampleDifference(gpu,filtered(source,s));qInfo()<<"DITHER_PARITY"<<depth<<style<<colors<<delta;
+                    parity &= delta<=257;
+                    QVERIFY(gpuPreviewMetrics().processingDispatches>0);
+                }
             }
             for(int style=0;style<4;++style){
                 QJsonObject s{{"kind","Scanlines"},{"colors",style%3},{"lineSpacing",5}};
@@ -268,24 +278,99 @@ class Tests : public QObject {
         }
         QVERIFY(parity);
     }
+    void cpuSequentialFiltersMatchReference() {
+        for(int depth:{8,16}) {
+            const auto source=blurFixture({97,83},depth).layers[0].image;
+            QVector<QJsonObject> cases{{{"kind","Dither"}}};
+            for(int style:{0,1})for(int block:{1,3})for(int colors:{0,1,2})
+                cases.append(QJsonObject{{"kind","Dither"},{"style",style},{"pixelSize",block},{"pixelShape",1},
+                    {"colors",colors},{"dark","#172941"},{"light","#cfe7ab"},{"levels",4},{"diffusion",63}});
+            cases.append(QJsonObject{{"kind","Camera Raw"},{"exposure",.8},{"texture",27},
+                {"detail",QJsonObject{{"noiseLuminance",37},{"noiseLuminanceDetail",65},{"noiseLuminanceContrast",41},
+                    {"noiseColor",28},{"sharpenAmount",45}}},{"shadowClip",true},{"highlightClip",true}});
+            for(const auto &settings:cases){
+                resetGpuPreviewMetrics();
+                QVERIFY(filterGpuImage(source,settings,.5).isNull());
+                const auto expected=settings["kind"]=="Camera Raw"?cameraRaw(source,settings,.5):filtered(source,settings);
+                const auto actual=filteredAccelerated(source,settings,.5);
+                QCOMPARE(actual,expected);
+                QCOMPARE(wideImage(actual),depth==16);
+                QCOMPARE(gpuPreviewMetrics().processingDispatches,quint64(0));
+                QCOMPARE(gpuPreviewMetrics().readbacks,quint64(0));
+            }
+        }
+    }
+    void gpuRawSkipsInactiveSequentialStage() {
+        for(int depth:{8,16}) {
+            const auto source=blurFixture({97,83},depth).layers[0].image;
+            const QJsonObject raw{{"kind","Camera Raw"},{"exposure",.7},
+                {"detail",QJsonObject{{"noiseLuminance",41},{"noiseColor",23},{"sharpenAmount",37},{"sharpenMasking",29}}}};
+            for(int mode=0;mode<6;++mode){
+                auto settings=raw;int clipping=0;
+                if(mode==0)settings["enableDetail"]=false;
+                if(mode==1)settings["sharpenMask"]=true;
+                if(mode==2||mode==3)clipping=mode-1;
+                if(mode==4||mode==5){auto detail=settings["detail"].toObject();detail["noiseLuminance"]=mode==4?0:-12;settings["detail"]=detail;}
+                resetGpuPreviewMetrics();
+                const auto actual=filterGpuImage(source,settings,.5,clipping);
+                QVERIFY2(!actual.isNull(),qPrintable(gpuPreviewStatus()));
+                QVERIFY(gpuPreviewMetrics().processingDispatches>0);
+                const auto expected=cameraRaw(source,settings,.5,clipping);
+                QVERIFY(sampleDifference(actual,expected)<=(depth==8?514:24));
+            }
+        }
+    }
+    void cpuSequentialEditsPreserveSelectionAndUndo() {
+        const QVector<QJsonObject> cases{
+            {{"kind","Camera Raw"},{"exposure",.7},{"detail",QJsonObject{{"noiseLuminance",41},{"sharpenAmount",37}}}},
+            {{"kind","Dither"},{"style",0},{"pixelSize",1},{"colors",2}},
+            {{"kind","Dither"},{"style",1},{"pixelSize",3},{"colors",1}}};
+        for(int depth:{8,16})for(bool selected:{false,true})for(const auto &settings:cases){
+            auto state=blurFixture({96,71},depth);state.layers.removeLast();
+            if(selected){state.selectionActive=true;state.selection.addRect(QRect(17,13,41,29));}
+            Document document;document.reset(state,true);
+            const auto before=state.layers[0].image;const auto result=filtered(before,settings);
+            auto expected=result;
+            if(selected){expected=before;QPainter painter(&expected);painter.setClipPath(state.selection);
+                painter.setCompositionMode(QPainter::CompositionMode_Source);painter.drawImage(0,0,result);}
+            resetGpuPreviewMetrics();document.applyFilter(settings);
+            QCOMPARE(document.state().layers[0].image,expected);
+            QCOMPARE(gpuPreviewMetrics().processingDispatches,quint64(0));
+            QVERIFY(document.canUndo());document.undo();QCOMPARE(document.state().layers[0].image,before);
+            document.redo();QCOMPARE(document.state().layers[0].image,expected);
+        }
+    }
     void gpuProcessingPerformanceReport() {
         if(!qEnvironmentVariableIntValue("COMPOSITOR_GPU_BENCHMARK"))QSKIP("Set COMPOSITOR_GPU_BENCHMARK=1 to measure processing.");
-        for(int depth:{8,16}) {
-            const auto source=blurFixture({512,384},depth).layers[0].image;
+        for(int depth:{8,16})for(QSize size:{QSize(512,384),QSize(1024,768)}) {
+            const auto source=blurFixture(size,depth).layers[0].image;
             const QVector<QJsonObject> cases{
                 {{"kind","Camera Raw"},{"exposure",.7},{"contrast",23},{"texture",27},{"clarity",18},{"dehaze",11},{"detail",QJsonObject{{"noiseLuminance",31},{"noiseColor",22},{"sharpenAmount",43}}}},
                 {{"kind","Dither"},{"style",0},{"pixelSize",1},{"colors",2}},
+                {{"kind","Dither"},{"style",1},{"pixelSize",1},{"colors",2}},
+                {{"kind","Camera Raw"},{"exposure",.7},{"contrast",23},{"texture",27},{"clarity",18},{"dehaze",11},{"detail",QJsonObject{{"noiseColor",22},{"sharpenAmount",43}}}},
                 {{"kind","Scanlines"},{"displace",33},{"dots",45},{"glow",21}},
                 {{"kind","Motion Blur"},{"motionAngle",37},{"motionDistance",41}}};
-            for(const auto &settings:cases){
-                QVERIFY2(!filterGpuImage(source,settings).isNull(),qPrintable(gpuPreviewStatus()));
-                QElapsedTimer timer;timer.start();const auto expected=filtered(source,settings);const double cpu=timer.nsecsElapsed()/1e6;
-                resetGpuPreviewMetrics();timer.restart();const auto actual=filterGpuImage(source,settings);const double gpu=timer.nsecsElapsed()/1e6;
-                QVERIFY(!actual.isNull());QVERIFY(gpuPreviewMetrics().processingDispatches>0);
-                const int limit=settings["kind"]=="Dither"?0:settings["kind"]=="Motion Blur"?(depth==8?1028:257):(depth==8?514:24);
+            for(int index=0;index<cases.size();++index){
+                const auto &settings=cases[index];const bool cpuRoute=index<3;
+                const auto expected=filtered(source,settings);
+                QVERIFY(!filteredAccelerated(source,settings).isNull());
+                QVector<double> cpuTimes,automaticTimes;QImage actual;quint64 dispatches=0;
+                for(int repeat=0;repeat<3;++repeat){
+                    QElapsedTimer timer;timer.start();const auto reference=filtered(source,settings);
+                    cpuTimes.append(timer.nsecsElapsed()/1e6);QVERIFY(!reference.isNull());
+                    resetGpuPreviewMetrics();timer.restart();actual=filteredAccelerated(source,settings);
+                    automaticTimes.append(timer.nsecsElapsed()/1e6);dispatches=gpuPreviewMetrics().processingDispatches;
+                    QVERIFY(!actual.isNull());QCOMPARE(dispatches>0,!cpuRoute);
+                    if(cpuRoute){QCOMPARE(actual,expected);QCOMPARE(gpuPreviewMetrics().readbacks,quint64(0));}
+                }
+                std::sort(cpuTimes.begin(),cpuTimes.end());std::sort(automaticTimes.begin(),automaticTimes.end());
+                const int limit=cpuRoute?0:settings["kind"]=="Motion Blur"?(depth==8?1028:257):(depth==8?514:24);
                 QVERIFY2(sampleDifference(actual,expected)<=limit,qPrintable(QString("Processing benchmark mismatch: %1").arg(settings["kind"].toString())));
-                qInfo().noquote()<<QString("GPU_PROCESSING_BENCHMARK kind=%1 depth=%2 pixels=196608 cpu_ms=%3 gpu_ms=%4 dispatches=%5 max_delta16=%6")
-                    .arg(settings["kind"].toString()).arg(depth).arg(cpu,0,'f',3).arg(gpu,0,'f',3).arg(gpuPreviewMetrics().processingDispatches).arg(sampleDifference(actual,expected));
+                qInfo().noquote()<<QString("PROCESSING_BENCHMARK kind=%1 case=%2 depth=%3 pixels=%4 cpu_ms=%5 automatic_ms=%6 backend=%7 dispatches=%8 max_delta16=%9")
+                    .arg(settings["kind"].toString()).arg(index).arg(depth).arg(size.width()*size.height())
+                    .arg(cpuTimes[1],0,'f',3).arg(automaticTimes[1],0,'f',3).arg(cpuRoute?"CPU":"GPU")
+                    .arg(dispatches).arg(sampleDifference(actual,expected));
             }
         }
     }
@@ -323,8 +408,14 @@ class Tests : public QObject {
         bool parity=true;
         for(int depth:{8,16}) for(int i=0;i<cases.size();++i) {
             auto input=blurFixture({97,83},depth).layers[0].image;auto s=cases[i].toObject();s["kind"]="Camera Raw";
-            const auto output=filterGpuImage(input,s);QVERIFY2(!output.isNull(),qPrintable(gpuPreviewStatus()));
-            const auto expected=cameraRaw(input,s);const int delta=sampleDifference(output,expected);
+            const bool cpuRoute=s["detail"].toObject()["noiseLuminance"].toDouble()>0;
+            resetGpuPreviewMetrics();
+            const auto gpu=filterGpuImage(input,s);
+            if(cpuRoute)QVERIFY(gpu.isNull());else QVERIFY2(!gpu.isNull(),qPrintable(gpuPreviewStatus()));
+            const auto output=cpuRoute?filteredAccelerated(input,s):gpu;
+            QCOMPARE(gpuPreviewMetrics().processingDispatches>0,!cpuRoute);
+            const auto expected=cameraRaw(input,s);if(cpuRoute)QCOMPARE(output,expected);
+            const int delta=sampleDifference(output,expected);
             qInfo()<<"RAW_PARITY"<<depth<<i<<delta;
             // Qt geometry uses fixed-point/rounded raster weights; color/detail kernels have tighter bounds.
             const int tolerance=s.contains("geometry")?514:(depth==8?514:24);

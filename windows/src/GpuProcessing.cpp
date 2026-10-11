@@ -1,6 +1,7 @@
 #include "GpuProcessing.h"
 #ifdef Q_OS_WIN
 #include "Filters.h"
+#include "CameraRaw.h"
 #include "GpuBlurShader.h"
 #include "GpuDitherShader.h"
 #include "GpuProcessingShader.h"
@@ -27,6 +28,18 @@ bool GpuProcessor::supports(const QString &kind) {
                        "Grain",           "Motion Blur",   "Vignette",      "Bloom / Glow", "Tonal Contrast",
                        "Lens Correction", "Dither",        "Scanlines",     "Camera Raw"}
         .contains(kind);
+}
+bool GpuProcessor::prefersCpu(const QJsonObject &settings, int clipping) {
+    const auto kind = settings["kind"].toString();
+    if (kind == "Dither")
+        return std::clamp(settings["style"].toInt(), 0, 9) <= 1;
+    if (kind != "Camera Raw" || clipping || settings["sharpenMask"].toBool() ||
+        !settings["enableDetail"].toBool(true))
+        return false;
+    const auto detail = normalizedCameraRaw(settings)["detail"].toObject();
+    // In-place luminance denoising and error diffusion depend on scan order. Keep the whole
+    // request on the reference CPU path, avoiding both serial GPU work and intermediate transfers.
+    return detail["noiseLuminance"].toDouble() > 0;
 }
 GpuSurfacePtr GpuProcessor::surface(QSize size) {
     for (const auto &p : pool_)
@@ -117,49 +130,6 @@ GpuSurfacePtr GpuProcessor::pass(const char *entry, const std::vector<GpuSurface
     ID3D11UnorderedAccessView *none[2]{};
     context_->CSSetUnorderedAccessViews(0, 2, none, nullptr);
     return out;
-}
-bool GpuProcessor::inPlace(const char *entry, const GpuSurfacePtr &target, const std::vector<GpuSurfacePtr> &inputs,
-                           Params params) {
-    if (!target || !target->output)
-        return false;
-    for (const auto &input : inputs)
-        if (!input)
-            return false;
-    auto &shader = shaders_[entry];
-    if (!shader) {
-        ComPtr<ID3DBlob> code, errors;
-        const QByteArray source = (precisePredicates_ ? QByteArray("#define PRECISE_PREDICATES 1\n") : QByteArray()) +
-                                  gpuProcessingShader + gpuRawShader + gpuDitherShader;
-        auto hr = D3DCompile(source.constData(), size_t(source.size()), "CompositorSerialPass", nullptr, nullptr, entry,
-                             "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_IEEE_STRICTNESS, 0, &code, &errors);
-        if (SUCCEEDED(hr))
-            hr = device_->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader);
-        if (FAILED(hr)) {
-            error = errors ? QString::fromUtf8(static_cast<const char *>(errors->GetBufferPointer()))
-                           : "GPU serial shader failed";
-            return false;
-        }
-    }
-    params[0] = float(target->size.width());
-    params[1] = float(target->size.height());
-    params[2] = depth_ == 16 ? 65535.f : 255.f;
-    context_->UpdateSubresource(constants_.Get(), 0, nullptr, params.data(), 0, 0);
-    auto *constants = constants_.Get();
-    context_->CSSetConstantBuffers(0, 1, &constants);
-    ID3D11ShaderResourceView *views[8]{};
-    for (size_t i = 0; i < inputs.size(); ++i)
-        views[i] = inputs[i]->view.Get();
-    context_->CSSetShaderResources(0, 8, views);
-    auto *out = target->output.Get();
-    context_->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
-    context_->CSSetShader(shader.Get(), nullptr, 0);
-    context_->Dispatch(1, 1, 1);
-    ++dispatches;
-    ID3D11ShaderResourceView *empty[8]{};
-    context_->CSSetShaderResources(0, 8, empty);
-    ID3D11UnorderedAccessView *none = nullptr;
-    context_->CSSetUnorderedAccessViews(0, 1, &none, nullptr);
-    return true;
 }
 GpuSurfacePtr GpuProcessor::resample(const GpuSurfacePtr &input, QSize size, const QTransform &mapping,
                                      bool antialias) {
@@ -503,6 +473,8 @@ GpuSurfacePtr GpuProcessor::filter(ID3D11ShaderResourceView *input, QSize size, 
                                    double scale, int clipping) {
     pool_.clear();
     error.clear();
+    if (prefersCpu(settings, clipping))
+        return {};
     size_ = size;
     depth_ = depth;
     auto source = std::make_shared<GpuSurface>();

@@ -22,6 +22,7 @@ class GpuProcessor {
   public:
     GpuProcessor(ID3D11Device *device, ID3D11DeviceContext *context);
     static bool supports(const QString &kind);
+    static bool prefersCpu(const QJsonObject &settings, int clipping = 0);
     GpuSurfacePtr filter(ID3D11ShaderResourceView *input, QSize size, int depth, const QJsonObject &settings,
                          double scale = 1, int clipping = 0);
     GpuSurfacePtr effects(ID3D11ShaderResourceView *input, QSize size, int depth, const QJsonObject &settings,
@@ -44,8 +45,6 @@ class GpuProcessor {
     GpuSurfacePtr alphaFactors();
     Microsoft::WRL::ComPtr<ID3D11Buffer> histogramBuffer_;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> histogramOutput_;
-    bool inPlace(const char *entry, const GpuSurfacePtr &target, const std::vector<GpuSurfacePtr> &inputs,
-                 Params params);
     std::array<float, 3> haze(const GpuSurfacePtr &input);
     QSize size_;
     int depth_ = 8;

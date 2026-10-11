@@ -13,6 +13,7 @@ struct GpuPreviewMetrics {
 };
 // A null image requests the reference CPU renderer (unsupported document or unavailable device).
 QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin = {});
+// Also returns null for scan-order-dependent filters deliberately assigned to the CPU.
 QImage filterGpuImage(const QImage &source, const QJsonObject &settings, double scale = 1, int clipping = 0);
 QImage effectsGpuImage(const QImage &source, const QJsonObject &settings, double scale = 1);
 QImage effectsAccelerated(const QImage &source, const QJsonObject &settings, double scale = 1);

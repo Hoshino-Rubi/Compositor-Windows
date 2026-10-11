@@ -31,23 +31,6 @@ void ditherTone(uint3 tid:SV_DispatchThreadID){
     if(P[2].x==0)rgb=luminance709(rgb).xxx;
     result[tid.xy]=float4(toneValue(rgb,P[1].z,P[1].w),pixel.a);
 }
-// Error diffusion has an ordered dependency. Dispatch bounded row batches rather than race neighboring threads.
-[numthreads(1,1,1)]
-void ditherDiffuse(uint3 tid:SV_DispatchThreadID){
-    int style=(int)P[1].x,levels=(int)P[1].y;float steps=levels-1;
-    for(int y=(int)P[7].x;y<(int)P[7].y;++y)for(int i=0;i<dimensions.x;++i){
-        int x=(y&1)?dimensions.x-1-i:i;float4 v=result[int2(x,y)];if(v.a==0)continue;
-        float3 q=floor(saturate(v.rgb)*steps+.5)/steps;result[int2(x,y)]=float4(q,v.a);
-        precise float3 err=(v.rgb-q)*P[2].z/(style==0?8:16);
-        for(int tap=0;tap<(style==0?6:4);++tap){
-            int dx,dy,weight;
-            if(style==0){dx=tap==0?1:tap==1?2:tap==2?-1:tap==4?1:0;dy=tap<2?0:tap==5?2:1;weight=1;}
-            else {dx=tap==0?1:tap==1?-1:tap==2?0:1;dy=tap==0?0:1;weight=tap==0?7:tap==1?3:tap==2?5:1;}
-            int2 at=int2(x+((y&1)?-dx:dx),y+dy);if(any(at<0)||any(at>=dimensions))continue;
-            float4 neighbor=result[at];precise float3 updated=neighbor.rgb+err*weight;neighbor.rgb=updated;result[at]=neighbor;
-        }
-    }
-}
 static const uint ditherBayer[64]={0,32,8,40,2,34,10,42,48,16,56,24,50,18,58,26,12,44,4,36,14,46,6,38,60,28,52,20,62,30,54,22,3,35,11,43,1,33,9,41,51,19,59,27,49,17,57,25,15,47,7,39,13,45,5,37,63,31,55,23,61,29,53,21};
 static const uint ditherPatterns[136]={
 0,0,0,0,0,0,0,0, 128,0,0,0,8,0,0,0, 136,0,34,0,136,0,34,0,128,64,32,16,8,4,2,1,

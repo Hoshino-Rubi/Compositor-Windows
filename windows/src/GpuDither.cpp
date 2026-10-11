@@ -7,6 +7,8 @@
 namespace comp {
 GpuSurfacePtr GpuProcessor::dither(const GpuSurfacePtr &input, const QJsonObject &s) {
     const int style = std::clamp(s["style"].toInt(), 0, 9);
+    if (style <= 1)
+        return {}; // Atkinson and Floyd-Steinberg use the reference CPU path.
     const int block = style == 9 ? 1 : std::clamp(qRound(s["pixelSize"].toDouble(2)), 1, 32);
     const QSize reducedSize{std::max(1, (input->size.width() + block - 1) / block),
                             std::max(1, (input->size.height() + block - 1) / block)};
@@ -48,15 +50,6 @@ GpuSurfacePtr GpuProcessor::dither(const GpuSurfacePtr &input, const QJsonObject
     auto tone = pass("ditherTone", {pixels}, p);
     if (!tone)
         return {};
-    if (style <= 1) {
-        const int rows = std::max(1, std::min(16, 16384 / reducedSize.width()));
-        for (int y = 0; y < reducedSize.height(); y += rows) {
-            p[28] = float(y);
-            p[29] = float(std::min(y + rows, reducedSize.height()));
-            if (!inPlace("ditherDiffuse", tone, {}, p))
-                return {};
-        }
-    }
     auto selected = tone, atlas = tone;
     if (style == 9) {
         // Only the font atlas/coverage table is CPU-generated. Cell analysis and glyph placement run on the GPU.

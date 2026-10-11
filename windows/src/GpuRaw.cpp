@@ -379,23 +379,9 @@ GpuSurfacePtr GpuProcessor::rawDetail(const GpuSurfacePtr &input, const QJsonObj
                  color = value(s, "noiseColor");
     if (!mask && !amount && !luminance && !color)
         return current;
-    auto luma = pass("rawLuma", {current});
-    if (!mask && luminance > 0) {
-        const int radius = std::clamp(qRound((1 + luminance / 50) * scale), 1, 64);
-        auto coarse = floatBox(luma, radius);
-        const int rows = std::max(1, std::min(32, 65536 / input->size.width()));
-        for (int first = 0; first < input->size.height(); first += rows) {
-            Params p{};
-            p[4] = float(first);
-            p[5] = float(std::min(first + rows, input->size.height()));
-            p[6] = float(luminance / 100);
-            p[7] = float(value(s, "noiseLuminanceDetail", 50) / 100);
-            p[8] = float(value(s, "noiseLuminanceContrast") / 100);
-            if (!inPlace("rawNoiseLuma", luma, {current, coarse}, p))
-                return {};
-        }
-        current = pass("rawRelight", {current, luma});
-    }
+    if (!mask && luminance > 0)
+        return {}; // The complete Camera Raw request must use the reference CPU path.
+    GpuSurfacePtr luma;
     if (!mask && color > 0) {
         const int radius = std::clamp(
             qRound((1.5 + color / 100 * 4 * (.5 + value(s, "noiseColorSmoothness", 50) / 100)) * scale), 1, 64);
