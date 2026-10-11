@@ -1,13 +1,22 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a3（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a4（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a3) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a4) 下载便携包。
 
-解压 `Compositor-0.4.1a3-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a4-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a4 — GPU 色调调整层（预发布）
+
+- 加速 **Normal（正常）混合模式的反相、曝光、色阶和曲线调整层**，支持 8／16 位、调整对话框预览，以及与高斯模糊、普通图层、蒙版、剪贴来源和组不透明度叠加。
+- CPU 使用参考调整算法生成完整的逐通道查找表，再由 Direct3D 11 对图像逐像素应用。8 位使用 **256 项**，16 位使用 **65,536 项**，不会把高位深曲线降成 8 位查找。缓存的 Alpha 系数保留原生预览的反预乘行为。
+- 修改源像素、蒙版或不透明度时复用查找表；调整参数变化只更新表，不重新上传源图或分配纹理；相同预览跳过计算和回读。
+- 不含空间模糊的色调调整保留局部矩形合成与回读。调整参数／层序变化完整重算请求视口；含可见高斯模糊时仍需带边界扩展的完整请求区域计算。查找表资源计入缓存预算，不支持的文档或设备回退 CPU。
+
+**范围：** 查找表生成、源图和蒙版准备仍在 CPU。本批加速预览图像处理，不迁移直接修改像素的滤镜应用、画笔、Camera Raw、其他调整／效果或导出。GPU 调整仅限上述 Normal 混合类型及 a3 的高斯模糊，仍为同步回读。首次生成／修改参数的查找表有成本，尤其是 16 位曲线，不保证所有操作均提速。项目格式、保存／导出像素、八种界面语言和运行时依赖不变。**仅发布为 Pre-release**，稳定版 Latest 保持 0.4.0。
 
 ## 0.4.1a3 — GPU 高斯模糊调整层（预发布）
 

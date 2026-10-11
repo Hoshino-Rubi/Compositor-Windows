@@ -142,7 +142,7 @@
   "rasterFallback": "가져온 텍스트와 도형은 저장된 PNG 모양을 사용합니다.",
   "shortcuts": "키보드 단축키",
   "shortcutBody": "Ctrl+N 새 문서 · Ctrl+O 열기 · Ctrl+S 저장 · Ctrl+Shift+S 다른 이름으로 저장 · Ctrl+I 가져오기 · Ctrl+Shift+E 내보내기\nCtrl+Z 실행 취소 · Ctrl+Shift+Z / Ctrl+Y 다시 실행 · Ctrl+J 복제 · Delete 삭제\nV 이동 · B 브러시 · E 지우개 · U 사각형 · O 타원 · T 텍스트 · I 스포이트 · H 손 · C 자르기\nSpace 이동 · Ctrl+0 화면에 맞춤 · Ctrl+1 실제 픽셀 · [ / ] 브러시 크기\n방향키 1px · Shift+방향키 10px\nM / L / W · G · S · J · R · Z\nCtrl+A / Ctrl+D / Ctrl+Shift+I\nCtrl+C / Ctrl+V / Ctrl+Shift+C\nAlt+Backspace / Ctrl+Backspace\nCtrl+G / Ctrl+Shift+G / Ctrl+E / Ctrl+W\nShift+F5",
-  "aboutBody": "Compositor for Windows 0.4.1a3\nRobbie Tilton의 Compositor를 C++ / Qt 6으로 이식한 네이티브 앱입니다.\nMIT 라이선스. 기능 호환성은 README를 참고하세요.",
+  "aboutBody": "Compositor for Windows 0.4.1a4\nRobbie Tilton의 Compositor를 C++ / Qt 6으로 이식한 네이티브 앱입니다.\nMIT 라이선스. 기능 호환성은 README를 참고하세요.",
   "ok": "확인",
   "busy": "현재 작업을 마무리하는 중…",
   "cropDone": "캔버스가 잘림",

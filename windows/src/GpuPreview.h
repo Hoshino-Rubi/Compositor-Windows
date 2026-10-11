@@ -7,6 +7,7 @@ struct GpuPreviewMetrics {
     // Pixel counters exclude rounded-up dispatch padding; readback bytes exclude row pitch.
     quint64 compositedPixels = 0, packedPixels = 0, packDispatches = 0, readbackBytes = 0;
     quint64 blurDispatches = 0, blurredPixels = 0, adjustmentDispatches = 0;
+    quint64 toneDispatches = 0, tonedPixels = 0, toneTableBuilds = 0, toneTableUploads = 0, toneTableBytes = 0;
     quint64 residentBytes = 0, budgetBytes = 0, cachedFrames = 0;
 };
 // A null image requests the reference CPU renderer (unsupported document or unavailable device).

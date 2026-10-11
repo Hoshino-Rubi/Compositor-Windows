@@ -142,7 +142,7 @@
   "rasterFallback": "Los textos y formas importados usan su apariencia PNG guardada.",
   "shortcuts": "Atajos de teclado",
   "shortcutBody": "Ctrl+N Nuevo · Ctrl+O Abrir · Ctrl+S Guardar · Ctrl+Mayús+S Guardar como · Ctrl+I Importar · Ctrl+Mayús+E Exportar\nCtrl+Z Deshacer · Ctrl+Mayús+Z / Ctrl+Y Rehacer · Ctrl+J Duplicar · Supr Eliminar\nV Mover · B Pincel · E Borrador · U Rectángulo · O Elipse · T Texto · I Cuentagotas · H Mano · C Recortar\nEspacio Desplazar · Ctrl+0 Ajustar · Ctrl+1 Tamaño real · [ / ] Tamaño del pincel\nFlechas 1 px · Mayús+flechas 10 px\nM / L / W · G · S · J · R · Z\nCtrl+A / Ctrl+D / Ctrl+Mayús+I\nCtrl+C / Ctrl+V / Ctrl+Mayús+C\nAlt+Retroceso / Ctrl+Retroceso\nCtrl+G / Ctrl+Mayús+G / Ctrl+E / Ctrl+W\nMayús+F5",
-  "aboutBody": "Compositor para Windows 0.4.1a3\nVersión nativa en C++ / Qt 6 de Compositor, de Robbie Tilton.\nLicencia MIT. Consulta README para conocer la compatibilidad.",
+  "aboutBody": "Compositor para Windows 0.4.1a4\nVersión nativa en C++ / Qt 6 de Compositor, de Robbie Tilton.\nLicencia MIT. Consulta README para conocer la compatibilidad.",
   "ok": "Aceptar",
   "busy": "Finalizando la operación actual…",
   "cropDone": "Lienzo recortado",

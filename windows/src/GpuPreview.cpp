@@ -2,6 +2,8 @@
 #include "Renderer.h"
 #include "Pixels.h"
 #include "GpuBlurShader.h"
+#include "GpuToneShader.h"
+#include "Filters.h"
 #include <bit>
 #include <QColorSpace>
 #include <QPainter>
@@ -21,6 +23,7 @@
 #include <d3dcompiler.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
+#include <xmmintrin.h>
 #endif
 namespace comp {
 #ifdef Q_OS_WIN
@@ -111,7 +114,7 @@ static_assert(sizeof(Settings) == 32);
 struct Device {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
-    ComPtr<ID3D11ComputeShader> shader, packShader, blurShader, blurMixShader;
+    ComPtr<ID3D11ComputeShader> shader, packShader, blurShader, blurMixShader, toneShader;
     ComPtr<ID3D11Buffer> settings;
     QString status;
     Device() {
@@ -155,6 +158,16 @@ struct Device {
         return compile(gpuBlurShader, sizeof(gpuBlurShader)-1, blurShader) &&
                compile(gpuBlurMixShader, sizeof(gpuBlurMixShader)-1, blurMixShader);
     }
+    bool prepareTone() {
+        if (toneShader) return true;
+        ComPtr<ID3DBlob> code, errors;
+        HRESULT hr = D3DCompile(gpuToneShader, sizeof(gpuToneShader)-1, "CompositorTone", nullptr, nullptr,
+                               "main", "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
+        if (SUCCEEDED(hr)) hr = device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &toneShader);
+        if (FAILED(hr)) status = errors ? QString::fromUtf8(static_cast<const char *>(errors->GetBufferPointer()), int(errors->GetBufferSize()))
+                                       : "Tone shader initialization failed";
+        return SUCCEEDED(hr);
+    }
     bool ready() const { return shader && packShader && settings && SUCCEEDED(device->GetDeviceRemovedReason()); }
 };
 // One serialized immediate context, rather than device destruction in Windows
@@ -182,8 +195,8 @@ bool createTexture(Device &d, QSize size, DXGI_FORMAT format, Texture &out, cons
 }
 
 struct SourceCache {
-    Texture source;
-    QByteArray signature;
+    Texture source, toneTable;
+    QByteArray signature, toneSignature;
     QImage pixels;
 };
 struct FrameCache {
@@ -191,7 +204,7 @@ struct FrameCache {
     QSize canvas, target;
     QPoint origin;
     int depth = 8;
-    Texture buffers[2], packed, blur[2];
+    Texture buffers[2], packed, blur[2], toneAlpha;
     ComPtr<ID3D11Texture2D> staging;
     std::map<QString, SourceCache> layers;
     QByteArray signature, stackSignature;
@@ -267,6 +280,41 @@ QRect changedBounds(const QImage &before, const QImage &after) {
     }
     return right < left ? QRect() : QRect(QPoint(left, top), QPoint(right, bottom));
 }
+bool toneAdjustment(const QJsonObject &settings) {
+    const auto kind = settings["kind"].toString();
+    return kind == "Invert" || kind == "Exposure" || kind == "Levels" || kind == "Curves";
+}
+QImage toneAlphaTable(int depth) {
+    // Match Qt's x86 image-conversion reciprocal and nearest-even rounding.
+    // Compute these small alpha-only factors once; image pixels stay on GPU.
+    QImage table(256, depth == 16 ? 256 : 1, QImage::Format_ARGB32);
+    if (table.isNull()) throw Error("tooLarge");
+    const int maximum = depth == 16 ? 65535 : 255;
+    for (int alpha = 0; alpha <= maximum; ++alpha) {
+        float factor = 0;
+        if (alpha == maximum) factor = 1;
+        else if (alpha) {
+            const auto a = _mm_set_ss(float(alpha));
+            const auto estimate = _mm_rcp_ss(a);
+            const auto error = _mm_mul_ss(estimate, _mm_mul_ss(estimate, a));
+            factor = _mm_cvtss_f32(_mm_mul_ss(_mm_sub_ss(_mm_add_ss(estimate, estimate), error), _mm_set_ss(float(maximum))));
+        }
+        reinterpret_cast<quint32 *>(table.scanLine(alpha / 256))[alpha % 256] = std::bit_cast<quint32>(factor);
+    }
+    return table;
+}
+QImage toneTable(const QJsonObject &settings, int depth) {
+    // Separable RGB adjustments can be evaluated once for each possible input
+    // sample rather than repeating QColor/curve/power work for every image pixel.
+    QImage ramp(256, depth == 16 ? 256 : 1, pixelFormat(depth));
+    if (ramp.isNull()) throw Error("tooLarge");
+    for (int y = 0; y < ramp.height(); ++y) for (int x = 0; x < 256; ++x) {
+        const int value = y * 256 + x;
+        if (depth == 16) reinterpret_cast<QRgba64 *>(ramp.scanLine(y))[x] = rgba64(value, value, value, 65535);
+        else reinterpret_cast<QRgb *>(ramp.scanLine(y))[x] = qRgb(value, value, value);
+    }
+    return filtered(ramp, settings).convertToFormat(depth == 16 ? QImage::Format_RGBA64 : QImage::Format_RGBA8888);
+}
 struct VisibleLayer {
     int index;
     QVector<int> ancestors;
@@ -335,8 +383,10 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     if (!target.isValid() || qint64(target.width()) * target.height() > 8 * 1024 * 1024) return {};
     for (const auto &layer : state.layers) {
         if (!layer.metadata["effects"].toObject().isEmpty()) return {};
-        if (layer.metadata["adjustment"].isObject() &&
-            (layer.metadata["adjustment"].toObject()["kind"] != "Gaussian Blur" || layer.blend != "Normal")) return {};
+        if (layer.metadata["adjustment"].isObject()) {
+            const auto settings = layer.metadata["adjustment"].toObject();
+            if (layer.blend != "Normal" || (settings["kind"] != "Gaussian Blur" && !toneAdjustment(settings))) return {};
+        }
     }
     std::lock_guard lock(gpuMutex);
     auto &d = gpu();
@@ -344,6 +394,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     QVector<VisibleLayer> visibleLayers;
     QSet<QString> visibleIds;
     bool hasBlur = false;
+    int toneLayers = 0;
     QByteArray signature, stackSignature;
     QDataStream key(&signature, QIODevice::WriteOnly);
     QDataStream stackKey(&stackSignature, QIODevice::WriteOnly);
@@ -366,7 +417,8 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         auto fingerprint = sourceSignature(state, index, ancestors);
         fingerprint.append(adjustment ? 'A' : 'R');
         visibleLayers.append({index, ancestors, fingerprint, adjustment, opacity});
-        hasBlur = hasBlur || adjustment;
+        hasBlur = hasBlur || (adjustment && layer.metadata["adjustment"].toObject()["kind"] == "Gaussian Blur");
+        if (adjustment && toneAdjustment(layer.metadata["adjustment"].toObject())) ++toneLayers;
         visibleIds.insert(layer.id);
         key << layer.id << layer.blend << fingerprint;
         stackKey << layer.id << layer.blend << adjustment;
@@ -377,7 +429,9 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     }
     const quint64 area = quint64(target.width()) * target.height();
     const quint64 sampleBytes = state.bitDepth == 16 ? 8 : 4;
-    const quint64 required = area * (32 + (hasBlur ? 32 : 0) + sampleBytes * 3 + visibleLayers.size() * sampleBytes * 2);
+    const quint64 tableBytes = (state.bitDepth == 16 ? 65536 : 256) * sampleBytes;
+    const quint64 required = area * (32 + (hasBlur ? 32 : 0) + sampleBytes * 3 + visibleLayers.size() * sampleBytes * 2) +
+                             toneLayers * tableBytes + (toneLayers ? (state.bitDepth == 16 ? 65536 : 256) * 4 : 0);
     const quint64 budget = cacheBudget(d);
     metrics.budgetBytes = budget;
     trimCache(budget);
@@ -408,6 +462,13 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         return frame.result;
     }
     auto failed = [&]() -> QImage { frames.erase(found); return {}; };
+    if (toneLayers) {
+        if (!d.prepareTone()) return failed();
+        if (!frame.toneAlpha.texture) {
+            const auto table = toneAlphaTable(state.bitDepth);
+            if (!createTexture(d, table.size(), DXGI_FORMAT_R32_FLOAT, frame.toneAlpha, &table)) return failed();
+        }
+    } else frame.toneAlpha = {};
     if (hasBlur) {
         if (!d.prepareBlur()) return failed();
         if (!frame.blur[0].texture &&
@@ -439,6 +500,21 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         const int index = entry.index;
         const auto &layer = state.layers[index];
         auto &cached = frame.layers[layer.id];
+        if (entry.adjustment && toneAdjustment(layer.metadata["adjustment"].toObject())) {
+            QByteArray toneKey;
+            QDataStream tableKey(&toneKey, QIODevice::WriteOnly);
+            tableKey << layer.metadata["adjustment"].toObject();
+            if (!cached.toneTable.texture || cached.toneSignature != toneKey) {
+                auto table = toneTable(layer.metadata["adjustment"].toObject(), state.bitDepth);
+                ++metrics.toneTableBuilds;
+                if (!cached.toneTable.texture) {
+                    if (!createTexture(d, table.size(), packedFormat, cached.toneTable, &table)) return failed();
+                } else d.context->UpdateSubresource(cached.toneTable.texture.Get(), 0, nullptr,
+                                                   table.constBits(), UINT(table.bytesPerLine()), 0);
+                ++metrics.toneTableUploads; metrics.toneTableBytes += tableBytes;
+                cached.toneSignature = toneKey;
+            }
+        } else { cached.toneTable = {}; cached.toneSignature.clear(); }
         if (cached.signature != entry.signature || !cached.source.texture) {
             ++metrics.preparedLayers;
             auto image = entry.adjustment ? adjustmentCoverage(state, entry, target) : layerSurface(state, index, target);
@@ -489,10 +565,10 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         auto *constants = d.settings.Get();
         d.context->CSSetConstantBuffers(0, 1, &constants);
         d.context->CSSetShader(d.shader.Get(), nullptr, 0);
-        ID3D11ShaderResourceView *noViews[3]{};
+        ID3D11ShaderResourceView *noViews[4]{};
         ID3D11UnorderedAccessView *noOutput = nullptr;
         auto unbind = [&] {
-            d.context->CSSetShaderResources(0, 3, noViews);
+            d.context->CSSetShaderResources(0, 4, noViews);
             d.context->CSSetUnorderedAccessViews(0, 1, &noOutput, nullptr);
         };
         Settings params{UINT(dirty.width()), UINT(dirty.height()), 0, state.bitDepth == 16 ? 65535.f : 255.f,
@@ -501,6 +577,21 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         int current = 0;
         for (const auto &entry : visibleLayers) {
             const auto &layer = state.layers[entry.index];
+            if (entry.adjustment && toneAdjustment(layer.metadata["adjustment"].toObject())) {
+                Settings toneParams = params;
+                toneParams.padding = std::bit_cast<UINT>(float(entry.opacity));
+                d.context->CSSetShader(d.toneShader.Get(), nullptr, 0);
+                d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &toneParams, 0, 0);
+                ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(),
+                    frame.layers[layer.id].toneTable.view.Get(), frame.layers[layer.id].source.view.Get(), frame.toneAlpha.view.Get()};
+                d.context->CSSetShaderResources(0, 4, views);
+                auto *out = frame.buffers[1-current].output.Get();
+                d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
+                d.context->Dispatch((params.width+15)/16, (params.height+15)/16, 1);
+                ++metrics.adjustmentDispatches; ++metrics.toneDispatches; metrics.tonedPixels += pixels;
+                unbind(); current = 1-current; params.firstLayer = 0;
+                continue;
+            }
             if (entry.adjustment) {
                 if (params.firstLayer) {
                     const float transparent[4]{};

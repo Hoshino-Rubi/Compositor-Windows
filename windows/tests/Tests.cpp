@@ -80,6 +80,21 @@ State blurFixture(QSize size, int depth, double radius = 10) {
     state.layers.append(blur);
     return state;
 }
+QVector<QJsonObject> toneSettings() {
+    QJsonArray ranges;
+    for (int channel=0; channel<4; ++channel)
+        ranges.append(QJsonObject{{"black",channel*7},{"white",255-channel*9},{"gamma",.7+channel*.3},
+                                  {"outputBlack",channel*3},{"outputWhite",249-channel*5}});
+    QJsonArray channels;
+    for (int channel=0; channel<4; ++channel)
+        channels.append(QJsonArray{QJsonObject{{"x",0},{"y",channel*3}},
+            QJsonObject{{"x",57},{"y",29+channel*11}},QJsonObject{{"x",183},{"y",224-channel*7}},
+            QJsonObject{{"x",255},{"y",255-channel*3}}});
+    return {QJsonObject{{"kind","Invert"}},
+        QJsonObject{{"kind","Exposure"},{"exposureSettings",QJsonObject{{"exposure",1.3},{"offset",-.017},{"gamma",1.4}}}},
+        QJsonObject{{"kind","Levels"},{"levels",QJsonObject{{"ranges",ranges}}}},
+        QJsonObject{{"kind","Curves"},{"curves",QJsonObject{{"channels",channels}}}}};
+}
 int sampleDifference(const QImage &a, const QImage &b) {
     if (a.size() != b.size() || a.isNull() || b.isNull()) return 65536;
     const auto left = a.convertToFormat(QImage::Format_RGBA64_Premultiplied);
@@ -145,6 +160,222 @@ PickResult pickFile(MainWindow &window, const char *action, const QString &path 
 class Tests : public QObject {
     Q_OBJECT
   private slots:
+    void gpuToneOpaqueNativeSamplesMatchCpu() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        auto settings=toneSettings();
+        for (const auto &kind : {"Exposure","Levels","Curves"}) settings.append(QJsonObject{{"kind",kind}});
+        settings.append(QJsonObject{{"kind","Exposure"},{"exposureSettings",QJsonObject{{"exposure",-20}}}});
+        settings.append(QJsonObject{{"kind","Exposure"},{"exposureSettings",QJsonObject{{"exposure",20},{"gamma",9.99}}}});
+        settings.append(QJsonObject{{"kind","Exposure"},{"exposureSettings",QJsonObject{{"offset",-.5},{"gamma",.01}}}});
+        for (int depth : {8,16}) {
+            auto state=blurFixture({256,256},depth);
+            auto &image=state.layers[0].image;
+            const int maximum=depth==16 ? 65535 : 255;
+            for (int y=0;y<256;++y) for(int x=0;x<256;++x) {
+                const int r=(y*256+x)%(maximum+1), g=maximum-r, b=(r*313)%(maximum+1);
+                if(depth==16) reinterpret_cast<QRgba64 *>(image.scanLine(y))[x]=rgba64(r,g,b,maximum);
+                else reinterpret_cast<QRgb *>(image.scanLine(y))[x]=qRgb(r,g,b);
+            }
+            for(const auto &adjustment : settings) {
+                state.layers[1].metadata["adjustment"]=adjustment;
+                resetGpuPreviewMetrics();
+                const auto output=renderGpuPreview(state,state.size);
+                QVERIFY2(!output.isNull(),qPrintable(gpuPreviewStatus()));
+                const int difference=sampleDifference(output,render(state));
+                QVERIFY2(difference==0,qPrintable(QString("depth=%1 kind=%2 difference=%3")
+                    .arg(depth).arg(adjustment["kind"].toString()).arg(difference)));
+                QCOMPARE(gpuPreviewMetrics().toneDispatches,quint64(1));
+                QCOMPARE(gpuPreviewMetrics().toneTableBuilds,quint64(1));
+                QCOMPARE(gpuPreviewMetrics().blurDispatches,quint64(0));
+            }
+        }
+    }
+    void gpuToneTransparencyMatchesCpu() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        for (int depth : {8,16}) {
+            auto state=blurFixture({257,256},depth);
+            if(depth==8) for(int y=0;y<256;++y) for(int x=0;x<257;++x) {
+                const int r=x%(y+1),g=(x*71)%(y+1),b=(x*197)%(y+1);
+                reinterpret_cast<QRgb *>(state.layers[0].image.scanLine(y))[x]=qRgba(r,g,b,y);
+            }
+            for(const auto &adjustment : toneSettings()) {
+                state.layers[1].metadata["adjustment"]=adjustment;
+                const auto output=renderGpuPreview(state,state.size);
+                QVERIFY2(!output.isNull(),qPrintable(gpuPreviewStatus()));
+                const int difference=sampleDifference(output,render(state));
+                QVERIFY2(difference==0,qPrintable(QString("depth=%1 kind=%2 difference=%3")
+                    .arg(depth).arg(adjustment["kind"].toString()).arg(difference)));
+            }
+            state.layers.removeFirst();
+            QCOMPARE(renderGpuPreview(state,state.size),render(state));
+        }
+    }
+    void gpuToneMasksStacksAndRegions() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        for(int depth : {8,16}) {
+            auto state=blurFixture({573,541},depth,7);
+            Layer group; group.id=newId(); group.group=true; group.opacity=.79; group.placement.size=state.size;
+            group.mask=QImage(state.size,maskFormat(depth)); group.mask.fill(Qt::white);
+            { QPainter p(&group.mask); p.fillRect(QRect(51,21,113,83),QColor(73,73,73)); }
+            group.maskPlacement=group.placement; state.layers.append(group);
+            for(const auto &adjustment : toneSettings()) {
+                Layer layer; layer.id=newId(); layer.placement.size=state.size;
+                layer.metadata["adjustment"]=adjustment; layer.parent=group.id; layer.opacity=.67;
+                layer.mask=group.mask; layer.maskLinked=false; layer.maskPlacement=group.placement;
+                layer.maskPlacement.origin=QPointF(3.5,-4.25); layer.maskSource=state.layers[0].id;
+                state.layers.append(layer);
+            }
+            auto full=renderGpuPreview(state,state.size);
+            QVERIFY2(!full.isNull(),qPrintable(gpuPreviewStatus()));
+            auto difference=sampleDifference(full,render(state));
+            QVERIFY2(difference<=(depth==8?514:6),qPrintable(QString("stack depth=%1 difference=%2").arg(depth).arg(difference)));
+            for(QRect region : {QRect(0,0,256,256),QRect(297,251,276,290)}) {
+                resetGpuPreviewMetrics();
+                QCOMPARE(renderRegion(state,region,true),full.copy(region));
+                QCOMPARE(gpuPreviewMetrics().toneDispatches,quint64(4));
+                QCOMPARE(gpuPreviewMetrics().blurDispatches,quint64(6));
+            }
+            const QSize target(287,271);
+            difference=sampleDifference(renderGpuPreview(state,target),render(state,target));
+            QVERIFY2(difference<=(depth==8?514:6),qPrintable(QString("scaled depth=%1 difference=%2").arg(depth).arg(difference)));
+            // Mask enable/placement, clipping and ancestor opacity invalidate coverage.
+            state.layers[3].maskEnabled=false; state.layers[4].maskSource.clear();
+            state.layers[2].opacity=.31;
+            difference=sampleDifference(renderGpuPreview(state,state.size),render(state));
+            QVERIFY2(difference<=(depth==8?514:6),qPrintable(QString("changed depth=%1 difference=%2").arg(depth).arg(difference)));
+        }
+    }
+    void gpuToneDirtyRegionsAndHistory() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        for(int depth : {8,16}) {
+            auto state=blurFixture({269,263},depth);
+            state.layers[1].metadata["adjustment"]=toneSettings()[2];
+            state.layers[1].mask=QImage(state.size,maskFormat(depth)); state.layers[1].mask.fill(Qt::white);
+            Document document; document.reset(state,true);
+            const auto initial=renderGpuPreview(state,state.size); const auto snapshot=initial.copy();
+            QVERIFY2(!initial.isNull(),qPrintable(gpuPreviewStatus())); resetGpuPreviewMetrics();
+            QCOMPARE(renderGpuPreview(state,state.size).cacheKey(),initial.cacheKey());
+            QCOMPARE(gpuPreviewMetrics().toneDispatches,quint64(0)); QCOMPARE(gpuPreviewMetrics().readbacks,quint64(0));
+            document.edit([](State &s) { QPainter p(&s.layers[0].image); p.fillRect(QRect(261,257,7,5),Qt::red); });
+            resetGpuPreviewMetrics(); auto edited=renderGpuPreview(document.state(),state.size);
+            QVERIFY(sampleDifference(edited,render(document.state()))<=(depth==8?257:2));
+            auto m=gpuPreviewMetrics(); QCOMPARE(m.tonedPixels,quint64(35));
+            QCOMPARE(m.readbackBytes,quint64(35*(depth==16?8:4))); QCOMPARE(m.toneTableBuilds,quint64(0));
+            QCOMPARE(m.textureAllocations,quint64(0)); QCOMPARE(initial,snapshot);
+            document.undo(); QCOMPARE(renderGpuPreview(document.state(),state.size),initial);
+            document.redo(); QCOMPARE(renderGpuPreview(document.state(),state.size),edited);
+            document.edit([](State &s) { QPainter p(&s.layers[1].mask); p.fillRect(QRect(17,23,7,5),Qt::black); });
+            resetGpuPreviewMetrics(); edited=renderGpuPreview(document.state(),state.size);
+            QVERIFY(sampleDifference(edited,render(document.state()))<=(depth==8?257:2));
+            QCOMPARE(gpuPreviewMetrics().tonedPixels,quint64(35)); QCOMPARE(gpuPreviewMetrics().toneTableBuilds,quint64(0));
+        }
+    }
+    void gpuToneSettingsAndBudgetFallback() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        const auto previous=qgetenv("COMPOSITOR_GPU_CACHE_MB"), disabled=qgetenv("COMPOSITOR_DISABLE_GPU");
+        const auto restore=qScopeGuard([&] {
+            if(previous.isNull()) qunsetenv("COMPOSITOR_GPU_CACHE_MB"); else qputenv("COMPOSITOR_GPU_CACHE_MB",previous);
+            if(disabled.isNull()) qunsetenv("COMPOSITOR_DISABLE_GPU"); else qputenv("COMPOSITOR_DISABLE_GPU",disabled);
+            clearGpuPreviewCache();
+        });
+        auto state=blurFixture({256,256},16); state.layers[1].metadata["adjustment"]=toneSettings()[1];
+        QVERIFY2(!renderGpuPreview(state,state.size).isNull(),qPrintable(gpuPreviewStatus()));
+        auto setting=state.layers[1].metadata["adjustment"].toObject();
+        setting["exposureSettings"]=QJsonObject{{"exposure",-.7},{"gamma",.9}};
+        state.layers[1].metadata["adjustment"]=setting;
+        resetGpuPreviewMetrics(); const auto changed=renderGpuPreview(state,state.size);
+        QVERIFY(sampleDifference(changed,render(state))<=2);
+        auto m=gpuPreviewMetrics(); QCOMPARE(m.toneTableBuilds,quint64(1)); QCOMPARE(m.toneTableBytes,quint64(65536*8));
+        QCOMPARE(m.preparedLayers,quint64(0)); QCOMPARE(m.sourceUploads,quint64(0)); QCOMPARE(m.textureAllocations,quint64(0));
+        QCOMPARE(m.tonedPixels,quint64(256*256));
+        state.layers[1].opacity=.43; resetGpuPreviewMetrics(); renderGpuPreview(state,state.size);
+        QCOMPARE(gpuPreviewMetrics().toneTableBuilds,quint64(0));
+        const auto bytes=gpuPreviewMetrics().residentBytes;
+        state.layers[1].metadata.remove("adjustment"); state.layers[1].image=state.layers[0].image;
+        renderGpuPreview(state,state.size); QCOMPARE(bytes-gpuPreviewMetrics().residentBytes,quint64(65536*12));
+        state.layers[1].metadata["adjustment"]=setting;
+        auto unsupported=state; unsupported.layers[1].blend="Multiply";
+        QVERIFY(renderGpuPreview(unsupported,unsupported.size).isNull()); QCOMPARE(renderPreview(unsupported),render(unsupported));
+        unsupported.layers[1].blend="Normal"; unsupported.layers[1].metadata["adjustment"]=QJsonObject{{"kind","Hue/Saturation"}};
+        QVERIFY(renderGpuPreview(unsupported,unsupported.size).isNull()); QCOMPARE(renderPreview(unsupported),render(unsupported));
+        clearGpuPreviewCache(); qputenv("COMPOSITOR_GPU_CACHE_MB","6"); state.size={269,263};
+        auto plain=state; plain.layers[1].metadata.remove("adjustment");
+        QVERIFY(!renderGpuPreview(plain,plain.size).isNull());
+        QVERIFY(renderGpuPreview(state,state.size).isNull()); QCOMPARE(renderPreview(state),render(state));
+        QVERIFY(gpuPreviewMetrics().residentBytes<=gpuPreviewMetrics().budgetBytes);
+        qputenv("COMPOSITOR_DISABLE_GPU","1"); QCOMPARE(renderPreview(state),render(state));
+        QCOMPARE(gpuPreviewMetrics().residentBytes,quint64(0));
+    }
+    void gpuToneAdjustmentDialogCancelsCleanly() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        auto state=fixture({512,512}); MainWindow window; window.document()->reset(state,true); window.show();
+        bool shown=false,preview=false; quint64 dispatches=0;
+        QTimer::singleShot(50,&window,[&] {
+            auto *dialog=window.findChild<QDialog *>("filterDialog");
+            if(dialog) {
+                shown=true;
+                if(auto *label=dialog->findChild<QLabel *>("filterPreview")) preview=!label->pixmap().isNull();
+                dispatches=gpuPreviewMetrics().toneDispatches; dialog->reject();
+            }
+        });
+        QTimer timeout; timeout.setSingleShot(true);
+        connect(&timeout,&QTimer::timeout,&window,[&] {
+            if(auto *dialog=qobject_cast<QDialog *>(QApplication::activeModalWidget())) dialog->reject();
+        }); timeout.start(5000);
+        resetGpuPreviewMetrics();
+        auto *action=window.findChild<QAction *>("adjustment.exposureAction"); QVERIFY(action); action->trigger();
+        QVERIFY(shown); QVERIFY(preview); QVERIFY(dispatches>=1);
+        QVERIFY(!window.document()->dirty()); QVERIFY(!window.document()->canUndo());
+        QCOMPARE(window.document()->state().layers.size(),1);
+        QCOMPARE(window.document()->state().layers[0].image,state.layers[0].image);
+    }
+    void gpuTonePerformanceReport() {
+        if (renderGpuPreview(fixture({32,32}),QSize(32,32)).isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        if(!qEnvironmentVariableIntValue("COMPOSITOR_GPU_BENCHMARK")) return;
+        for(int depth : {8,16}) {
+            auto base=blurFixture({1024,1024},depth); base.layers[1].metadata["adjustment"]=toneSettings()[1];
+            clearGpuPreviewCache(); QVERIFY(!renderGpuPreview(base,base.size).isNull());
+            QVector<QImage> reference;
+            for(bool accelerated : {false,true}) {
+                auto state=base; resetGpuPreviewMetrics(); qint64 elapsed=0;
+                for(int frame=0;frame<6;++frame) {
+                    state.layers[1].metadata["adjustment"]=QJsonObject{{"kind","Exposure"},
+                        {"exposureSettings",QJsonObject{{"exposure",-.8+frame*.3},{"gamma",1.1}}}};
+                    QElapsedTimer timer; timer.start();
+                    const auto result=accelerated?renderGpuPreview(state,state.size):render(state);
+                    elapsed+=timer.nsecsElapsed();
+                    if(accelerated) QVERIFY(sampleDifference(result,reference[frame])<=(depth==8?257:2));
+                    else reference.append(result);
+                }
+                auto m=gpuPreviewMetrics();
+                if(accelerated) { QCOMPARE(m.toneDispatches,quint64(6)); QCOMPARE(m.toneTableBuilds,quint64(6)); QCOMPARE(m.sourceUploads,quint64(0)); }
+                qInfo().noquote()<<QString("GPU_TONE_BENCHMARK depth=%1 backend=%2 frames=6 total_ms=%3 tone_dispatches=%4 lut_builds=%5 lut_bytes=%6 source_uploads=%7 readback_bytes=%8 allocations=%9")
+                    .arg(depth).arg(accelerated?"gpu":"cpu").arg(elapsed/1000000.,0,'f',3)
+                    .arg(m.toneDispatches).arg(m.toneTableBuilds).arg(m.toneTableBytes).arg(m.sourceUploads).arg(m.readbackBytes).arg(m.textureAllocations);
+            }
+        }
+    }
     void gpuBlurKernelMatchesCpuAtBothDepths() {
         for (int depth : {8,16}) for (QSize size : {QSize(1,1),QSize(7,5),QSize(257,17),QSize(513,33)})
             for (double radius : {.1,1.,8.,31.,250.}) {
@@ -242,7 +473,7 @@ class Tests : public QObject {
         QVERIFY(renderGpuPreview(unsupported,unsupported.size).isNull());
         QCOMPARE(renderPreview(unsupported),render(unsupported));
         unsupported.layers[1].blend="Normal";
-        unsupported.layers[1].metadata["adjustment"]=QJsonObject{{"kind","Exposure"}};
+        unsupported.layers[1].metadata["adjustment"]=QJsonObject{{"kind","Hue/Saturation"}};
         QVERIFY(renderGpuPreview(unsupported,unsupported.size).isNull());
         QCOMPARE(renderPreview(unsupported),render(unsupported));
         clearGpuPreviewCache(); qputenv("COMPOSITOR_GPU_CACHE_MB","5");

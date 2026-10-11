@@ -142,7 +142,7 @@
   "rasterFallback": "Imported text and shapes use their saved PNG appearance.",
   "shortcuts": "Keyboard shortcuts",
   "shortcutBody": "Ctrl+N New · Ctrl+O Open · Ctrl+S Save · Ctrl+Shift+S Save as · Ctrl+I Import · Ctrl+Shift+E Export\nCtrl+Z Undo · Ctrl+Shift+Z / Ctrl+Y Redo · Ctrl+J Duplicate · Delete Delete layer\nV Move · B Brush · E Eraser · U Rectangle · O Ellipse · T Text · I Eyedropper · H Hand · C Crop\nSpace Drag to pan · Ctrl+0 Fit · Ctrl+1 Actual pixels · [ / ] Brush size\nArrow keys Move 1 px · Shift+Arrow Move 10 px\nM / L / W · G · S · J · R · Z\nCtrl+A / Ctrl+D / Ctrl+Shift+I\nCtrl+C / Ctrl+V / Ctrl+Shift+C\nAlt+Backspace / Ctrl+Backspace\nCtrl+G / Ctrl+Shift+G / Ctrl+E / Ctrl+W\nShift+F5",
-  "aboutBody": "Compositor for Windows 0.4.1a3\nNative C++ / Qt 6 port of Robbie Tilton’s Compositor.\nMIT licensed. See README for feature compatibility.",
+  "aboutBody": "Compositor for Windows 0.4.1a4\nNative C++ / Qt 6 port of Robbie Tilton’s Compositor.\nMIT licensed. See README for feature compatibility.",
   "ok": "OK",
   "busy": "Finishing the current operation…",
   "cropDone": "Canvas cropped",

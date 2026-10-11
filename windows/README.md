@@ -1,14 +1,23 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a3 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a4 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a3). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a4). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a3-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a4-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a4 — GPU tone adjustments (pre-release)
+
+- Accelerate **Normal-blend Invert, Exposure, Levels and Curves adjustment layers** in 8/16-bit previews, including adjustment-dialog previews and stacks with Gaussian Blur, raster layers, masks, clipping and folder opacity.
+- Generate a complete per-channel lookup table with the reference CPU adjustment, then apply it to image pixels on Direct3D 11. The table has **256 entries for 8-bit and 65,536 for 16-bit**, not an 8-bit approximation of a high-depth curve. Cached alpha factors preserve the native preview's unpremultiplication behavior.
+- Reuse tables when editing source pixels, masks or opacity. Changing adjustment parameters updates the table without reuploading the source image or allocating new textures. Unchanged previews skip compute and readback.
+- Tone-only stacks retain dirty-rectangle compositing and readback. Adjustment-setting/order changes recompose the requested viewport; visible Gaussian Blur still requires full requested-region computation with halos. Table allocations count toward the cache budget and unsupported documents/devices use the CPU renderer.
+
+**Scope:** lookup-table generation and source/mask preparation remain on CPU. This accelerates preview image processing, not destructive filter application, brushes, Camera Raw, other adjustments/effects or export. Only Normal-blend adjustments listed above (plus Gaussian Blur from a3) are GPU-backed. GPU readback is synchronous. Table generation has a cold/parameter-change cost, especially for 16-bit curves; no universal speedup is promised. Project format, saved/exported pixels, eight interface languages and runtime dependencies are unchanged. **Pre-release only**; stable Latest remains 0.4.0.
 
 ## Version 0.4.1a3 — GPU Gaussian Blur adjustments (pre-release)
 
