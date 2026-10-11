@@ -1,13 +1,22 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a1（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a2（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a1) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a2) 下载便携包。
 
-解压 `Compositor-0.4.1a1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a2-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a2 — 局部重合成与紧凑回读（预发布）
+
+- 仅对准备后图层像素的变化包围矩形进行 GPU 重合成；区域内从透明背景重新混合所有可见图层，区域外保留已有结果。可见层序、显隐或混合模式变化时，保守地重算完整视口。
+- GPU 将结果直接打包为原生 8 位 BGRA／16 位 RGBA 整数样本，仅将变化矩形复制到回读资源和 QImage，移除 CPU 对整幅浮点结果的逐像素转换。检查硬件格式支持，资源无法建立时回退 CPU。
+- 蒙版／剪贴来源、关联／独立蒙版、变换、组不透明度和撤销／重做均依据实际表面差异，覆盖移动前后的区域。准备后像素完全相同的元数据／源图变化不触发计算与回读；已返回的旧预览保持不变。
+- `COMPOSITOR_GPU_FULL_FRAME=1` 是诊断开关：保留源缓存与紧凑输出，但强制完整视口重合成／回读。`COMPOSITOR_DISABLE_GPU=1` 仍可切换为 CPU 参考渲染，原有缓存预算及淘汰控制继续生效。
+
+**范围限制：** 本批加速预览合成与传输，不是画笔／滤镜编辑内核迁移。变化图层表面及差异仍由 CPU 准备；变化预览仍需同步 GPU 回读，旧帧被使用时可能复制整幅 CPU 图像；相距较远的改动合并为一个包围矩形，尚非稀疏分块。实时调整／效果及导出仍由 CPU 处理。没有零拷贝显示、项目格式变更或新运行时依赖，不保证所有硬件和操作均提速。本批及后续批次**仅发布为 Pre-release**，稳定版 Latest 保持 0.4.0。
 
 ## 0.4.1a1 — GPU 预览缓存（预发布）
 

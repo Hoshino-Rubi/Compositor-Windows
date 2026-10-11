@@ -1,14 +1,23 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a1 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a2 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a1). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a2). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a2-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a2 — Dirty-region compositing and packed readback (pre-release)
+
+- Recompose only the bounding rectangle of changed prepared layer pixels. All visible layers are blended within that rectangle, starting with transparent pixels rather than an old composite. Unchanged areas keep the previous result. Changes to visible layer order, visibility or blend modes conservatively trigger a full viewport recomposite.
+- Pack the GPU result directly into native 8-bit BGRA or 16-bit RGBA integer samples before readback. Only the changed rectangle is copied to staging and then into the QImage; the full floating-point CPU conversion loop is removed. Hardware support is checked, with CPU fallback if the required resources cannot be created.
+- Mask/clipping edits, linked/unlinked masks, transforms, folder opacity and undo/redo use the actual prepared-surface difference, covering both the old and new position. Metadata or source-image changes with identical prepared pixels avoid dispatch and readback. Previously returned images remain immutable.
+- `COMPOSITOR_GPU_FULL_FRAME=1` is a diagnostic control that forces full viewport recomposition/readback while retaining the source cache and packed output. `COMPOSITOR_DISABLE_GPU=1` still selects the reference CPU renderer; the existing cache budget and eviction controls remain.
+
+**Scope:** this accelerates preview compositing and transfer, not brush/filter editing kernels. Changed surfaces and their differences are still prepared on the CPU. Changed previews still synchronize a GPU readback and may copy the full CPU image when an older frame remains in use; distant edits share one bounding rectangle, not a sparse tile list. Live adjustments/effects and export remain CPU-backed. No zero-copy display, project-format change, new runtime dependency or universal speedup claim. This and subsequent batches remain **pre-releases only**; stable Latest stays 0.4.0.
 
 ## Version 0.4.1a1 — GPU preview cache (pre-release)
 

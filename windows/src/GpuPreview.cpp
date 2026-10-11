@@ -29,7 +29,10 @@ const char shaderSource[] = R"hlsl(
 Texture2D<float4> backdrop : register(t0);
 Texture2D<float4> source : register(t1);
 RWTexture2D<float4> outputImage : register(u0);
-cbuffer Settings : register(b0) { uint width; uint height; uint mode; float maximum; };
+cbuffer Settings : register(b0) {
+    uint width; uint height; uint mode; float maximum;
+    uint offsetX; uint offsetY; uint firstLayer; uint padding;
+};
 float luminance(float3 c) { return dot(c, float3(.3,.59,.11)); }
 float saturation(float3 c) { return max(c.r,max(c.g,c.b))-min(c.r,min(c.g,c.b)); }
 float3 setLuminance(float3 c,float l) {
@@ -64,7 +67,9 @@ float blend(float b,float s) {
 [numthreads(16,16,1)]
 void main(uint3 p:SV_DispatchThreadID) {
     if(p.x>=width || p.y>=height) return;
-    float4 bp=backdrop.Load(int3(p.xy,0)), sp=source.Load(int3(p.xy,0));
+    p.xy += uint2(offsetX,offsetY);
+    float4 bp=firstLayer ? float4(0,0,0,0) : backdrop.Load(int3(p.xy,0));
+    float4 sp=source.Load(int3(p.xy,0));
     if(sp.a==0) { outputImage[p.xy]=bp; return; }
     float3 b=bp.a>0?bp.rgb/bp.a:float3(0,0,0),s=sp.rgb/sp.a,v;
     if(mode==20) v=setLuminance(setSaturation(s,saturation(b)),luminance(b));
@@ -77,10 +82,34 @@ void main(uint3 p:SV_DispatchThreadID) {
     outputImage[p.xy]=floor(float4(clamp(c,0,a),a)*maximum+.5)/maximum;
 }
 )hlsl";
+// Write native QImage channel order as integer samples, avoiding UNORM rounding
+// ambiguity and a full floating-point-to-integer loop on the CPU after readback.
+const char packShaderSource[] = R"hlsl(
+Texture2D<float4> source : register(t0);
+RWTexture2D<uint4> packedImage : register(u0);
+cbuffer Settings : register(b0) {
+    uint width; uint height; uint mode; float maximum;
+    uint offsetX; uint offsetY; uint emptyImage; uint padding;
+};
+[numthreads(16,16,1)]
+void main(uint3 p:SV_DispatchThreadID) {
+    if(p.x>=width || p.y>=height) return;
+    p.xy += uint2(offsetX,offsetY);
+    float4 pixel=emptyImage ? float4(0,0,0,0) : source.Load(int3(p.xy,0));
+    uint4 value=(uint4)floor(saturate(pixel)*maximum+.5);
+    packedImage[p.xy]=maximum==255 ? value.bgra : value;
+}
+)hlsl";
+struct Settings {
+    UINT width, height, mode;
+    float maximum;
+    UINT offsetX, offsetY, firstLayer, padding = 0;
+};
+static_assert(sizeof(Settings) == 32);
 struct Device {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
-    ComPtr<ID3D11ComputeShader> shader;
+    ComPtr<ID3D11ComputeShader> shader, packShader;
     ComPtr<ID3D11Buffer> settings;
     QString status;
     Device() {
@@ -90,23 +119,27 @@ struct Device {
                                       0, wanted, 1, D3D11_SDK_VERSION,
                                       &device, &actual, &context);
         if (FAILED(hr)) { status = "Direct3D 11 hardware unavailable"; return; }
-        ComPtr<ID3DBlob> code, errors;
-        hr = D3DCompile(shaderSource, sizeof(shaderSource)-1, "CompositorPreview", nullptr, nullptr,
-                        "main", "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
-        if (FAILED(hr)) {
-            status = errors ? QString::fromUtf8(static_cast<const char *>(errors->GetBufferPointer()), int(errors->GetBufferSize()))
-                            : "Preview shader compilation failed";
-            return;
-        }
-        hr = device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &shader);
+        auto compile = [&](const char *source, size_t size, const char *name, ComPtr<ID3D11ComputeShader> &out) {
+            ComPtr<ID3DBlob> code, errors;
+            HRESULT result = D3DCompile(source, size, name, nullptr, nullptr, "main", "cs_5_0",
+                                       D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
+            if (SUCCEEDED(result))
+                result = device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &out);
+            if (FAILED(result))
+                status = errors ? QString::fromUtf8(static_cast<const char *>(errors->GetBufferPointer()), int(errors->GetBufferSize()))
+                                : "Preview shader initialization failed";
+            return SUCCEEDED(result);
+        };
+        if (!compile(shaderSource, sizeof(shaderSource)-1, "CompositorPreview", shader) ||
+            !compile(packShaderSource, sizeof(packShaderSource)-1, "CompositorPack", packShader)) return;
         D3D11_BUFFER_DESC desc{};
-        desc.ByteWidth = 16; desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-        if (FAILED(hr) || FAILED(device->CreateBuffer(&desc, nullptr, &settings))) {
+        desc.ByteWidth = sizeof(Settings); desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        if (FAILED(device->CreateBuffer(&desc, nullptr, &settings))) {
             shader.Reset(); status = "Preview shader initialization failed"; return;
         }
         status = "Direct3D 11 hardware compute";
     }
-    bool ready() const { return shader && SUCCEEDED(device->GetDeviceRemovedReason()); }
+    bool ready() const { return shader && packShader && settings && SUCCEEDED(device->GetDeviceRemovedReason()); }
 };
 // One serialized immediate context, rather than device destruction in Windows
 // worker-thread TLS callbacks (where graphics-driver teardown can deadlock).
@@ -142,10 +175,10 @@ struct FrameCache {
     QSize canvas, target;
     QPoint origin;
     int depth = 8;
-    Texture buffers[2];
+    Texture buffers[2], packed;
     ComPtr<ID3D11Texture2D> staging;
     std::map<QString, SourceCache> layers;
-    QByteArray signature;
+    QByteArray signature, stackSignature;
     QImage result;
     quint64 bytes = 0;
 };
@@ -270,8 +303,9 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     if (!d.ready()) { frames.clear(); return {}; }
     QVector<VisibleLayer> visibleLayers;
     QSet<QString> visibleIds;
-    QByteArray signature;
+    QByteArray signature, stackSignature;
     QDataStream key(&signature, QIODevice::WriteOnly);
+    QDataStream stackKey(&stackSignature, QIODevice::WriteOnly);
     key << state.resolution;
     for (int index : state.drawOrder()) {
         const auto &layer = state.layers[index];
@@ -291,10 +325,11 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         visibleLayers.append({index, ancestors, fingerprint});
         visibleIds.insert(layer.id);
         key << layer.id << layer.blend << fingerprint;
+        stackKey << layer.id << layer.blend;
     }
     const quint64 area = quint64(target.width()) * target.height();
     const quint64 sampleBytes = state.bitDepth == 16 ? 8 : 4;
-    const quint64 required = area * (48 + sampleBytes + visibleLayers.size() * sampleBytes * 2);
+    const quint64 required = area * (32 + sampleBytes * 3 + visibleLayers.size() * sampleBytes * 2);
     const quint64 budget = cacheBudget(d);
     metrics.budgetBytes = budget;
     trimCache(budget);
@@ -319,26 +354,31 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     for (auto it = frame.layers.begin(); it != frame.layers.end();)
         if (!visibleIds.contains(it->first)) it = frame.layers.erase(it);
         else ++it;
-    if (frame.signature == signature && !frame.result.isNull()) {
+    const bool forceFull = qEnvironmentVariableIntValue("COMPOSITOR_GPU_FULL_FRAME");
+    if (!forceFull && frame.signature == signature && !frame.result.isNull()) {
         ++metrics.cacheHits;
         return frame.result;
     }
     auto failed = [&]() -> QImage { frames.erase(found); return {}; };
+    const DXGI_FORMAT packedFormat = state.bitDepth == 16 ? DXGI_FORMAT_R16G16B16A16_UINT : DXGI_FORMAT_R8G8B8A8_UINT;
     if (!frame.buffers[0].texture) {
+        UINT support = 0;
+        if (FAILED(d.device->CheckFormatSupport(packedFormat, &support)) ||
+            !(support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW)) return failed();
         if (!createTexture(d, target, DXGI_FORMAT_R32G32B32A32_FLOAT, frame.buffers[0]) ||
-            !createTexture(d, target, DXGI_FORMAT_R32G32B32A32_FLOAT, frame.buffers[1])) return failed();
+            !createTexture(d, target, DXGI_FORMAT_R32G32B32A32_FLOAT, frame.buffers[1]) ||
+            !createTexture(d, target, packedFormat, frame.packed)) return failed();
         D3D11_TEXTURE2D_DESC desc{};
-        frame.buffers[0].texture->GetDesc(&desc);
+        frame.packed.texture->GetDesc(&desc);
         desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         ++metrics.textureAllocations;
         if (FAILED(d.device->CreateTexture2D(&desc, nullptr, &frame.staging))) return failed();
     }
-    const float transparent[4]{};
-    d.context->ClearUnorderedAccessViewFloat(frame.buffers[0].output.Get(), transparent);
-    d.context->CSSetShader(d.shader.Get(), nullptr, 0);
-    auto *constants = d.settings.Get();
-    d.context->CSSetConstantBuffers(0, 1, &constants);
-    int current = 0;
+    // A changed stack can affect every pixel. Otherwise the prepared surface diff
+    // includes both old/new geometry and all mask/clipping dependencies.
+    QRect dirty;
+    if (frame.result.isNull() || frame.stackSignature != stackSignature ||
+        forceFull) dirty = QRect(QPoint(), target);
     for (const auto &entry : visibleLayers) {
         const int index = entry.index;
         const auto &layer = state.layers[index];
@@ -368,9 +408,11 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
                                                                  : DXGI_FORMAT_R8G8B8A8_UNORM, cached.source, &image))
                     return failed();
                 ++metrics.sourceUploads; metrics.uploadedBytes += area * sampleBytes;
+                dirty = QRect(QPoint(), target);
             } else {
                 const auto changed = changedBounds(cached.pixels, image);
                 if (!changed.isEmpty()) {
+                    dirty = dirty.united(changed);
                     D3D11_BOX box{UINT(changed.left()), UINT(changed.top()), 0,
                                   UINT(changed.right()+1), UINT(changed.bottom()+1), 1};
                     d.context->UpdateSubresource(cached.source.texture.Get(), 0, &box,
@@ -383,47 +425,78 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             cached.pixels = image;
             cached.signature = entry.signature;
         }
-        struct { UINT width, height, mode; float maximum; } params{
-            UINT(target.width()), UINT(target.height()), UINT(std::max(0, int(blendModes().indexOf(layer.blend)))),
-            state.bitDepth == 16 ? 65535.f : 255.f};
-        d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &params, 0, 0);
-        ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), cached.source.view.Get()};
-        d.context->CSSetShaderResources(0, 2, views);
-        auto *out = frame.buffers[1-current].output.Get();
-        d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
-        d.context->Dispatch((params.width+15)/16, (params.height+15)/16, 1);
-        ++metrics.dispatches;
+    }
+    QImage result = std::move(frame.result);
+    if (!dirty.isEmpty()) {
+        auto *constants = d.settings.Get();
+        d.context->CSSetConstantBuffers(0, 1, &constants);
+        d.context->CSSetShader(d.shader.Get(), nullptr, 0);
         ID3D11ShaderResourceView *noViews[2]{};
         ID3D11UnorderedAccessView *noOutput = nullptr;
-        d.context->CSSetShaderResources(0, 2, noViews);
-        d.context->CSSetUnorderedAccessViews(0, 1, &noOutput, nullptr);
-        current = 1-current;
-    }
-    d.context->CopyResource(frame.staging.Get(), frame.buffers[current].texture.Get());
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(d.context->Map(frame.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return failed();
-    ++metrics.readbacks;
-    QImage result(target, pixelFormat(state.bitDepth));
-    if (result.isNull()) { d.context->Unmap(frame.staging.Get(), 0); return failed(); }
-    const int maximum = state.bitDepth == 16 ? 65535 : 255;
-    for (int y = 0; y < target.height(); ++y) {
-        const auto *row = reinterpret_cast<const float *>(static_cast<const char *>(mapped.pData) + y * mapped.RowPitch);
-        for (int x = 0; x < target.width(); ++x) {
-            int c[4];
-            for (int channel = 0; channel < 4; ++channel)
-                c[channel] = std::clamp(qRound(row[4*x+channel] * maximum), 0, maximum);
-            if (state.bitDepth == 16)
-                reinterpret_cast<QRgba64 *>(result.scanLine(y))[x] = QRgba64::fromRgba64(c[0], c[1], c[2], c[3]);
-            else reinterpret_cast<QRgb *>(result.scanLine(y))[x] = qRgba(c[0], c[1], c[2], c[3]);
+        auto unbind = [&] {
+            d.context->CSSetShaderResources(0, 2, noViews);
+            d.context->CSSetUnorderedAccessViews(0, 1, &noOutput, nullptr);
+        };
+        Settings params{UINT(dirty.width()), UINT(dirty.height()), 0, state.bitDepth == 16 ? 65535.f : 255.f,
+                        UINT(dirty.x()), UINT(dirty.y()), 1};
+        const quint64 pixels = quint64(dirty.width()) * dirty.height();
+        int current = 0;
+        for (const auto &entry : visibleLayers) {
+            const auto &layer = state.layers[entry.index];
+            params.mode = UINT(std::max(0, int(blendModes().indexOf(layer.blend))));
+            d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &params, 0, 0);
+            ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), frame.layers[layer.id].source.view.Get()};
+            d.context->CSSetShaderResources(0, 2, views);
+            auto *out = frame.buffers[1-current].output.Get();
+            d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
+            d.context->Dispatch((params.width+15)/16, (params.height+15)/16, 1);
+            ++metrics.dispatches;
+            metrics.compositedPixels += pixels;
+            unbind();
+            current = 1-current;
+            params.firstLayer = 0;
         }
+        // Keep the packed texture and staging allocation resident, but transfer
+        // only the dirty rectangle. Empty stacks explicitly write transparency.
+        params.firstLayer = visibleLayers.isEmpty() ? 1 : 0;
+        d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &params, 0, 0);
+        d.context->CSSetShader(d.packShader.Get(), nullptr, 0);
+        auto *input = frame.buffers[current].view.Get();
+        auto *output = frame.packed.output.Get();
+        d.context->CSSetShaderResources(0, 1, &input);
+        d.context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+        d.context->Dispatch((params.width+15)/16, (params.height+15)/16, 1);
+        ++metrics.packDispatches;
+        metrics.packedPixels += pixels;
+        unbind();
+        const D3D11_BOX box{UINT(dirty.left()), UINT(dirty.top()), 0,
+                            UINT(dirty.right()+1), UINT(dirty.bottom()+1), 1};
+        d.context->CopySubresourceRegion(frame.staging.Get(), 0, box.left, box.top, 0,
+                                         frame.packed.texture.Get(), 0, &box);
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        if (FAILED(d.context->Map(frame.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return failed();
+        ++metrics.readbacks;
+        metrics.readbackBytes += pixels * sampleBytes;
+        if (result.isNull()) result = QImage(target, pixelFormat(state.bitDepth));
+        // Detach before modifying the retained image: callers may still display
+        // earlier previews. Padding outside the copied region is never accessed.
+        auto *destination = result.bits();
+        if (!destination) { d.context->Unmap(frame.staging.Get(), 0); return failed(); }
+        for (int y = dirty.top(); y <= dirty.bottom(); ++y)
+            std::memcpy(destination + y * result.bytesPerLine() + dirty.left() * sampleBytes,
+                        static_cast<const char *>(mapped.pData) + y * mapped.RowPitch + dirty.left() * sampleBytes,
+                        size_t(dirty.width()) * sampleBytes);
+        d.context->Unmap(frame.staging.Get(), 0);
+        if (!d.ready()) { frames.clear(); return {}; }
+    } else {
+        ++metrics.cacheHits;
     }
-    d.context->Unmap(frame.staging.Get(), 0);
-    if (!d.ready()) { frames.clear(); return {}; }
     result.setColorSpace(QColorSpace::SRgb);
     result.setDotsPerMeterX(qRound(state.resolution / .0254));
     result.setDotsPerMeterY(qRound(state.resolution / .0254));
     frame.result = result;
     frame.signature = signature;
+    frame.stackSignature = stackSignature;
     return result;
 #else
     Q_UNUSED(state); Q_UNUSED(target); Q_UNUSED(viewportOrigin); return {};

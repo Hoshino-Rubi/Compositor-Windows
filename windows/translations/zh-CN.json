@@ -142,7 +142,7 @@
   "rasterFallback": "导入的文字和形状使用已保存的 PNG 外观。",
   "shortcuts": "键盘快捷键",
   "shortcutBody": "Ctrl+N 新建 · Ctrl+O 打开 · Ctrl+S 保存 · Ctrl+Shift+S 另存为 · Ctrl+I 导入 · Ctrl+Shift+E 导出\nCtrl+Z 撤销 · Ctrl+Shift+Z / Ctrl+Y 重做 · Ctrl+J 复制 · Delete 删除图层\nV 移动 · B 画笔 · E 橡皮擦 · U 矩形 · O 椭圆 · T 文字 · I 吸管 · H 抓手 · C 裁剪\n空格 拖动平移 · Ctrl+0 适合画布 · Ctrl+1 实际像素 · [ / ] 画笔大小\n方向键 移动 1 像素 · Shift+方向键 移动 10 像素\nM / L / W · G · S · J · R · Z\nCtrl+A / Ctrl+D / Ctrl+Shift+I\nCtrl+C / Ctrl+V / Ctrl+Shift+C\nAlt+Backspace / Ctrl+Backspace\nCtrl+G / Ctrl+Shift+G / Ctrl+E / Ctrl+W\nShift+F5",
-  "aboutBody": "Compositor Windows 0.4.1a1\n基于 Robbie Tilton 的 Compositor，使用原生 C++ / Qt 6。\nMIT 许可证；功能兼容范围见随附说明。",
+  "aboutBody": "Compositor Windows 0.4.1a2\n基于 Robbie Tilton 的 Compositor，使用原生 C++ / Qt 6。\nMIT 许可证；功能兼容范围见随附说明。",
   "ok": "确定",
   "busy": "正在完成当前操作…",
   "cropDone": "已裁剪画布",

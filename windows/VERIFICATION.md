@@ -1,3 +1,16 @@
+# Windows 0.4.1a2 pre-release verification
+
+Verified on Windows x64 / MSVC 2022 / Qt 6.8.3, October 11, 2026 (Asia/Taipei). Second GPU-pipeline batch; **pre-release only**, stable Latest remains `windows-v0.4.0`. The upstream baseline remains `3081719d5178b466214860fe5fcf5691394dc558`.
+
+- Native and extracted portable suites: **98 passed, 1 optional HEIC-alpha fixture skipped, 0 failed**. Hardware required with `COMPOSITOR_REQUIRE_GPU=1`; both benchmark cases enabled with `COMPOSITOR_GPU_BENCHMARK=1`. Processes exited normally. Reports: `windows/test-results/native-0.4.1a2.xml` and `windows/test-results/package-native-0.4.1a2.xml` (local generated artifacts).
+- New coverage: packed native BGRA8/RGBA16 samples including transparency and sub-8-bit values, odd row pitches, edge rectangles; partial/full recomposite equality for all 24 blends at both depths; zero new allocations on warm edits; immutable old frames; changed visible order/blend/visibility, empty stacks, identical prepared samples and DPI-only updates; masks/clipping, fractional movement/rotation, independent masks, folder opacity, undo/redo. Existing CPU output, cache budget, document/viewport separation, GPU-disable fallback and application regressions also passed.
+- Portable benchmark: 1024×1024, 8-bit, 6 layers, 12 changes within 32×32 pixels. Both runs use warm caches and packed output. Full (`COMPOSITOR_GPU_FULL_FRAME=1`): 54.323 ms, 50,331,648 readback bytes, 75,497,472 layer-pixels. Partial: 37.430 ms, 49,152 readback bytes, 73,728 layer-pixels. Both: 49,152 upload bytes, zero allocations, 12 prepared surfaces and 12 readbacks. Every frame compared equal. These counters exclude driver pitch/transfer overhead and dispatch padding; no universal or direct old-version speedup claim.
+- ZIP `Compositor-0.4.1a2-win-x64.zip`: **26,263,883 bytes**, SHA-256 `eb8b3df69e53d05cc3611176878e62015b68a77d01f79163355ba8f3368cea48`. Packaged executable SHA-256 `6cc3b0a02b5a819c20e8d69115a84a5638b69cf46ec39737bb109d1468b77b93` matches the tested Release build. Test executable, Qt6Test and offscreen plugin were added only to the verification extraction, not the ZIP.
+- Minimal-PATH portable launch with bundled Windows platform plugin succeeded. Application-owned `windows/test-results/capture-0.4.1a2-windows.png` was visually checked: normal canvas colors/alpha, readable menus and tool icons. Eight catalogs retain matching 607-key sets and version 0.4.1a2.
+- Scope limits: CPU surface preparation/diffing and editing/filter/export kernels remain. Changed previews still synchronize readback; shared old QImages can require a full CPU image copy. Distant changes use one dirty bounding rectangle. Live adjustments/effects use CPU previews. No zero-copy display or format change; existing CMYK/32-bit/HDR limits remain. Cache budget estimates retained resources rather than peak working-set or exact driver allocation. macOS/Xcode tests were not run.
+
+---
+
 # Windows 0.4.1a1 pre-release verification
 
 Verified on Windows x64 / MSVC 2022 / Qt 6.8.3, October 11, 2026 (Asia/Taipei). First GPU-pipeline batch; **pre-release only**, with stable Latest remaining `windows-v0.4.0`. Upstream remains `3081719d5178b466214860fe5fcf5691394dc558`.

@@ -1,4 +1,4 @@
-Compositor 0.4.1a1 uses unmodified dynamically linked native dependencies.
+Compositor 0.4.1a2 uses unmodified dynamically linked native dependencies.
 LibRaw 0.22.2: LGPL-2.1 or CDDL-1.0 / BSD components, https://github.com/LibRaw/LibRaw/tree/0.22.2
 libheif 1.23.5: LGPL-3.0 / MIT, https://github.com/strukturag/libheif/tree/v1.23.5
 libde265: LGPL-3.0, https://github.com/strukturag/libde265

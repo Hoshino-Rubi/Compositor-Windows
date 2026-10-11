@@ -142,7 +142,7 @@
   "rasterFallback": "Importierte Texte und Formen verwenden ihr gespeichertes PNG-Erscheinungsbild.",
   "shortcuts": "Tastenkürzel",
   "shortcutBody": "Strg+N Neu · Strg+O Öffnen · Strg+S Speichern · Strg+Umschalt+S Speichern unter · Strg+I Import · Strg+Umschalt+E Export\nStrg+Z Rückgängig · Strg+Umschalt+Z / Strg+Y Wiederholen · Strg+J Duplizieren · Entf Löschen\nV Verschieben · B Pinsel · E Radierer · U Rechteck · O Ellipse · T Text · I Pipette · H Hand · C Zuschneiden\nLeertaste Schwenken · Strg+0 Einpassen · Strg+1 Originalgröße · [ / ] Pinselgröße\nPfeiltasten 1 px · Umschalt+Pfeiltasten 10 px\nM / L / W · G · S · J · R · Z\nStrg+A / Strg+D / Strg+Umschalt+I\nStrg+C / Strg+V / Strg+Umschalt+C\nAlt+Rücktaste / Strg+Rücktaste\nStrg+G / Strg+Umschalt+G / Strg+E / Strg+W\nUmschalt+F5",
-  "aboutBody": "Compositor für Windows 0.4.1a1\nNative C++-/Qt-6-Portierung von Robbie Tiltons Compositor.\nMIT-Lizenz. Hinweise zur Kompatibilität stehen in der README.",
+  "aboutBody": "Compositor für Windows 0.4.1a2\nNative C++-/Qt-6-Portierung von Robbie Tiltons Compositor.\nMIT-Lizenz. Hinweise zur Kompatibilität stehen in der README.",
   "ok": "OK",
   "busy": "Aktueller Vorgang wird abgeschlossen…",
   "cropDone": "Leinwand zugeschnitten",

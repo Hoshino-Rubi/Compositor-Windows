@@ -117,6 +117,186 @@ PickResult pickFile(MainWindow &window, const char *action, const QString &path 
 class Tests : public QObject {
     Q_OBJECT
   private slots:
+    void gpuPackedReadbackPreservesNativeSamples() {
+        for (int depth : {8,16}) {
+            clearGpuPreviewCache(); resetGpuPreviewMetrics();
+            auto state = fixture({35,19}); state.bitDepth = depth;
+            auto &image = state.layers[0].image;
+            image = QImage(state.size,pixelFormat(depth));
+            const int maximum = depth == 16 ? 65535 : 255;
+            for (int y=0; y<image.height(); ++y)
+                for (int x=0; x<image.width(); ++x) {
+                    const int alpha = (x*971+y*307) % (maximum+1);
+                    const int r = (x*313+y*17) % (alpha+1), g = (x*71+y*541) % (alpha+1), b = (x*997+y*31) % (alpha+1);
+                    if (depth == 16) reinterpret_cast<QRgba64 *>(image.scanLine(y))[x] = rgba64(r,g,b,alpha);
+                    else reinterpret_cast<QRgb *>(image.scanLine(y))[x] = qRgba(r,g,b,alpha);
+                }
+            const auto actual = renderGpuPreview(state,state.size);
+            if (actual.isNull()) {
+                QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"),qPrintable(gpuPreviewStatus()));
+                QSKIP(qPrintable(gpuPreviewStatus()));
+            }
+            QCOMPARE(actual,render(state));
+            const auto m = gpuPreviewMetrics();
+            QCOMPARE(m.packDispatches,quint64(1));
+            QCOMPARE(m.packedPixels,quint64(35*19));
+            QCOMPARE(m.readbackBytes,quint64(35*19*(depth == 16 ? 8 : 4)));
+        }
+    }
+    void gpuDirtyRegionsMatchFullRecomposites() {
+        const auto previous = qgetenv("COMPOSITOR_GPU_FULL_FRAME");
+        const auto restore = qScopeGuard([&] {
+            if (previous.isNull()) qunsetenv("COMPOSITOR_GPU_FULL_FRAME"); else qputenv("COMPOSITOR_GPU_FULL_FRAME",previous);
+            clearGpuPreviewCache();
+        });
+        qunsetenv("COMPOSITOR_GPU_FULL_FRAME");
+        for (int depth : {8,16}) for (const auto &blend : blendModes()) {
+            clearGpuPreviewCache();
+            auto state = fixture({97,65}); state.bitDepth = depth;
+            state.layers[0].image = state.layers[0].image.convertToFormat(pixelFormat(depth));
+            state.layers[0].image.fill(QColor(61,27,198,183));
+            Layer top = state.layers[0]; top.id = newId(); top.blend = blend;
+            top.image.fill(QColor(213,169,17,135)); state.layers.append(top);
+            const auto first = renderGpuPreview(state,state.size);
+            if (first.isNull()) QSKIP(qPrintable(gpuPreviewStatus()));
+            const auto snapshot = first.copy();
+            const QVector<QRect> rectangles{{96,64,1,1},{0,0,1,1},{13,21,17,13},{46,0,1,65}};
+            for (int i=0; i<rectangles.size(); ++i) {
+                const auto rectangle = rectangles[i];
+                { QPainter paint(&state.layers[i%2].image);
+                  paint.setCompositionMode(QPainter::CompositionMode_Source);
+                  paint.fillRect(rectangle,i == 2 ? QColor(Qt::transparent) : QColor(12+i*17,233-i*23,83,171)); }
+                resetGpuPreviewMetrics();
+                const auto partial = renderGpuPreview(state,state.size);
+                const auto m = gpuPreviewMetrics();
+                const quint64 pixels = quint64(rectangle.width()) * rectangle.height();
+                QCOMPARE(m.compositedPixels,pixels*2);
+                QCOMPARE(m.readbackBytes,pixels*(depth == 16 ? 8 : 4));
+                QCOMPARE(m.textureAllocations,quint64(0));
+                qputenv("COMPOSITOR_GPU_FULL_FRAME","1");
+                QCOMPARE(partial,renderGpuPreview(state,state.size));
+                qunsetenv("COMPOSITOR_GPU_FULL_FRAME");
+                QCOMPARE(first,snapshot); // Previous frames must remain immutable.
+            }
+        }
+    }
+    void gpuDirtyStackChangesAndNoPixelChanges() {
+        for (int depth : {8,16}) {
+            clearGpuPreviewCache();
+            auto state = fixture({79,53}); state.bitDepth = depth;
+            state.layers[0].image = state.layers[0].image.convertToFormat(pixelFormat(depth));
+            Layer top = state.layers[0]; top.id = newId(); top.image.fill(QColor(10,210,31,177));
+            state.layers.append(top);
+            if (renderGpuPreview(state,state.size).isNull()) QSKIP(qPrintable(gpuPreviewStatus()));
+            const quint64 frameBytes = quint64(79*53*(depth == 16 ? 8 : 4));
+            auto compareCold = [&] {
+                resetGpuPreviewMetrics();
+                const auto warm = renderGpuPreview(state,state.size);
+                QCOMPARE(gpuPreviewMetrics().readbackBytes,frameBytes);
+                clearGpuPreviewCache(); QCOMPARE(warm,renderGpuPreview(state,state.size));
+            };
+            state.layers[1].blend = "Screen"; compareCold();
+            state.layers.swapItemsAt(0,1); compareCold();
+            state.layers[1].visible = false; compareCold();
+            state.layers.removeAt(1); // Removing an already hidden layer changes no visible pixels.
+            resetGpuPreviewMetrics(); const auto before = renderGpuPreview(state,state.size);
+            QCOMPARE(gpuPreviewMetrics().readbacks,quint64(0));
+            state.layers[0].image = state.layers[0].image.copy(); // New cache key, same samples.
+            resetGpuPreviewMetrics(); QCOMPARE(renderGpuPreview(state,state.size),before);
+            QCOMPARE(gpuPreviewMetrics().preparedLayers,quint64(1));
+            QCOMPARE(gpuPreviewMetrics().dispatches,quint64(0));
+            QCOMPARE(gpuPreviewMetrics().packDispatches,quint64(0));
+            QCOMPARE(gpuPreviewMetrics().readbackBytes,quint64(0));
+            state.resolution = 300;
+            resetGpuPreviewMetrics(); const auto dpi = renderGpuPreview(state,state.size);
+            QCOMPARE(dpi.dotsPerMeterX(),qRound(300/.0254));
+            QCOMPARE(gpuPreviewMetrics().readbacks,quint64(0));
+            state.layers.clear(); compareCold();
+            QCOMPARE(renderGpuPreview(state,state.size).pixelColor(78,52),QColor(Qt::transparent));
+            state.layers.append(top); compareCold();
+        }
+    }
+    void gpuDirtyMasksTransformsAndHistoryMatchFullFrames() {
+        const auto previous = qgetenv("COMPOSITOR_GPU_FULL_FRAME");
+        const auto restore = qScopeGuard([&] {
+            if (previous.isNull()) qunsetenv("COMPOSITOR_GPU_FULL_FRAME"); else qputenv("COMPOSITOR_GPU_FULL_FRAME",previous);
+            clearGpuPreviewCache();
+        });
+        qunsetenv("COMPOSITOR_GPU_FULL_FRAME");
+        for (int depth : {8,16}) {
+            clearGpuPreviewCache();
+            auto state = fixture({131,97}); state.bitDepth = depth;
+            state.layers[0].image = state.layers[0].image.convertToFormat(pixelFormat(depth));
+            Layer top = state.layers[0]; top.id = newId(); top.image.fill(QColor(31,170,84,198));
+            top.mask = QImage(state.size,maskFormat(depth)); top.mask.fill(Qt::white);
+            top.maskPlacement = top.placement; top.maskSource = state.layers[0].id;
+            Layer group; group.id = newId(); group.name = "Folder"; group.group = true; group.placement.size = state.size;
+            group.mask = top.mask; group.maskPlacement = group.placement; top.parent = group.id;
+            state.layers.append(top); state.layers.append(group);
+            Document document; document.reset(state,true);
+            if (renderGpuPreview(state,state.size).isNull()) QSKIP(qPrintable(gpuPreviewStatus()));
+            auto check = [&] {
+                const auto partial = renderGpuPreview(document.state(),state.size);
+                qputenv("COMPOSITOR_GPU_FULL_FRAME","1");
+                QCOMPARE(partial,renderGpuPreview(document.state(),state.size));
+                qunsetenv("COMPOSITOR_GPU_FULL_FRAME");
+            };
+            document.edit([](State &s) {
+                QPainter p(&s.layers[1].mask); p.fillRect(QRect(9,17,7,5),QColor(30,30,30));
+            }); check();
+            document.edit([](State &s) { s.layers[1].placement.origin += QPointF(10.25,-7.75); }); check();
+            document.edit([](State &s) {
+                s.layers[1].maskLinked = false; s.layers[1].maskPlacement.origin += QPointF(-4.5,9.25);
+            }); check();
+            document.edit([](State &s) { s.layers[1].placement.rotation = 17; }); check();
+            document.edit([](State &s) {
+                QPainter p(&s.layers[0].image); p.setCompositionMode(QPainter::CompositionMode_Source);
+                p.fillRect(QRect(80,71,11,9),Qt::transparent);
+            }); check();
+            document.edit([](State &s) {
+                QPainter p(&s.layers[2].mask); p.fillRect(QRect(2,50,23,14),QColor(90,90,90));
+                s.layers[2].opacity = .61;
+            }); check();
+            for (int i=0; i<6; ++i) { document.undo(); check(); }
+            for (int i=0; i<6; ++i) { document.redo(); check(); }
+        }
+    }
+    void gpuDirtyRegionPerformanceReport() {
+        if (!qEnvironmentVariableIntValue("COMPOSITOR_GPU_BENCHMARK")) return;
+        const auto previous = qgetenv("COMPOSITOR_GPU_FULL_FRAME");
+        const auto restore = qScopeGuard([&] {
+            if (previous.isNull()) qunsetenv("COMPOSITOR_GPU_FULL_FRAME"); else qputenv("COMPOSITOR_GPU_FULL_FRAME",previous);
+            clearGpuPreviewCache();
+        });
+        auto base = fixture({1024,1024});
+        for (int i=0; i<5; ++i) {
+            Layer layer = base.layers[0]; layer.id = newId();
+            layer.image.fill(QColor(30+i*30,140-i*10,70+i*15,90+i*20));
+            base.layers.append(layer);
+        }
+        QVector<QImage> reference;
+        for (bool full : {true,false}) {
+            qputenv("COMPOSITOR_GPU_FULL_FRAME",full ? "1" : "0");
+            clearGpuPreviewCache(); auto state = base;
+            if (renderGpuPreview(state,state.size).isNull()) QSKIP(qPrintable(gpuPreviewStatus()));
+            resetGpuPreviewMetrics(); qint64 elapsed = 0;
+            for (int frame=0; frame<12; ++frame) {
+                QElapsedTimer timer; timer.start();
+                { QPainter paint(&state.layers.last().image);
+                  paint.fillRect(QRect(128,256,32,32),QColor(frame*17,frame*7,120)); }
+                const auto image = renderGpuPreview(state,state.size);
+                elapsed += timer.nsecsElapsed();
+                QVERIFY(!image.isNull());
+                if (full) reference.append(image); else QCOMPARE(image,reference[frame]);
+            }
+            const auto m = gpuPreviewMetrics();
+            QCOMPARE(m.readbackBytes,quint64(12*4)*(full ? 1024*1024 : 32*32));
+            QCOMPARE(m.compositedPixels,quint64(12*6)*(full ? 1024*1024 : 32*32));
+            qInfo().noquote() << QString("GPU_REGION_BENCHMARK %1 frames=12 total_ms=%2 uploaded_bytes=%3 readback_bytes=%4 composited_pixels=%5 allocations=%6 prepared_layers=%7 readbacks=%8")
+                .arg(full ? "full" : "partial").arg(elapsed/1000000.,0,'f',3).arg(m.uploadedBytes).arg(m.readbackBytes)
+                .arg(m.compositedPixels).arg(m.textureAllocations).arg(m.preparedLayers).arg(m.readbacks);
+        }
+    }
     void gpuCacheSkipsUnchangedFramesAndUploadsOnlyChangedPixels() {
         clearGpuPreviewCache(); resetGpuPreviewMetrics();
         for (int depth : {8,16}) {
@@ -131,12 +311,12 @@ class Tests : public QObject {
                 QSKIP(qPrintable(gpuPreviewStatus()));
             }
             auto m = gpuPreviewMetrics();
-            QCOMPARE(m.textureAllocations, quint64(5));
+            QCOMPARE(m.textureAllocations, quint64(6));
             QCOMPARE(m.sourceUploads, quint64(2)); QCOMPARE(m.readbacks, quint64(1));
             const auto again = renderGpuPreview(state, state.size);
             QCOMPARE(again.cacheKey(), first.cacheKey());
             m = gpuPreviewMetrics();
-            QCOMPARE(m.textureAllocations, quint64(5)); QCOMPARE(m.cacheHits, quint64(1));
+            QCOMPARE(m.textureAllocations, quint64(6)); QCOMPARE(m.cacheHits, quint64(1));
             QCOMPARE(m.dispatches, quint64(2)); QCOMPARE(m.readbacks, quint64(1));
             {
                 QPainter paint(&state.layers[1].image);
