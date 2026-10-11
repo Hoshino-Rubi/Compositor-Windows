@@ -1,3 +1,4 @@
+#include "GpuPreview.h"
 #include "WideKernels.h"
 #include "Pixels.h"
 #include "Document.h"
@@ -176,7 +177,7 @@ void Document::applyFilter(const QJsonObject &settings, bool mask) {
         makeRaster(l, s, mask);
         auto &image = mask ? l.mask : l.image;
         const auto before = image;
-        auto output = filtered(image, settings);
+        auto output = filteredAccelerated(image, settings);
         if (!s.selectionMask.isNull()) {
             constrainSelection(s, mask && !l.maskLinked ? l.maskPlacement : l.placement, before, output);
             image = output;

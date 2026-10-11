@@ -9,7 +9,7 @@ bool globalAdjustment(const State &s) {
     for (const auto &l : s.layers) {
         const auto kind = l.metadata["adjustment"].toObject()["kind"].toString();
         // These kernels depend on full-image coordinates or a rotated image grid.
-        if (kind == "Add Noise" || kind == "Grain" || kind == "Motion Blur") return true;
+        if (QStringList{"Add Noise","Grain","Motion Blur","Camera Raw","Vignette","Bloom / Glow","Dither","Tonal Contrast","Lens Correction","Scanlines"}.contains(kind)) return true;
     }
     return false;
 }

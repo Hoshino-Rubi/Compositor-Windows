@@ -1,14 +1,23 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a4 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a5 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a4). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a5). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a4-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a5-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a5 — GPU filters, effects and Camera Raw (pre-release)
+
+- GPU preview processing for Hue/Saturation (including ranges/colorize), Black & White, Color Balance, Gradient Map, Add Noise, Grain and Motion Blur. All twelve adjustment types can use all 24 blend modes; the previous five are no longer Normal-only.
+- GPU layer effects: outside/inside Stroke, Drop/Inner Shadow, Outer/Inner Glow and Color Overlay, with masks, clipping, folder effects and opacity.
+- Camera Raw pixel stages run on Direct3D 11: light/color/calibration, curves, mixer/point color, grading, texture/clarity/dehaze/glow/grain/vignette, optics, geometry, denoise, sharpening and clipping/mask overlays. Small lookup-table construction, font atlases and aggregation of GPU statistics remain on CPU.
+- GPU Vignette, Bloom / Glow, all ten Dither styles, Tonal Contrast, Lens Correction and Scanlines. Filter-dialog previews, destructive filter application and Camera Raw preview/apply now use the GPU path when resources permit; selection handling and undo remain native.
+
+**Alpha limitations:** this is coverage of the listed processing stages, not pixel-identical output or a guarantee of speed. Qt/GPU resampling and antialiasing differ; isolated inner-stroke corner samples differ by up to about 5% in fixtures. Small arithmetic differences can flip Hard Mix or error-diffusion thresholds. Serial luminance denoising/error diffusion can be slower on GPU. Source/mask preparation, brushes/retouch, UI analysis and export remain CPU-backed. GPU processing uses synchronous readback, a bounded scratch pool and the existing memory budget; requests above 8MP or available resources fall back to CPU. Hard Mix on adjustment layers requires hardware FP64. `COMPOSITOR_DISABLE_GPU=1` selects the reference CPU path. Live-effect export still uses that reference; destructive GPU edits save their actual resulting pixels. Project format and runtime dependencies are unchanged. **Pre-release only**, stable Latest remains **0.4.0**. See [release notes](releases/0.4.1a5.md) for validation and timings.
 
 ## Version 0.4.1a4 — GPU tone adjustments (pre-release)
 

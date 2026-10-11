@@ -99,6 +99,16 @@ bool measuredCurve(const QJsonObject &c) {
            v(c, "refineSaturation") == 0;
 }
 QVector<CameraRawStage> stages(const QJsonObject &s, const QImage &image) {
+    const auto light=s["enableLight"].toBool(true)?s:QJsonObject();
+    double brightness[]{.5, .5, .5};
+    if (v(light, "contrast") || v(light, "highlights") || v(light, "shadows"))
+        if (wideImage(image))
+            wide::camera_raw_statistics(reinterpret_cast<const quint16 *>(image.constBits()), image.width(), image.height(), image.bytesPerLine() / 2, brightness);
+        else
+            camera_raw_statistics(image.constBits(), image.width(), image.height(), image.bytesPerLine(), brightness);
+    return stagesWithStatistics(s, brightness);
+}
+QVector<CameraRawStage> stagesWithStatistics(const QJsonObject &s, const double brightness[3]) {
     QVector<CameraRawStage> out;
     const auto cal = s["enableCalibration"].toBool(true) ? s["calibration"].toObject() : QJsonObject();
     int index = 0;
@@ -113,12 +123,6 @@ QVector<CameraRawStage> stages(const QJsonObject &s, const QImage &image) {
         out.append(stage(81, v(light, "exposure"), -5, .5, 21));
     if (v(color, "temperature") || v(color, "tint"))
         out.append(whiteBalance(v(color, "temperature"), v(color, "tint")));
-    double brightness[]{.5, .5, .5};
-    if (v(light, "contrast") || v(light, "highlights") || v(light, "shadows"))
-        if (wideImage(image))
-            wide::camera_raw_statistics(reinterpret_cast<const quint16 *>(image.constBits()), image.width(), image.height(), image.bytesPerLine() / 2, brightness);
-        else
-            camera_raw_statistics(image.constBits(), image.width(), image.height(), image.bytesPerLine(), brightness);
     if (v(light, "contrast"))
         out.append(adaptive(138, v(light, "contrast"), brightness[0] * 255));
     if (v(light, "highlights"))

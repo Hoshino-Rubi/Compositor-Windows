@@ -1,6 +1,8 @@
 #include "MainWindow.h"
 #include "Effects.h"
 #include "Renderer.h"
+#include "GpuPreview.h"
+#include "PreviewRenderer.h"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -89,14 +91,14 @@ void MainWindow::effectsDialog() {
         for (auto &l : snapshot.layers)
             if (!included.contains(l.parent))
                 l.parent.clear();
-        source = comp::render(snapshot, target);
+        source = comp::renderPreview(snapshot, target);
     } else
         source = layerSurface(snapshot, index, target);
     auto update = [&] {
         store();
         try {
             preview.setPixmap(
-                QPixmap::fromImage(applyEffects(source, settings, double(target.width()) / snapshot.size.width())));
+                QPixmap::fromImage(effectsAccelerated(source, settings, double(target.width()) / snapshot.size.width())));
         } catch (const Error &e) {
             preview.setText(t(e.key));
         }

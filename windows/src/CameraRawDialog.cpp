@@ -1,3 +1,4 @@
+#include "GpuPreview.h"
 #include "MainWindow.h"
 #include "CameraRaw.h"
 #include "Importers.h"
@@ -734,7 +735,8 @@ void MainWindow::cameraRawDialog() {
         bool enabled = previewToggle.isChecked();
         watcher.setFuture(
             QtConcurrent::run([source, snapshot, enabled, clip, scale = double(source.width()) / full.width()] {
-                return enabled ? cameraRaw(source, snapshot, scale, clip) : source;
+                auto parameters = snapshot; parameters["kind"] = "Camera Raw";
+                return enabled ? filteredAccelerated(source, parameters, scale, clip) : source;
             }));
     };
     connect(&debounce, &QTimer::timeout, &dialog, start);
@@ -768,7 +770,7 @@ void MainWindow::cameraRawDialog() {
     settings.remove("visualizePoint");
     settings.remove("sharpenMask");
     auto output = std::make_shared<QImage>();
-    runIO([output, full, settings] { *output = cameraRaw(full, settings); },
+    runIO([output, full, settings] { auto parameters = settings; parameters["kind"] = "Camera Raw"; *output = filteredAccelerated(full, parameters); },
           [this, output, index, original, settings] {
               invoke([&] {
                   document_.edit([&](State &s) {

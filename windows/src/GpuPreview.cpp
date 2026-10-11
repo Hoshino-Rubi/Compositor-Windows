@@ -3,7 +3,11 @@
 #include "Pixels.h"
 #include "GpuBlurShader.h"
 #include "GpuToneShader.h"
+#include "GpuAdjustmentBlend.h"
+#include "GpuProcessing.h"
 #include "Filters.h"
+#include "CameraRaw.h"
+#include "Effects.h"
 #include <bit>
 #include <QColorSpace>
 #include <QPainter>
@@ -33,6 +37,7 @@ using Microsoft::WRL::ComPtr;
 const char shaderSource[] = R"hlsl(
 Texture2D<float4> backdrop : register(t0);
 Texture2D<float4> source : register(t1);
+Texture2D<float4> postCoverage : register(t2);
 RWTexture2D<float4> outputImage : register(u0);
 cbuffer Settings : register(b0) {
     uint width; uint height; uint mode; float maximum;
@@ -75,6 +80,7 @@ void main(uint3 p:SV_DispatchThreadID) {
     p.xy += uint2(offsetX,offsetY);
     float4 bp=firstLayer ? float4(0,0,0,0) : backdrop.Load(int3(p.xy,0));
     float4 sp=source.Load(int3(p.xy,0));
+    if(padding) sp=floor(sp*postCoverage.Load(int3(p.xy,0)).a*maximum+.5)/maximum;
     if(sp.a==0) { outputImage[p.xy]=bp; return; }
     float3 b=bp.a>0?bp.rgb/bp.a:float3(0,0,0),s=sp.rgb/sp.a,v;
     if(mode==20) v=setLuminance(setSaturation(s,saturation(b)),luminance(b));
@@ -117,6 +123,8 @@ struct Device {
     ComPtr<ID3D11ComputeShader> shader, packShader, blurShader, blurMixShader, toneShader;
     ComPtr<ID3D11Buffer> settings;
     QString status;
+    bool doublePrecision = false;
+    std::unique_ptr<GpuProcessor> processor;
     Device() {
         const D3D_FEATURE_LEVEL wanted[] = {D3D_FEATURE_LEVEL_11_0};
         D3D_FEATURE_LEVEL actual;
@@ -142,6 +150,9 @@ struct Device {
         if (FAILED(device->CreateBuffer(&desc, nullptr, &settings))) {
             shader.Reset(); status = "Preview shader initialization failed"; return;
         }
+        D3D11_FEATURE_DATA_DOUBLES doubleSupport{};
+        doublePrecision = SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_DOUBLES, &doubleSupport, sizeof(doubleSupport))) && doubleSupport.DoublePrecisionFloatShaderOps;
+        processor = std::make_unique<GpuProcessor>(device.Get(), context.Get());
         status = "Direct3D 11 hardware compute";
     }
     bool prepareBlur() {
@@ -155,13 +166,15 @@ struct Device {
                                            : "Blur shader initialization failed";
             return SUCCEEDED(hr);
         };
+        const QByteArray mix = (doublePrecision ? QByteArray("#define EXACT_HARD_MIX 1\n") : QByteArray()) + QByteArray(gpuBlurMixShader).replace("// ADJUSTMENT_BLEND", gpuAdjustmentBlend);
         return compile(gpuBlurShader, sizeof(gpuBlurShader)-1, blurShader) &&
-               compile(gpuBlurMixShader, sizeof(gpuBlurMixShader)-1, blurMixShader);
+               compile(mix.constData(), size_t(mix.size()), blurMixShader);
     }
     bool prepareTone() {
         if (toneShader) return true;
         ComPtr<ID3DBlob> code, errors;
-        HRESULT hr = D3DCompile(gpuToneShader, sizeof(gpuToneShader)-1, "CompositorTone", nullptr, nullptr,
+        const QByteArray source = (doublePrecision ? QByteArray("#define EXACT_HARD_MIX 1\n") : QByteArray()) + QByteArray(gpuToneShader).replace("// ADJUSTMENT_BLEND", gpuAdjustmentBlend);
+        HRESULT hr = D3DCompile(source.constData(), size_t(source.size()), "CompositorTone", nullptr, nullptr,
                                "main", "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
         if (SUCCEEDED(hr)) hr = device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &toneShader);
         if (FAILED(hr)) status = errors ? QString::fromUtf8(static_cast<const char *>(errors->GetBufferPointer()), int(errors->GetBufferSize()))
@@ -195,7 +208,9 @@ bool createTexture(Device &d, QSize size, DXGI_FORMAT format, Texture &out, cons
 }
 
 struct SourceCache {
-    Texture source, toneTable;
+    Texture source, toneTable, effectCoverage;
+    GpuSurfacePtr effected;
+    QByteArray effectSignature;
     QByteArray signature, toneSignature;
     QImage pixels;
 };
@@ -343,6 +358,65 @@ QImage adjustmentCoverage(const State &state, const VisibleLayer &entry, QSize t
 }
 } // namespace
 #endif
+namespace {
+QImage processGpuImage(const QImage &source, const QJsonObject &settings, double scale, int clipping, bool effects) {
+#ifdef Q_OS_WIN
+    if (source.isNull() || qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU")) return {};
+    const quint64 area=quint64(source.width())*source.height();
+    if(area>8*1024*1024) return {};
+    std::lock_guard lock(gpuMutex);auto &d=gpu();if(!d.ready())return {};
+    // Leave space for processing scratch surfaces in addition to retained previews.
+    const quint64 scratch=area*(settings["kind"]=="Camera Raw"?192:96)+3*1024*1024;
+    const quint64 budget=cacheBudget(d),required=scratch+area*32+1024*1024;
+    if(required>budget)return {};trimCache(budget-required);d.processor->setScratchBudget(scratch);
+    const int depth=wideImage(source)?16:8;
+    const auto pixels=source.convertToFormat(depth==16?QImage::Format_RGBA64_Premultiplied:QImage::Format_RGBA8888_Premultiplied);
+    Texture input,packed;
+    if(!createTexture(d,pixels.size(),depth==16?DXGI_FORMAT_R16G16B16A16_UNORM:DXGI_FORMAT_R8G8B8A8_UNORM,input,&pixels))return {};
+    const auto before=d.processor->dispatches;
+    auto result=effects?d.processor->effects(input.view.Get(),pixels.size(),depth,settings,scale)
+                       :d.processor->filter(input.view.Get(),pixels.size(),depth,settings,scale,clipping);
+    metrics.processingDispatches+=d.processor->dispatches-before;
+    if(!result){if(!d.processor->error.isEmpty())d.status=d.processor->error;return {};}
+    const auto format=depth==16?DXGI_FORMAT_R16G16B16A16_UINT:DXGI_FORMAT_R8G8B8A8_UINT;
+    if(!createTexture(d,pixels.size(),format,packed))return {};
+    D3D11_TEXTURE2D_DESC desc{};packed.texture->GetDesc(&desc);desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+    ComPtr<ID3D11Texture2D> staging;if(FAILED(d.device->CreateTexture2D(&desc,nullptr,&staging)))return {};
+    Settings params{UINT(pixels.width()),UINT(pixels.height()),0,depth==16?65535.f:255.f,0,0,0};
+    d.context->UpdateSubresource(d.settings.Get(),0,nullptr,&params,0,0);
+    auto *constants=d.settings.Get();d.context->CSSetConstantBuffers(0,1,&constants);d.context->CSSetShader(d.packShader.Get(),nullptr,0);
+    auto *view=result->view.Get();auto *out=packed.output.Get();d.context->CSSetShaderResources(0,1,&view);d.context->CSSetUnorderedAccessViews(0,1,&out,nullptr);
+    d.context->Dispatch((params.width+15)/16,(params.height+15)/16,1);
+    ID3D11ShaderResourceView *none=nullptr;ID3D11UnorderedAccessView *noOutput=nullptr;
+    d.context->CSSetShaderResources(0,1,&none);d.context->CSSetUnorderedAccessViews(0,1,&noOutput,nullptr);
+    d.context->CopyResource(staging.Get(),packed.texture.Get());D3D11_MAPPED_SUBRESOURCE mapped{};
+    if(FAILED(d.context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped)))return {};
+    QImage image(pixels.size(),pixelFormat(depth));
+    if(!image.isNull())for(int y=0;y<image.height();++y)std::memcpy(image.scanLine(y),static_cast<const char *>(mapped.pData)+y*mapped.RowPitch,size_t(image.width())*(depth==16?8:4));
+    d.context->Unmap(staging.Get(),0);++metrics.readbacks;
+    image.setColorSpace(source.colorSpace());image.setDotsPerMeterX(source.dotsPerMeterX());image.setDotsPerMeterY(source.dotsPerMeterY());
+    return image;
+#else
+    Q_UNUSED(source);Q_UNUSED(settings);Q_UNUSED(scale);Q_UNUSED(clipping);Q_UNUSED(effects);return {};
+#endif
+}
+}
+QImage filterGpuImage(const QImage &source,const QJsonObject &settings,double scale,int clipping) {
+    return processGpuImage(source,settings,scale,clipping,false);
+}
+QImage effectsGpuImage(const QImage &source,const QJsonObject &settings,double scale) {
+    return processGpuImage(source,settings,scale,0,true);
+}
+QImage effectsAccelerated(const QImage &source,const QJsonObject &settings,double scale) {
+    if(settings.isEmpty())return source;
+    auto image=effectsGpuImage(source,settings,scale);
+    return image.isNull()?applyEffects(source,settings,scale):image;
+}
+QImage filteredAccelerated(const QImage &source,const QJsonObject &settings,double scale,int clipping) {
+    auto result=filterGpuImage(source,settings,scale,clipping);
+    if(!result.isNull())return result;
+    return settings["kind"]=="Camera Raw"?cameraRaw(source,settings,scale,clipping):filtered(source,settings);
+}
 QString gpuPreviewStatus() {
 #ifdef Q_OS_WIN
     std::lock_guard lock(gpuMutex);
@@ -381,11 +455,24 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         return {};
     }
     if (!target.isValid() || qint64(target.width()) * target.height() > 8 * 1024 * 1024) return {};
+    for (const auto &folder : state.layers) {
+        if (!folder.group || folder.metadata["effects"].toObject().isEmpty()) continue;
+        State nested=state; nested.id=state.id+"/"+folder.id;
+        QSet<QString> ids; for(int child:state.descendants(folder.id))ids.insert(state.layers[child].id);
+        nested.layers.removeIf([&](const Layer &l){return !ids.contains(l.id);});
+        for(auto &layer:nested.layers)if(layer.parent==folder.id)layer.parent.clear();
+        const auto image=renderGpuPreview(nested,target,viewportOrigin);if(image.isNull())return {};
+        State flattened=state;flattened.layers.removeIf([&](const Layer &l){return ids.contains(l.id);});
+        auto &flat=flattened.layers[flattened.index(folder.id)];flat.group=false;flat.image=image;flat.placement={};flat.placement.size=state.size;flat.originalPng.clear();
+        return renderGpuPreview(flattened,target,viewportOrigin);
+    }
     for (const auto &layer : state.layers) {
-        if (!layer.metadata["effects"].toObject().isEmpty()) return {};
+        const auto effects=layer.metadata["effects"].toObject();
+        for(auto it=effects.begin();it!=effects.end();++it)
+            if(!QStringList{"stroke","shadow","colorOverlay","innerShadow","outerGlow","innerGlow"}.contains(it.key())||!it.value().isObject())return {};
         if (layer.metadata["adjustment"].isObject()) {
             const auto settings = layer.metadata["adjustment"].toObject();
-            if (layer.blend != "Normal" || (settings["kind"] != "Gaussian Blur" && !toneAdjustment(settings))) return {};
+            if (settings["kind"] != "Gaussian Blur" && !toneAdjustment(settings) && !GpuProcessor::supports(settings["kind"].toString())) return {};
         }
     }
     std::lock_guard lock(gpuMutex);
@@ -395,6 +482,8 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     QSet<QString> visibleIds;
     bool hasBlur = false;
     int toneLayers = 0;
+    bool hasProcessing = false, hasSpatial = false, hasRaw = false;
+    int effectLayers=0;
     QByteArray signature, stackSignature;
     QDataStream key(&signature, QIODevice::WriteOnly);
     QDataStream stackKey(&stackSignature, QIODevice::WriteOnly);
@@ -402,6 +491,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     for (int index : state.drawOrder()) {
         const auto &layer = state.layers[index];
         const bool adjustment = layer.metadata["adjustment"].isObject();
+        if (adjustment && layer.blend == "Hard Mix" && !d.doublePrecision) return {};
         if (layer.group || !layer.visible || (layer.image.isNull() && !adjustment)) continue;
         double opacity = layer.opacity;
         bool visible = true;
@@ -415,9 +505,17 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         }
         if (!visible || opacity <= 0) continue;
         auto fingerprint = sourceSignature(state, index, ancestors);
+        const auto effects=adjustment?QJsonObject():layer.metadata["effects"].toObject();
+        if(!effects.isEmpty()) {++effectLayers;QDataStream effectKey(&fingerprint,QIODevice::Append);effectKey<<effects;}
         fingerprint.append(adjustment ? 'A' : 'R');
         visibleLayers.append({index, ancestors, fingerprint, adjustment, opacity});
         hasBlur = hasBlur || (adjustment && layer.metadata["adjustment"].toObject()["kind"] == "Gaussian Blur");
+        if (adjustment) {
+            const auto kind = layer.metadata["adjustment"].toObject()["kind"].toString();
+            hasProcessing = hasProcessing || GpuProcessor::supports(kind);
+            hasRaw = hasRaw || kind=="Camera Raw";
+            hasSpatial = hasSpatial || (GpuProcessor::supports(kind) && kind!="Hue/Saturation" && kind!="Black & White" && kind!="Color Balance" && kind!="Gradient Map");
+        }
         if (adjustment && toneAdjustment(layer.metadata["adjustment"].toObject())) ++toneLayers;
         visibleIds.insert(layer.id);
         key << layer.id << layer.blend << fingerprint;
@@ -430,12 +528,13 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     const quint64 area = quint64(target.width()) * target.height();
     const quint64 sampleBytes = state.bitDepth == 16 ? 8 : 4;
     const quint64 tableBytes = (state.bitDepth == 16 ? 65536 : 256) * sampleBytes;
-    const quint64 required = area * (32 + (hasBlur ? 32 : 0) + sampleBytes * 3 + visibleLayers.size() * sampleBytes * 2) +
+    const quint64 required = ((hasProcessing||effectLayers)?4*1024*1024:0) + area * (32 + (hasBlur ? 32 : 0) + ((hasProcessing || effectLayers) ? (hasRaw?224:128) : 0) + effectLayers*(16+sampleBytes) + sampleBytes * 3 + visibleLayers.size() * sampleBytes * 2) +
                              toneLayers * tableBytes + (toneLayers ? (state.bitDepth == 16 ? 65536 : 256) * 4 : 0);
     const quint64 budget = cacheBudget(d);
     metrics.budgetBytes = budget;
     trimCache(budget);
     if (required > budget) return {};
+    d.processor->setScratchBudget(area*(hasRaw?192:96)+3*1024*1024);
     auto found = std::find_if(frames.begin(), frames.end(), [&](const FrameCache &f) {
         return f.document == state.id && f.canvas == state.size && f.target == target &&
                f.origin == viewportOrigin && f.depth == state.bitDepth;
@@ -469,6 +568,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             if (!createTexture(d, table.size(), DXGI_FORMAT_R32_FLOAT, frame.toneAlpha, &table)) return failed();
         }
     } else frame.toneAlpha = {};
+    if (hasProcessing && !d.prepareBlur()) return failed();
     if (hasBlur) {
         if (!d.prepareBlur()) return failed();
         if (!frame.blur[0].texture &&
@@ -494,7 +594,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     // A changed stack can affect every pixel. Otherwise the prepared surface diff
     // includes both old/new geometry and all mask/clipping dependencies.
     QRect dirty;
-    if (frame.result.isNull() || frame.stackSignature != stackSignature || hasBlur ||
+    if (frame.result.isNull() || frame.stackSignature != stackSignature || hasBlur || hasSpatial || effectLayers ||
         forceFull) dirty = QRect(QPoint(), target);
     for (const auto &entry : visibleLayers) {
         const int index = entry.index;
@@ -517,8 +617,11 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         } else { cached.toneTable = {}; cached.toneSignature.clear(); }
         if (cached.signature != entry.signature || !cached.source.texture) {
             ++metrics.preparedLayers;
-            auto image = entry.adjustment ? adjustmentCoverage(state, entry, target) : layerSurface(state, index, target);
-            if (!entry.adjustment) {
+            const bool effected=!entry.adjustment&&!layer.metadata["effects"].toObject().isEmpty();
+            State sourceState=state;
+            if(effected)sourceState.layers[index].opacity=1;
+            auto image = entry.adjustment ? adjustmentCoverage(state, entry, target) : layerSurface(sourceState, index, target);
+            if (!entry.adjustment && !effected) {
                 double groupOpacity = 1;
                 for (int ancestor : entry.ancestors) {
                     const auto &group = state.layers[ancestor];
@@ -559,6 +662,24 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             cached.pixels = image;
             cached.signature = entry.signature;
         }
+        if(!entry.adjustment&&!layer.metadata["effects"].toObject().isEmpty()) {
+            if(cached.effectSignature!=entry.signature||!cached.effected) {
+                const auto before=d.processor->dispatches;
+                cached.effected=d.processor->effects(cached.source.view.Get(),target,state.bitDepth,layer.metadata["effects"].toObject(),double(target.width())/state.size.width());
+                metrics.processingDispatches+=d.processor->dispatches-before;
+                if(!cached.effected){d.status=d.processor->error;return failed();}
+                // Match reference order: effects, layer opacity, each ancestor mask, then folder opacity.
+                if(layer.opacity<1)cached.effected=d.processor->coverage(cached.effected,nullptr,state.bitDepth,layer.opacity);
+                double groupOpacity=1;
+                for(int ancestor:entry.ancestors){const auto &group=state.layers[ancestor];groupOpacity*=group.opacity;
+                    if(!group.mask.isNull()&&group.maskEnabled){auto mask=renderMask(group,state.size,target).convertToFormat(state.bitDepth==16?QImage::Format_RGBA64_Premultiplied:QImage::Format_RGBA8888_Premultiplied);
+                        Texture texture;if(!createTexture(d,target,state.bitDepth==16?DXGI_FORMAT_R16G16B16A16_UNORM:DXGI_FORMAT_R8G8B8A8_UNORM,texture,&mask))return failed();
+                        cached.effected=d.processor->coverage(cached.effected,texture.view.Get(),state.bitDepth,1);}}
+                if(groupOpacity<1)cached.effected=d.processor->coverage(cached.effected,nullptr,state.bitDepth,groupOpacity);
+                if(!cached.effected)return failed();cached.effectCoverage={};
+                cached.effectSignature=entry.signature;
+            }
+        } else {cached.effected.reset();cached.effectCoverage={};cached.effectSignature.clear();}
     }
     QImage result = std::move(frame.result);
     if (!dirty.isEmpty()) {
@@ -579,6 +700,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             const auto &layer = state.layers[entry.index];
             if (entry.adjustment && toneAdjustment(layer.metadata["adjustment"].toObject())) {
                 Settings toneParams = params;
+                toneParams.mode = UINT(std::max(0, int(blendModes().indexOf(layer.blend))));
                 toneParams.padding = std::bit_cast<UINT>(float(entry.opacity));
                 d.context->CSSetShader(d.toneShader.Get(), nullptr, 0);
                 d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &toneParams, 0, 0);
@@ -597,11 +719,21 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
                     const float transparent[4]{};
                     d.context->ClearUnorderedAccessViewFloat(frame.buffers[current].output.Get(), transparent);
                 }
+                const auto adjustment = layer.metadata["adjustment"].toObject();
+                GpuSurfacePtr processed;
+                auto *input = frame.buffers[current].view.Get();
+                if (GpuProcessor::supports(adjustment["kind"].toString())) {
+                    const auto before = d.processor->dispatches;
+                    processed = d.processor->filter(input, target, state.bitDepth, adjustment);
+                    metrics.processingDispatches += d.processor->dispatches - before;
+                    if (!processed) { d.status = d.processor->error; return failed(); }
+                    input = processed->view.Get();
+                    d.context->CSSetConstantBuffers(0, 1, &constants);
+                } else {
                 const double radius = layer.metadata["adjustment"].toObject()["blurRadius"].toDouble(10) *
                                       target.width() / state.size.width();
                 Settings blurParams{UINT(target.width()), UINT(target.height()), 0, params.maximum,
                                     UINT(std::clamp(qRound(radius * .58), 1, 250)), 0, 0};
-                auto *input = frame.buffers[current].view.Get();
                 if (radius > 0) for (int pass = 0; pass < 6; ++pass) {
                     blurParams.mode = UINT(pass % 2);
                     d.context->CSSetShader(d.blurShader.Get(), nullptr, 0);
@@ -617,7 +749,9 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
                     unbind();
                     input = frame.blur[pass % 2].view.Get();
                 }
+                }
                 Settings mixParams = params;
+                mixParams.mode = UINT(std::max(0, int(blendModes().indexOf(layer.blend))));
                 mixParams.padding = std::bit_cast<UINT>(float(entry.opacity));
                 d.context->CSSetShader(d.blurMixShader.Get(), nullptr, 0);
                 d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &mixParams, 0, 0);
@@ -634,8 +768,11 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             d.context->CSSetShader(d.shader.Get(), nullptr, 0);
             params.mode = UINT(std::max(0, int(blendModes().indexOf(layer.blend))));
             d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &params, 0, 0);
-            ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), frame.layers[layer.id].source.view.Get()};
-            d.context->CSSetShaderResources(0, 2, views);
+            auto &cached=frame.layers[layer.id];
+            params.padding=0;
+            d.context->UpdateSubresource(d.settings.Get(),0,nullptr,&params,0,0);
+            ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), cached.effected?cached.effected->view.Get():cached.source.view.Get(),cached.effectCoverage.view.Get()};
+            d.context->CSSetShaderResources(0, 3, views);
             auto *out = frame.buffers[1-current].output.Get();
             d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
             d.context->Dispatch((params.width+15)/16, (params.height+15)/16, 1);

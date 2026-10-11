@@ -1,3 +1,4 @@
+#include "GpuPreview.h"
 #include "PreviewRenderer.h"
 #include "Pixels.h"
 #include "MainWindow.h"
@@ -441,7 +442,7 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                     if (kind == "Gaussian Blur" && sourceSize.width() > 0)
                         settings["blurRadius"] =
                             settings["blurRadius"].toDouble() * source.width() / sourceSize.width();
-                    auto output = filtered(source, settings);
+                    auto output = filteredAccelerated(source, settings);
                     if (!base.selectionMask.isNull()) {
                         constrainSelection(base,
                                            mask_->isChecked() && !base.layers[active].maskLinked

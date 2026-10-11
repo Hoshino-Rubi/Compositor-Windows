@@ -42,14 +42,16 @@ Texture2D<float4> adjusted : register(t1);
 Texture2D<float4> coverage : register(t2);
 RWTexture2D<float4> outputImage : register(u0);
 cbuffer Settings : register(b0) {
-    uint width; uint height; uint unused; float maximum;
+    uint width; uint height; uint mode; float maximum;
     uint offsetX; uint offsetY; uint firstLayer; uint opacityBits;
 };
+// ADJUSTMENT_BLEND
 [numthreads(16,16,1)]
 void main(uint3 p:SV_DispatchThreadID) {
     if(p.x>=width || p.y>=height) return;
     p.xy+=uint2(offsetX,offsetY);
     float4 before=backdrop.Load(int3(p.xy,0)), after=adjusted.Load(int3(p.xy,0));
+    after=blendAdjusted(before,after);
     float amount=coverage.Load(int3(p.xy,0)).a*asfloat(opacityBits);
     outputImage[p.xy]=floor(saturate(before*(1-amount)+after*amount)*maximum+.5)/maximum;
 }

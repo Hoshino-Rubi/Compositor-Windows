@@ -1,13 +1,22 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a4（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a5（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a4) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a5) 下载便携包。
 
-解压 `Compositor-0.4.1a4-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a5-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a5 — GPU 滤镜、图层效果与 Camera Raw（预发布）
+
+- 新增色相／饱和度（含范围与着色）、黑白、色彩平衡、渐变映射、添加杂色、颗粒和动态模糊的 GPU 预览。全部十二类调整支持 24 种混合模式，原有五类不再仅限 Normal。
+- GPU 描边（内／外）、投影、内阴影、内／外发光与颜色叠加，支持蒙版、剪贴、组效果及不透明度。
+- Camera Raw 图像处理阶段迁至 Direct3D 11：光线／颜色／校准、曲线、混色／点颜色、分级、纹理／清晰度／去朦胧／辉光／颗粒／暗角、光学、几何、降噪、锐化及剪切／蒙版预览。小型查找表、字体图集生成和 GPU 统计值汇总仍由 CPU 执行。
+- 暗角、Bloom、十种抖动样式、色调对比、镜头校正和扫描线使用 GPU。滤镜预览、直接应用及 Camera Raw 预览／应用入口已接入，保留选区约束和撤销。
+
+**Alpha 限制：**上述处理阶段已覆盖，但不保证与 CPU 逐像素相同或始终更快。Qt 与 GPU 的重采样和抗锯齿不同；测试中少量内描边角点的通道差异约 5% 以内。微小浮点差异可能触发 Hard Mix 或误差扩散的阈值变化。顺序亮度降噪／误差扩散在 GPU 上可能更慢。源图／蒙版准备、画笔／修复、界面分析和导出仍用 CPU；GPU 需同步回读，受临时纹理池及内存预算限制，超过 8MP 或资源不足回退 CPU。调整层 Hard Mix 要求硬件双精度。可用 `COMPOSITOR_DISABLE_GPU=1` 启用 CPU 参考路径。实时效果导出仍用参考渲染器；直接 GPU 编辑保存实际处理后的像素。项目格式和运行时依赖不变。**仅预发布**，稳定版 Latest 保持 **0.4.0**；验证及计时见[发布说明](releases/0.4.1a5.md)。
 
 ## 0.4.1a4 — GPU 色调调整层（预发布）
 

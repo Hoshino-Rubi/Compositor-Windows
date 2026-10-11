@@ -8,10 +8,15 @@ struct GpuPreviewMetrics {
     quint64 compositedPixels = 0, packedPixels = 0, packDispatches = 0, readbackBytes = 0;
     quint64 blurDispatches = 0, blurredPixels = 0, adjustmentDispatches = 0;
     quint64 toneDispatches = 0, tonedPixels = 0, toneTableBuilds = 0, toneTableUploads = 0, toneTableBytes = 0;
+    quint64 processingDispatches = 0;
     quint64 residentBytes = 0, budgetBytes = 0, cachedFrames = 0;
 };
 // A null image requests the reference CPU renderer (unsupported document or unavailable device).
 QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin = {});
+QImage filterGpuImage(const QImage &source, const QJsonObject &settings, double scale = 1, int clipping = 0);
+QImage effectsGpuImage(const QImage &source, const QJsonObject &settings, double scale = 1);
+QImage effectsAccelerated(const QImage &source, const QJsonObject &settings, double scale = 1);
+QImage filteredAccelerated(const QImage &source, const QJsonObject &settings, double scale = 1, int clipping = 0);
 QString gpuPreviewStatus();
 GpuPreviewMetrics gpuPreviewMetrics();
 void resetGpuPreviewMetrics();

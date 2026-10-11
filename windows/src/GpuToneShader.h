@@ -9,12 +9,13 @@ Texture2D<float4> coverage : register(t2);
 Texture2D<float> alphaFactors : register(t3);
 RWTexture2D<float4> outputImage : register(u0);
 cbuffer Settings : register(b0) {
-    uint width; uint height; uint unused; float maximum;
+    uint width; uint height; uint mode; float maximum;
     uint offsetX; uint offsetY; uint firstLayer; uint opacityBits;
 };
 uint lookup(uint value, uint channel) {
     return toneTable.Load(int3(value & 255, value >> 8, 0))[channel];
 }
+// ADJUSTMENT_BLEND
 [numthreads(16,16,1)]
 void main(uint3 p:SV_DispatchThreadID) {
     if(p.x>=width || p.y>=height) return;
@@ -32,6 +33,7 @@ void main(uint3 p:SV_DispatchThreadID) {
     uint3 product=mapped*native.a;
     uint3 premultiplied=(product+(product>>shift)+(1u<<(shift-1)))>>shift;
     float4 after=float4(premultiplied,native.a)/maximum;
+    after=blendAdjusted(before,after);
     float amount=coverage.Load(int3(p.xy,0)).a*asfloat(opacityBits);
     outputImage[p.xy]=floor(saturate(before*(1-amount)+after*amount)*maximum+.5)/maximum;
 }
