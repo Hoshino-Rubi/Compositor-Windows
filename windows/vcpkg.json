@@ -1,6 +1,6 @@
 {
   "name": "compositor-windows",
-  "version-string": "0.3.1",
+  "version-string": "0.3.4",
   "builtin-baseline": "434307da09bc05b2c86996dccc8b2351fc0d5d37",
   "dependencies": [
     "libraw",

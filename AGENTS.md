@@ -19,6 +19,6 @@ If you've been asked to make or change an image in a `.comp` project, you don't 
 - The Windows implementation is C++20 / Qt 6 Widgets in `windows/`. Keep it native; do not introduce Electron or a browser runtime.
 - Read `windows/README.md` for compatibility and build instructions. Use PowerShell 7 with `windows/scripts/build.ps1` to build and run Qt Test.
 - Preserve the upstream `.comp` format and original PNG/metadata when pixels are untouched. Explicitly reject render features the Windows renderer cannot reproduce.
-- Add or change UI strings in all three `windows/translations/*.json` catalogs.
+- Add or change UI strings in all `windows/translations/*.json` catalogs (currently eight languages).
 
 - GitHub release titles and complete release notes use English first, with Simplified Chinese notes in a collapsible section below.

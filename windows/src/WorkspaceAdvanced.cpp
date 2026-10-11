@@ -20,6 +20,7 @@
 #include <QDirIterator>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QSignalBlocker>
 namespace comp {
 void MainWindow::selectSubject(QPoint point, bool remove) {
     if (!document_.hasDocument() || busy_)
@@ -54,64 +55,33 @@ void MainWindow::selectSubject(QPoint point, bool remove) {
         });
 }
 void MainWindow::shortcutsDialog() {
-    QDialog dialog(this);
-    dialog.setObjectName("shortcutsDialog");
-    dialog.setWindowTitle(t("shortcuts"));
-    dialog.resize(650, 620);
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *table = new QTableWidget;
-    table->setColumnCount(2);
-    table->setHorizontalHeaderLabels({t("command"), t("shortcut")});
-    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    QList<QAction *> list;
-    for (auto *a : findChildren<QAction *>())
-        if (!a->objectName().isEmpty())
-            list.append(a);
-    std::sort(list.begin(), list.end(), [](auto *a, auto *b) { return a->text() < b->text(); });
-    QVector<QKeySequenceEdit *> editors;
-    table->setRowCount(list.size());
-    for (int i = 0; i < list.size(); ++i) {
-        auto *item = new QTableWidgetItem(list[i]->text());
-        item->setFlags(item->flags() & ~Qt::ItemIsEditable);
-        table->setItem(i, 0, item);
-        auto *editor = new QKeySequenceEdit(list[i]->shortcut());
-        editor->setObjectName(list[i]->objectName() + "Shortcut");
-        editor->setMaximumSequenceLength(1);
-        table->setCellWidget(i, 1, editor);
-        editors.append(editor);
+    showPreferences(true);
+}
+void MainWindow::showPreferences(bool shortcuts) {
+    preferences_->refresh();
+    if (shortcuts)
+        preferences_->showShortcuts();
+    workspacePages_->setCurrentIndex(1);
+}
+void MainWindow::applyPreferences() {
+    const auto p = Preferences::load();
+    const QList<QPair<QString, bool>> flags{
+        {"showRulers", p.rulers}, {"showGrid", p.grid}, {"showGuides", p.guides}, {"snap", p.snap}};
+    for (const auto &flag : flags) {
+        QSignalBlocker block(actions_[flag.first]);
+        actions_[flag.first]->setChecked(flag.second);
     }
-    layout->addWidget(table);
-    auto *buttons =
-        new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::RestoreDefaults);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons->button(QDialogButtonBox::RestoreDefaults), &QPushButton::clicked, &dialog, [&] {
-        for (int i = 0; i < list.size(); ++i)
-            editors[i]->setKeySequence(QKeySequence(list[i]->property("originalShortcut").toString()));
-    });
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        QSet<QString> used;
-        for (int i = 0; i < list.size(); ++i) {
-            const auto key = editors[i]->keySequence().toString(QKeySequence::PortableText);
-            if (key.isEmpty())
-                continue;
-            if (used.contains(key)) {
-                QMessageBox::warning(&dialog, t("shortcuts"), t("shortcutConflict").replace("{detail}", key));
-                return;
-            }
-            used.insert(key);
-        }
-        dialog.accept();
-    });
-    if (dialog.exec() != QDialog::Accepted)
-        return;
-    for (int i = 0; i < list.size(); ++i) {
-        list[i]->setShortcut(editors[i]->keySequence());
-        QSettings().setValue("shortcuts/" + list[i]->objectName(),
-                             editors[i]->keySequence().toString(QKeySequence::PortableText));
-    }
-    retranslate();
+    canvas_->setRulers(p.rulers);
+    canvas_->setGrid(p.grid);
+    canvas_->setGuides(p.guides);
+    canvas_->setSnap(p.snap);
+    canvas_->setGridSpacing(p.gridSpacing);
+    if (auto *depth = findChild<QComboBox *>("welcomeBitDepth"))
+        depth->setCurrentIndex(depth->findData(p.depth));
+    if (p.autoReload)
+        projectWatchTimer_.start();
+    else
+        projectWatchTimer_.stop();
 }
 void MainWindow::transformDialog(bool distort) {
     const auto ids = selectedLayers();
@@ -236,6 +206,8 @@ void MainWindow::transformDialog(bool distort) {
     });
 }
 void MainWindow::watchProjects() {
+    if (!Preferences::load().autoReload)
+        return;
     if (busy_ || checkingProjects_ || canvas_->editingText() || QApplication::activeModalWidget() ||
         documents_.isEmpty())
         return;
@@ -278,7 +250,7 @@ void MainWindow::watchProjects() {
         } catch (...) {
             return;
         }
-        if (busy_)
+        if (busy_ || !Preferences::load().autoReload)
             return;
         for (int p = 0; p < paths.size() && p < loaded.size(); ++p) {
             if (loaded[p].state.id.isEmpty())

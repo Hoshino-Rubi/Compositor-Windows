@@ -1,6 +1,7 @@
 #pragma once
 #include "Canvas.h"
 #include "Localization.h"
+#include "Preferences.h"
 #include <QMainWindow>
 #include <QFutureWatcher>
 #include <QLabel>
@@ -41,7 +42,11 @@ class MainWindow : public QMainWindow {
     QStackedWidget *stack_;
     QWidget *welcome_, *editor_;
     QTreeWidget *layers_;
-    QComboBox *blend_, *language_;
+    QComboBox *blend_;
+    QTabWidget *workspacePages_ = nullptr;
+    PreferencesPage *preferences_ = nullptr;
+    void showPreferences(bool shortcuts = false);
+    void applyPreferences();
     QDoubleSpinBox *x_, *y_, *width_, *height_, *rotation_;
     QSpinBox *opacity_, *brushSize_;
     QSlider *flow_;

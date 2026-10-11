@@ -16,7 +16,7 @@ int main(int argc, char **argv) {
     QImageReader::setAllocationLimit(1024);
     QCoreApplication::setOrganizationName("Compositor");
     QCoreApplication::setApplicationName("Compositor");
-    QCoreApplication::setApplicationVersion("0.3.3");
+    QCoreApplication::setApplicationVersion("0.3.4");
     QApplication::setStyle("Fusion");
     QCommandLineParser parser;
     parser.setApplicationDescription("Compositor native Windows image editor");
@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
     parser.addVersionOption();
     parser.addPositionalArgument("project", "Open a .comp directory, PSD/PSB, RAW or image.");
     parser.addOption({"sample", "Open the sample composition."});
-    parser.addOption({"language", "Set interface language (en, zh-CN, zh-TW).", "locale"});
+    parser.addOption({"language", "Set interface language (system, en, zh-CN, zh-TW, ja, ko, de, fr, es).", "locale"});
     parser.addOption({"capture-size", "Window size for app capture.", "WxH"});
     parser.addOption({"capture-tool", "Tool to show in app capture.", "tool"});
     parser.addOption({"capture", "Save a screenshot of this application and exit.", "png"});

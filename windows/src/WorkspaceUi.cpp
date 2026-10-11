@@ -104,7 +104,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     };
     menu("file", {"new", "open", "openProject", "import", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
     menu("edit", {"undo", "redo", "", "cut", "copy", "copyMerged", "paste", "", "fillForeground", "fillBackground",
-                  "clearPixels", "contentFill", "", "shortcuts"});
+                  "clearPixels", "contentFill", "", "preferences"});
     menu("image", {"depth8", "depth16", "", "imageSize", "canvasSize", "trim", "", "flipCanvasX", "flipCanvasY",
                    "rotateCanvasCW", "rotateCanvasCCW"});
     menu("layer", {"addLayer",   "addGroup",   "groupSelection",  "ungroup",     "",           "duplicate", "merge",
@@ -129,7 +129,10 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     auto *outer = new QVBoxLayout(root);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
-    setCentralWidget(root);
+    workspacePages_ = new QTabWidget;
+    workspacePages_->setObjectName("workspacePages");
+    workspacePages_->addTab(root, "");
+    setCentralWidget(workspacePages_);
     auto toolButton = [&](QAction *action, int size = 32) {
         auto *b = new QToolButton;
         b->setDefaultAction(action);
@@ -163,15 +166,6 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     }
     barRow->addWidget(toolButton(actions_["zoomOut"]));
     barRow->addWidget(toolButton(actions_["zoomIn"]));
-    language_ = new QComboBox;
-    language_->setObjectName("languageSelector");
-    language_->addItem("English", "en");
-    language_->addItem("简体中文", "zh-CN");
-    language_->addItem("繁體中文", "zh-TW");
-    language_->setFixedWidth(112);
-    barRow->addWidget(language_);
-    connect(language_, qOverload<int>(&QComboBox::currentIndexChanged), this,
-            [this](int i) { localization_.setLanguage(language_->itemData(i).toString()); });
     outer->addWidget(bar);
     auto label = [&](const QString &key, QHBoxLayout *row) {
         auto *l = new QLabel;
@@ -626,12 +620,40 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
         connect(shortcut, &QShortcut::activated, this, [this] { actions_["delete"]->trigger(); });
     }
     buildWelcome();
+    QList<QAction *> configurable;
+    for (auto *action : findChildren<QAction *>())
+        if (!action->objectName().isEmpty())
+            configurable.append(action);
+    preferences_ = new PreferencesPage(&localization_, configurable);
+    workspacePages_->addTab(preferences_, "");
+    connect(preferences_, &PreferencesPage::settingsChanged, this, &MainWindow::applyPreferences);
+    connect(preferences_, &PreferencesPage::shortcutsChanged, this, &MainWindow::retranslate);
+    connect(preferences_, &PreferencesPage::returnRequested, this, [this] { workspacePages_->setCurrentIndex(0); });
+    connect(workspacePages_, &QTabWidget::currentChanged, this, [this](int page) {
+        statusBar()->setVisible(page == 0);
+        canvas_->finishInlineText();
+        canvas_->cancelGesture();
+        if (page == 1)
+            preferences_->refresh();
+        for (auto *action : tools_)
+            action->setEnabled(page == 0 && !busy_);
+        refreshSelection();
+    });
+    const QList<QPair<QString, QString>> flags{
+        {"showRulers", "rulers"}, {"showGrid", "grid"}, {"showGuides", "guides"}, {"snap", "snap"}};
+    for (const auto &flag : flags)
+        connect(actions_[flag.first], &QAction::toggled, this, [this, flag](bool enabled) {
+            QSettings().setValue("preferences/" + flag.second, enabled);
+            preferences_->refresh();
+        });
 }
 void MainWindow::retranslate() {
-    QFont face(localization_.language() == "zh-CN"   ? "Microsoft YaHei UI"
-               : localization_.language() == "zh-TW" ? "Microsoft JhengHei UI"
-                                                     : "Segoe UI");
+    const QFont face(Localization::fontFamily(localization_.language()));
     QApplication::setFont(face);
+    setFont(face);
+    setLocale(QLocale(localization_.language()));
+    workspacePages_->setTabText(0, t("workspace"));
+    workspacePages_->setTabText(1, t("preferences"));
     for (auto it = actions_.begin(); it != actions_.end(); ++it) {
         it.value()->setText(t(it.key()));
         it.value()->setToolTip(t(it.key()) + (it.value()->shortcut().isEmpty()
@@ -666,10 +688,6 @@ void MainWindow::retranslate() {
         l.first->setText(l.second == "x" ? "X" : l.second == "y" ? "Y" : t(l.second));
     for (const auto &b : buttons_)
         b.first->setText(t(b.second));
-    {
-        QSignalBlocker block(language_);
-        language_->setCurrentIndex(language_->findData(localization_.language()));
-    }
     for (int i = 0; i < blend_->count(); ++i)
         blend_->setItemText(i, t("blend." + blend_->itemData(i).toString()));
     wandMode_->setItemText(0, t("wand"));
@@ -864,15 +882,16 @@ void MainWindow::refresh() {
 void MainWindow::refreshSelection() {
     const auto &s = document_.state();
     const int i = s.index(s.active);
-    const bool active = i >= 0, doc = document_.hasDocument(),
+    const bool editing = workspacePages_->currentIndex() == 0;
+    const bool active = i >= 0 && editing, doc = document_.hasDocument() && editing,
                pixels = active && !s.layers[i].group && !s.layers[i].metadata["adjustment"].isObject();
     const bool hasMask = active && !s.layers[i].mask.isNull();
     actions_["depth8"]->setEnabled(!busy_ && doc);
     actions_["depth16"]->setEnabled(!busy_ && doc);
     actions_["depth8"]->setChecked(s.bitDepth == 8);
     actions_["depth16"]->setChecked(s.bitDepth == 16);
-    actions_["undo"]->setEnabled(!busy_ && document_.canUndo());
-    actions_["redo"]->setEnabled(!busy_ && document_.canRedo());
+    actions_["undo"]->setEnabled(!busy_ && editing && document_.canUndo());
+    actions_["redo"]->setEnabled(!busy_ && editing && document_.canRedo());
     for (const auto &key : QStringList{"save",          "saveAs",           "export",         "addLayer",
                                        "addGroup",      "imageSize",        "canvasSize",     "trim",
                                        "flipCanvasX",   "flipCanvasY",      "rotateCanvasCW", "rotateCanvasCCW",
@@ -890,7 +909,7 @@ void MainWindow::refreshSelection() {
         actions_[key]->setEnabled(!busy_ && hasMask);
     for (const auto &key :
          QStringList{"deselect", "expandSelection", "contractSelection", "featherSelection", "contentFill"})
-        actions_[key]->setEnabled(!busy_ && s.selectionActive);
+        actions_[key]->setEnabled(!busy_ && editing && s.selectionActive);
     for (auto it = actions_.begin(); it != actions_.end(); ++it) {
         if (it.key().startsWith("filter."))
             it.value()->setEnabled(!busy_ && pixels);
@@ -908,7 +927,7 @@ void MainWindow::refreshSelection() {
     blend_->setEnabled(!busy_ && pixels);
     opacity_->setEnabled(!busy_ && active);
     mask_->setEnabled(!busy_ && active);
-    if (!active || (!hasMask && maskLayer_ != s.active))
+    if (i < 0 || (s.layers[i].mask.isNull() && maskLayer_ != s.active))
         mask_->setChecked(false);
     maskLayer_ = s.active;
     if (!refreshing_ && active &&
@@ -947,6 +966,8 @@ void MainWindow::refreshSelection() {
                              : "");
     status_->setText(busy_ ? t("busy") : doc ? t(document_.dirty() ? "unsaved" : "saved") : t("ready"));
     tabs_->setEnabled(!busy_);
+    for (auto *action : tools_)
+        action->setEnabled(!busy_ && editing);
     updateTitle();
 }
 } // namespace comp

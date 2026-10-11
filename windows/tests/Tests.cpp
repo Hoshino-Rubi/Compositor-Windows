@@ -1,4 +1,7 @@
 #include "MainWindow.h"
+#include "Preferences.h"
+#include <QRegularExpression>
+#include <QTabWidget>
 #include "Pixels.h"
 #include "WideKernels.h"
 #include "Renderer.h"
@@ -1228,7 +1231,7 @@ class Tests : public QObject {
     }
     void actionTranslationsComplete() {
         MainWindow window;
-        for (const auto &language : QStringList{"en", "zh-CN", "zh-TW"}) {
+        for (const auto &language : QStringList{"en", "zh-CN", "zh-TW", "ja", "ko", "de", "fr", "es"}) {
             window.localization()->setLanguage(language);
             for (auto *action : window.findChildren<QAction *>()) {
                 const QString name = action->objectName();
@@ -1632,7 +1635,7 @@ class Tests : public QObject {
         QTemporaryDir dir;
         MainWindow window;
         window.show();
-        auto *tabs = window.findChild<QTabBar *>();
+        auto *tabs = window.findChild<QTabBar *>("documentTabs");
         QVERIFY(tabs);
         QString firstId;
         for (const auto &format : {QString("png"), QString("jpg")}) {
@@ -1712,7 +1715,7 @@ class Tests : public QObject {
         QCOMPARE(window.document()->state().layers[0].image, state.layers[0].image);
         QVERIFY(!window.document()->dirty());
         QVERIFY(pickFile(window, "openProjectAction").shown);
-        QCOMPARE(window.findChild<QTabBar *>()->count(), 1);
+        QCOMPARE(window.findChild<QTabBar *>("documentTabs")->count(), 1);
         QCOMPARE(window.document()->state().id, state.id);
     }
     void openRawCreatesTabOnlyAfterDevelopment() {
@@ -1720,7 +1723,7 @@ class Tests : public QObject {
         window.show();
         window.openProject(QString(COMPOSITOR_FIXTURES) + "/layers-0.psd");
         QTRY_VERIFY_WITH_TIMEOUT(window.document()->hasDocument(), 10000);
-        auto *tabs = window.findChild<QTabBar *>();
+        auto *tabs = window.findChild<QTabBar *>("documentTabs");
         const QString original = window.document()->state().id;
         bool accept = false;
         int dialogs = 0;
@@ -1812,24 +1815,13 @@ class Tests : public QObject {
         QTest::keyClick(editor, Qt::Key_Escape);
         QCOMPARE(window.document()->state().layers[0].metadata["text"].toObject()["content"].toString(),
                  QString("Red Blue"));
-        bool accepted = false;
-        QTimer rejectErrors;
-        connect(&rejectErrors, &QTimer::timeout, this, [] {
-            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
-                box->reject();
-        });
-        rejectErrors.start(300);
-        QTimer::singleShot(40, [&] {
-            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
-            QVERIFY(dialog);
-            auto *key = dialog->findChild<QKeySequenceEdit *>("transformLayersActionShortcut");
-            QVERIFY(key);
-            key->setKeySequence(QKeySequence("Ctrl+Alt+T"));
-            dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
-            accepted = dialog->result() == QDialog::Accepted;
-        });
         window.findChild<QAction *>("shortcutsAction")->trigger();
-        QVERIFY(accepted);
+        auto *page = window.findChild<PreferencesPage *>();
+        QVERIFY(page);
+        auto *key = page->findChild<QKeySequenceEdit *>("transformLayersActionShortcut");
+        QVERIFY(key);
+        key->setKeySequence(QKeySequence("Ctrl+Alt+T"));
+        page->findChild<QPushButton *>("applyShortcuts")->click();
         QCOMPARE(window.findChild<QAction *>("transformLayersAction")->shortcut(), QKeySequence("Ctrl+Alt+T"));
         {
             MainWindow restored;
@@ -1858,44 +1850,235 @@ class Tests : public QObject {
         MainWindow window;
         window.show();
         window.sample();
-        window.localization()->setLanguage("zh-CN");
-        QTimer::singleShot(500, [&] {
+        for (const auto &entry : Localization::languages()) {
+            window.localization()->setLanguage(entry.first);
+            QTimer::singleShot(500, [&] {
+                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                QVERIFY(dialog);
+                auto *sections = dialog->findChild<QComboBox *>("rawSection");
+                QVERIFY(sections);
+                QCOMPARE(sections->count(), 11);
+                for (auto *label : dialog->findChildren<QLabel *>())
+                    QVERIFY2(!label->text().startsWith("raw."), qPrintable(entry.first + " " + label->text()));
+                const QString capture = qEnvironmentVariable("COMPOSITOR_TEST_CAPTURE_DIR");
+                if (!capture.isEmpty()) {
+                    QDir().mkpath(capture);
+                    for (int i = 0; i < 11; ++i) {
+                        sections->setCurrentIndex(i);
+                        QCoreApplication::processEvents();
+                        QVERIFY(dialog->grab().save(capture + "/camera-raw-" + entry.first + "-" + QString::number(i) +
+                                                    ".png"));
+                    }
+                }
+                dialog->reject();
+            });
+            window.findChild<QAction *>("filter.cameraRawAction")->trigger();
+        }
+        window.document()->markSaved(window.document()->revision());
+    }
+    void preferencesPreserveDocumentsAndPersist() {
+        QSettings().remove("preferences");
+        QSettings().setValue("language", "en");
+        MainWindow window;
+        window.show();
+        window.sample();
+        window.document()->edit([](State &s) { s.layers[0].name = "Keep this name"; });
+        const auto before = window.document()->state();
+        const auto revision = window.document()->revision();
+        const auto pixels = render(before);
+        window.findChild<QAction *>("preferencesAction")->trigger();
+        auto *pages = window.findChild<QTabWidget *>("workspacePages");
+        QCOMPARE(pages->currentIndex(), 1);
+        QVERIFY(!window.findChild<QAction *>("undoAction")->isEnabled());
+        auto *language = window.findChild<QComboBox *>("languageSelector");
+        QCOMPARE(language->count(), 9);
+        for (const auto &entry : Localization::languages()) {
+            language->setCurrentIndex(language->findData(entry.first));
+            QCOMPARE(window.localization()->language(), entry.first);
+            QCOMPARE(pages->tabText(1), window.localization()->text("preferences"));
+            QCOMPARE(window.document()->revision(), revision);
+            QCOMPARE(window.document()->state().layers[0].name, QString("Keep this name"));
+            QVERIFY(window.document()->dirty());
+        }
+        language->setCurrentIndex(language->findData("ja"));
+        window.findChild<QCheckBox *>("rulersPreference")->setChecked(true);
+        window.findChild<QCheckBox *>("gridPreference")->setChecked(true);
+        window.findChild<QCheckBox *>("snapPreference")->setChecked(false);
+        window.findChild<QCheckBox *>("rememberWindowPreference")->setChecked(false);
+        window.findChild<QCheckBox *>("autoReloadPreference")->setChecked(false);
+        window.findChild<QSpinBox *>("gridSpacingPreference")->setValue(72);
+        QCOMPARE(render(window.document()->state()), pixels);
+        QCOMPARE(window.document()->revision(), revision);
+        window.findChild<QPushButton *>("returnToWorkspace")->click();
+        QCOMPARE(pages->currentIndex(), 0);
+        QVERIFY(window.findChild<QAction *>("undoAction")->isEnabled());
+        window.findChild<QAction *>("undoAction")->trigger();
+        QVERIFY(window.document()->state().layers[0].name != "Keep this name");
+        {
+            MainWindow restored;
+            QCOMPARE(restored.localization()->language(), QString("ja"));
+            QCOMPARE(restored.localization()->selection(), QString("ja"));
+            QVERIFY(restored.findChild<QAction *>("showRulersAction")->isChecked());
+            QVERIFY(restored.findChild<QAction *>("showGridAction")->isChecked());
+            QVERIFY(!restored.findChild<QAction *>("snapAction")->isChecked());
+            QCOMPARE(Preferences::load().gridSpacing, 72);
+            QVERIFY(!Preferences::load().rememberWindow);
+            QVERIFY(!Preferences::load().autoReload);
+            restored.findChild<QAction *>("preferencesAction")->trigger();
+            restored.findChild<QComboBox *>("languageSelector")->setCurrentIndex(0);
+            QCOMPARE(restored.localization()->selection(), QString("system"));
+            QCOMPARE(QSettings().value("language").toString(), QString("system"));
+            restored.findChild<QPushButton *>("resetPreferences")->click();
+            QVERIFY(Preferences::load().rememberWindow);
+            QVERIFY(Preferences::load().autoReload);
+            // Resetting General does not reset Canvas preferences.
+            QCOMPARE(Preferences::load().gridSpacing, 72);
+        }
+        QSettings().remove("preferences");
+        QSettings().setValue("language", "en");
+        window.document()->markSaved(window.document()->revision());
+    }
+    void preferencesNewCanvasDefaultsAndReset() {
+        QSettings().remove("preferences");
+        MainWindow window;
+        window.show();
+        window.findChild<QAction *>("preferencesAction")->trigger();
+        auto *sections = window.findChild<QTabWidget *>("preferenceSections");
+        sections->setCurrentIndex(1);
+        auto *depth = window.findChild<QComboBox *>("defaultDepthPreference");
+        auto *resolution = window.findChild<QComboBox *>("defaultResolutionPreference");
+        depth->setCurrentIndex(depth->findData(16));
+        resolution->setCurrentIndex(resolution->findData(300));
+        QCOMPARE(window.findChild<QComboBox *>("welcomeBitDepth")->currentData().toInt(), 16);
+        bool dialogChecked = false;
+        QTimer::singleShot(40, [&] {
             auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
             QVERIFY(dialog);
-            auto *sections = dialog->findChild<QComboBox *>("rawSection");
-            QVERIFY(sections);
-            QCOMPARE(sections->count(), 11);
-            for (auto *label : dialog->findChildren<QLabel *>())
-                QVERIFY2(!label->text().startsWith("raw."), qPrintable(label->text()));
-            QString capture = qEnvironmentVariable("COMPOSITOR_TEST_CAPTURE_DIR");
-            if (!capture.isEmpty()) {
-                QDir().mkpath(capture);
-                for (int i = 0; i < 11; ++i) {
-                    sections->setCurrentIndex(i);
-                    QCoreApplication::processEvents();
-                    dialog->grab().save(capture + QString("/camera-raw-page-%1.png").arg(i));
+            QCOMPARE(dialog->findChild<QComboBox *>("canvasBitDepth")->currentData().toInt(), 16);
+            QCOMPARE(dialog->findChild<QComboBox *>("canvasDpi")->currentData().toInt(), 300);
+            dialog->findChild<QDoubleSpinBox *>("canvasWidth")->setValue(32);
+            dialog->findChild<QDoubleSpinBox *>("canvasHeight")->setValue(24);
+            dialogChecked = true;
+            dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+        });
+        window.findChild<QAction *>("newAction")->trigger();
+        QVERIFY(dialogChecked);
+        QCOMPARE(window.findChild<QTabWidget *>("workspacePages")->currentIndex(), 0);
+        QCOMPARE(window.document()->state().bitDepth, 16);
+        QCOMPARE(window.document()->state().resolution, 300.);
+        const auto revision = window.document()->revision();
+        window.findChild<QAction *>("preferencesAction")->trigger();
+        window.findChild<QPushButton *>("resetPreferences")->click();
+        QCOMPARE(Preferences::load().depth, 8);
+        QCOMPARE(Preferences::load().resolution, 72);
+        QCOMPARE(window.document()->state().bitDepth, 16);
+        QCOMPARE(window.document()->revision(), revision);
+        QSettings().remove("preferences");
+        window.document()->markSaved(window.document()->revision());
+    }
+    void preferencesShortcutsConflictAndRestore() {
+        QSettings().remove("shortcuts");
+        MainWindow window;
+        window.findChild<QAction *>("shortcutsAction")->trigger();
+        QCOMPARE(window.findChild<QTabWidget *>("preferenceSections")->currentIndex(), 2);
+        auto *editor = window.findChild<QKeySequenceEdit *>("transformLayersActionShortcut");
+        auto *action = window.findChild<QAction *>("transformLayersAction");
+        auto *apply = window.findChild<QPushButton *>("applyShortcuts");
+        const auto original = action->shortcut();
+        for (const QString key : {QString("Ctrl+S"), QString("Ctrl+Y"), QString("Esc"), QString("Del")}) {
+            editor->setKeySequence(QKeySequence(key));
+            apply->click();
+            QCOMPARE(action->shortcut(), original);
+            QVERIFY(!QSettings().contains("shortcuts/transformLayersAction"));
+            QVERIFY(window.findChild<QLabel *>("shortcutStatus")->text().contains(key));
+        }
+        editor->setKeySequence(QKeySequence("Ctrl+Alt+T"));
+        auto *language = window.findChild<QComboBox *>("languageSelector");
+        language->setCurrentIndex(language->findData("fr"));
+        QCOMPARE(editor->keySequence(), QKeySequence("Ctrl+Alt+T"));
+        QCOMPARE(action->shortcut(), original);
+        apply->click();
+        QCOMPARE(action->shortcut(), QKeySequence("Ctrl+Alt+T"));
+        {
+            MainWindow restored;
+            QCOMPARE(restored.localization()->language(), QString("fr"));
+            QCOMPARE(restored.findChild<QAction *>("transformLayersAction")->shortcut(), QKeySequence("Ctrl+Alt+T"));
+        }
+        window.findChild<QPushButton *>("resetPreferences")->click();
+        QCOMPARE(action->shortcut(), QKeySequence("Ctrl+Alt+T"));
+        apply->click();
+        QCOMPARE(action->shortcut(), original);
+        QVERIFY(!QSettings().contains("shortcuts/transformLayersAction"));
+        QSettings().remove("shortcuts");
+        QSettings().setValue("language", "en");
+    }
+    void preferencesCaptureLayouts() {
+        const QString output = qEnvironmentVariable("COMPOSITOR_PREFERENCES_CAPTURES");
+        MainWindow window;
+        window.resize(1100, 800);
+        window.show();
+        window.findChild<QAction *>("preferencesAction")->trigger();
+        auto *sections = window.findChild<QTabWidget *>("preferenceSections");
+        for (const auto &entry : Localization::languages()) {
+            window.localization()->setLanguage(entry.first);
+            for (int section = 0; section < 3; ++section) {
+                sections->setCurrentIndex(section);
+                QCoreApplication::processEvents();
+                auto *shortcut = window.findChild<QKeySequenceEdit *>("aboutActionShortcut");
+                QCOMPARE(shortcut->findChild<QLineEdit *>()->placeholderText(),
+                         window.localization()->text("pressShortcut"));
+                QCOMPARE(window.size(), QSize(1100, 800));
+                QVERIFY(window.findChild<QPushButton *>("returnToWorkspace")->isVisible());
+                if (!output.isEmpty()) {
+                    QDir().mkpath(output);
+                    QVERIFY(window.grab().save(output + "/preferences-" + entry.first + "-" + QString::number(section) +
+                                               ".png"));
                 }
             }
-            dialog->reject();
-        });
-        window.findChild<QAction *>("filter.cameraRawAction")->trigger();
-        window.document()->markSaved(window.document()->revision());
+        }
+        QSettings().setValue("language", "en");
+    }
+    void standardDialogsFollowLanguage() {
+        Localization l;
+        const QList<QPair<QString, QString>> words{
+            {"de", "Abbrechen"}, {"fr", "Annuler"}, {"es", "Cancelar"}, {"ja", "キャンセル"}, {"ko", "취소"}};
+        for (const auto &entry : words) {
+            l.setLanguage(entry.first);
+            QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+            QCOMPARE(buttons.button(QDialogButtonBox::Cancel)->text().remove('&'), entry.second);
+        }
+        l.setLanguage("en");
     }
     void localizationCompleteness() {
         QFile en(":/translations/en.json");
         QVERIFY(en.open(QIODevice::ReadOnly));
         const auto english = QJsonDocument::fromJson(en.readAll()).object();
-        for (const auto &lang : QStringList{"zh-CN", "zh-TW"}) {
+        for (const auto &lang : QStringList{"zh-CN", "zh-TW", "ja", "ko", "de", "fr", "es"}) {
             QFile f(":/translations/" + lang + ".json");
             QVERIFY(f.open(QIODevice::ReadOnly));
             const auto translated = QJsonDocument::fromJson(f.readAll()).object();
             QCOMPARE(translated.keys(), english.keys());
-            for (const auto &key : english.keys())
-                QVERIFY2(!translated[key].toString().isEmpty(), qPrintable(key));
+            auto tokens = [](const QString &value) {
+                QStringList result;
+                auto matches = QRegularExpression("\\{[^{}]+\\}|\\*\\.[a-z0-9]+").globalMatch(value);
+                while (matches.hasNext())
+                    result.append(matches.next().captured());
+                result.sort();
+                return result;
+            };
+            for (const auto &key : english.keys()) {
+                QVERIFY2(!translated[key].toString().isEmpty(), qPrintable(lang + " " + key));
+                QCOMPARE(tokens(translated[key].toString()), tokens(english[key].toString()));
+            }
         }
         QCOMPARE(Localization::normalize("zh_Hant_HK"), QString("zh-TW"));
         QCOMPARE(Localization::normalize("zh-Hans"), QString("zh-CN"));
-        QCOMPARE(Localization::normalize("fr-FR"), QString("en"));
+        QCOMPARE(Localization::normalize("fr-FR"), QString("fr"));
+        QCOMPARE(Localization::normalize("DE_at"), QString("de"));
+        QCOMPARE(Localization::normalize("es-MX"), QString("es"));
+        QCOMPARE(Localization::normalize("ja_JP"), QString("ja"));
+        QCOMPARE(Localization::normalize("ko-KR"), QString("ko"));
+        QCOMPARE(Localization::normalize("unsupported"), QString("en"));
         Localization l;
         l.setLanguage("zh-CN");
         QCOMPARE(l.text("save"), QString("保存"));

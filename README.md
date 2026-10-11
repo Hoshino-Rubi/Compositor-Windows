@@ -10,7 +10,7 @@ Because it’s open source, you can download the Xcode project and add, remove, 
 
 **Windows download:** [Latest Windows release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) · [中文说明](windows/README.zh-CN.md) · [Build instructions](windows/README.md#build)
 
-A C++20 / Qt 6 Windows port is available in [windows/](windows/README.md), with English, Simplified Chinese, and Traditional Chinese interfaces. Version 0.3.3 adds native 16-bit RGB editing, layered 16-bit PSD/PSB import, high-depth RAW/PNG/TIFF workflows and 16-bit PNG/project output. The existing 8-bit workflow remains available; 16-bit projects use the new v12 format, which older builds and the original macOS application cannot open. See [中文说明](windows/README.zh-CN.md) for running, building and compatibility details.
+A C++20 / Qt 6 Windows port is available in [windows/](windows/README.md). Version 0.3.4 adds a dedicated Preferences tab and eight interface languages: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish. Preferences manage language, workspace display, new-canvas defaults and keyboard shortcuts. Native 8/16-bit RGB editing, layered 16-bit PSD/PSB import and high-depth RAW/PNG/TIFF workflows remain available. 16-bit projects use the v12 format, which older builds and the original macOS application cannot open. See [中文说明](windows/README.zh-CN.md) for running, building and compatibility details.
 
 ## Installation
 
@@ -94,7 +94,7 @@ brew install --cask robbietilton-compositor
 
 ## Translations
 
-Compositor is English only for now, and translation pull requests aren't being accepted. It's maintained by one person, every new string would need translating from then on, and translations in languages I don't read can't be reviewed. I'll revisit this once the app settles; until then, please don't open localization PRs.
+The original macOS Compositor is English only for now, and translation pull requests aren't being accepted. It's maintained by one person, every new string would need translating from then on, and translations in languages I don't read can't be reviewed. I'll revisit this once the app settles; until then, please don't open localization PRs.
 
 ## Building
 

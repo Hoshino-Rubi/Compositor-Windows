@@ -1,5 +1,6 @@
 #include "Pixels.h"
 #include "MainWindow.h"
+#include <QSettings>
 #include "Renderer.h"
 #include "Icons.h"
 #include "Filters.h"
@@ -31,7 +32,7 @@ void MainWindow::buildEditingActions() {
         auto *a = new QAction(this);
         a->setObjectName(key + "Action");
         if (!shortcut.isEmpty())
-            a->setShortcut(QKeySequence(shortcut));
+            a->setShortcut(QKeySequence(shortcut, QKeySequence::PortableText));
         connect(a, &QAction::triggered, this, [this, callback] { invoke(callback); });
         actions_[key] = a;
     };
@@ -164,9 +165,13 @@ void MainWindow::buildEditingActions() {
     actions_["snap"]->setChecked(true);
     add("gridSettings", "", [this] {
         bool ok = false;
-        int n = QInputDialog::getInt(this, t("gridSettings"), t("gridSpacing"), 100, 4, 2000, 1, &ok);
-        if (ok)
+        int n = QInputDialog::getInt(this, t("gridSettings"), t("gridSpacing"), Preferences::load().gridSpacing, 4,
+                                     2000, 1, &ok);
+        if (ok) {
             canvas_->setGridSpacing(n);
+            QSettings().setValue("preferences/gridSpacing", n);
+            preferences_->refresh();
+        }
     });
     add("addGuide", "", [this] {
         QDialog dialog(this);
@@ -275,6 +280,7 @@ void MainWindow::stashTab() {
         documents_[currentTab_] = {document_.session(), path_, name_, diskDigest_, canvas_->zoom()};
 }
 void MainWindow::adoptDocument(State state, QString name, QString path, QByteArray digest, bool saved) {
+    workspacePages_->setCurrentIndex(0);
     canvas_->finishInlineText();
     canvas_->cancelGesture();
     stashTab();

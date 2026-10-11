@@ -92,16 +92,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             continue;
         action->setProperty("originalShortcut", action->shortcut().toString(QKeySequence::PortableText));
         if (QSettings().contains("shortcuts/" + key))
-            action->setShortcut(QKeySequence(QSettings().value("shortcuts/" + key).toString()));
+            action->setShortcut(
+                QKeySequence(QSettings().value("shortcuts/" + key).toString(), QKeySequence::PortableText));
     }
     projectWatchTimer_.setInterval(2000);
     connect(&projectWatchTimer_, &QTimer::timeout, this, &MainWindow::watchProjects);
-    projectWatchTimer_.start();
+    applyPreferences();
+    preferences_->refresh();
     name_ = t("untitled");
     retranslate();
     refresh();
     const auto geometry = QSettings().value("geometry").toByteArray();
-    if (!geometry.isEmpty())
+    if (Preferences::load().rememberWindow && !geometry.isEmpty())
         restoreGeometry(geometry);
 }
 MainWindow::~MainWindow() {
@@ -125,7 +127,7 @@ void MainWindow::buildActions() {
         auto *a = new QAction(this);
         a->setObjectName(key + "Action");
         if (!shortcut.isEmpty())
-            a->setShortcut(QKeySequence(shortcut));
+            a->setShortcut(QKeySequence(shortcut, QKeySequence::PortableText));
         connect(a, &QAction::triggered, this, [this, callback] { invoke(callback); });
         actions_[key] = a;
         return a;
@@ -148,7 +150,12 @@ void MainWindow::buildActions() {
     add("undo", "Ctrl+Z", [this] { document_.undo(); });
     add("redo", "Ctrl+Shift+Z", [this] { document_.redo(); });
     auto *redo = new QShortcut(QKeySequence("Ctrl+Y"), this);
-    connect(redo, &QShortcut::activated, this, [this] { invoke([this] { document_.redo(); }); });
+    connect(redo, &QShortcut::activated, this, [this] {
+        invoke([this] {
+            if (workspacePages_->currentIndex() == 0)
+                document_.redo();
+        });
+    });
     add("duplicate", "Ctrl+J", [this] {
         const int i = document_.state().index(document_.state().active);
         if (i >= 0)
@@ -198,6 +205,7 @@ void MainWindow::buildActions() {
     add("showGuides", "", [this] { canvas_->setGuides(actions_["showGuides"]->isChecked()); });
     actions_["showGuides"]->setCheckable(true);
     actions_["showGuides"]->setChecked(true);
+    add("preferences", "Ctrl+,", [this] { showPreferences(); });
     add("shortcuts", "", [this] { shortcutsDialog(); });
     add("about", "", [this] { QMessageBox::about(this, t("about"), t("aboutBody")); });
     add("quit", "Alt+F4", [this] { close(); });
@@ -210,7 +218,7 @@ void MainWindow::buildActions() {
         auto *a = new QAction(this);
         a->setCheckable(true);
         a->setObjectName(keys[i] + "Tool");
-        a->setShortcut(QKeySequence(shortcuts[i]));
+        a->setShortcut(QKeySequence(shortcuts[i], QKeySequence::PortableText));
         group->addAction(a);
         tools_[i] = a;
         connect(a, &QAction::triggered, this, [this, i] {
@@ -275,6 +283,7 @@ void MainWindow::buildWelcome() {
     depth->setObjectName("welcomeBitDepth");
     depth->addItem(t("depth8"), 8);
     depth->addItem(t("depth16"), 16);
+    depth->setCurrentIndex(depth->findData(Preferences::load().depth));
     form->addWidget(depth);
     auto *row = new QHBoxLayout;
     auto button = [&](QString key, std::function<void()> callback) {
@@ -292,6 +301,7 @@ void MainWindow::buildWelcome() {
         s.id = newId();
         s.size = {width->value(), height->value()};
         s.bitDepth = depth->currentData().toInt();
+        s.resolution = Preferences::load().resolution;
         Layer l;
         l.id = newId();
         l.name = t("layerName").replace("{n}", "1");
@@ -385,6 +395,9 @@ void MainWindow::newDialog() {
     units.addItems({t("units.pixels"), t("units.inches"), t("units.cm"), t("units.mm")});
     dpi.addItem("72 DPI", 72);
     dpi.addItem("300 DPI", 300);
+    const auto defaults = Preferences::load();
+    depth.setCurrentIndex(depth.findData(defaults.depth));
+    dpi.setCurrentIndex(dpi.findData(defaults.resolution));
     auto factor = [&] {
         double resolution = dpi.currentData().toDouble();
         switch (units.currentIndex()) {
@@ -474,6 +487,7 @@ void MainWindow::setBusy(bool busy) {
     busy_ = busy;
     editor_->setEnabled(!busy);
     welcome_->setEnabled(!busy);
+    preferences_->setEnabled(!busy);
     for (auto *a : actions_)
         a->setEnabled(!busy);
     refreshSelection();
@@ -734,9 +748,7 @@ void MainWindow::sample() {
         QPainter p(&text.image);
         p.setRenderHint(QPainter::TextAntialiasing);
         p.setPen(QColor("#fff4e5"));
-        QFont font(localization_.language() == "zh-CN"   ? "Microsoft YaHei UI"
-                   : localization_.language() == "zh-TW" ? "Microsoft JhengHei UI"
-                                                         : "Segoe UI");
+        QFont font(Localization::fontFamily(localization_.language()));
         font.setPixelSize(110);
         font.setWeight(QFont::DemiBold);
         p.setFont(font);
@@ -770,7 +782,8 @@ void MainWindow::closeEvent(QCloseEvent *event) {
             return;
         }
     }
-    QSettings().setValue("geometry", saveGeometry());
+    if (Preferences::load().rememberWindow)
+        QSettings().setValue("geometry", saveGeometry());
     event->accept();
 }
 } // namespace comp

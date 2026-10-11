@@ -1,13 +1,22 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.3.3**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.3.4**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
 从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) 下载便携包。
 
-解压 `Compositor-0.3.3-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
-右上角即时切换 English、简体中文、繁體中文，语言选择会保存。
+解压 `Compositor-0.3.4-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+在“首选项”标签页即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.3.4 更新
+
+- 新增独立的 **“首选项”标签页**，与“工作区”并列，也可通过“编辑 → 首选项”或 `Ctrl+,` 打开。文档、未保存编辑与撤销记录保留在工作区。
+- **常规**：界面语言／跟随系统、记住窗口大小和位置、自动重新加载外部修改的项目。仅干净文档自动重载，有未保存编辑时继续保留本地内容。
+- **画布**：新建画布的默认 8／16 位色深、72／300 DPI；标尺、网格、参考线、吸附与网格间距。显示设置立即生效并保存；新建文档默认值不会改变已有图片。
+- **快捷键**：集中编辑、应用、检查重复和保留键；支持按分类恢复默认。Escape、Delete、Ctrl+Y 为固定快捷键。未应用的快捷键更改在切换页面时保留，退出应用时丢弃。
+- 新增 **日语、韩语、德语、法语、西班牙语**，共八种语言；每种包含完整的 555 条文案，校验占位符和导入扩展名。地区语言自动匹配，不支持的系统语言回退为英语；同时打包 Qt 对话框翻译。
+- 修正导入、RAW 显影及项目格式提示中遗留的旧说明。文档格式与编辑精度不变。
 
 ## 0.3.3 更新
 
@@ -74,7 +83,7 @@ Windows 原生端同步适配：
 - 空格拖动画布，Ctrl 滚轮缩放；`Ctrl+0` 适合画布，`Ctrl+1` 100%。
 - `Ctrl+A` 全选，`Ctrl+D` 取消选区，`Ctrl+Shift+I` 反选；Shift 加选、Alt 减选。
 - `Alt+Backspace` 前景填充，`Ctrl+Backspace` 背景填充，`Shift+F5` 内容识别填充。
-- `Ctrl+G` 编组，`Ctrl+Shift+G` 取消编组，`Ctrl+E` 合并，`Ctrl+W` 关闭标签。编辑菜单 → 快捷键可修改并保存。
+- `Ctrl+G` 编组，`Ctrl+Shift+G` 取消编组，`Ctrl+E` 合并，`Ctrl+W` 关闭标签。首选项 → 快捷键可修改并应用。
 
 ## 兼容范围
 
