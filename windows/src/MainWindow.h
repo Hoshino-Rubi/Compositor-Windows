@@ -43,8 +43,7 @@ class MainWindow : public QMainWindow {
     QWidget *welcome_, *editor_;
     QTreeWidget *layers_;
     QComboBox *blend_;
-    QTabWidget *workspacePages_ = nullptr;
-    PreferencesPage *preferences_ = nullptr;
+    PreferencesDialog *preferences_ = nullptr;
     void showPreferences(bool shortcuts = false);
     void applyPreferences();
     QDoubleSpinBox *x_, *y_, *width_, *height_, *rotation_;

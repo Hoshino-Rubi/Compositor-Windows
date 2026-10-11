@@ -1816,12 +1816,13 @@ class Tests : public QObject {
         QCOMPARE(window.document()->state().layers[0].metadata["text"].toObject()["content"].toString(),
                  QString("Red Blue"));
         window.findChild<QAction *>("shortcutsAction")->trigger();
-        auto *page = window.findChild<PreferencesPage *>();
+        auto *page = window.findChild<PreferencesDialog *>();
         QVERIFY(page);
         auto *key = page->findChild<QKeySequenceEdit *>("transformLayersActionShortcut");
         QVERIFY(key);
         key->setKeySequence(QKeySequence("Ctrl+Alt+T"));
         page->findChild<QPushButton *>("applyShortcuts")->click();
+        page->close();
         QCOMPARE(window.findChild<QAction *>("transformLayersAction")->shortcut(), QKeySequence("Ctrl+Alt+T"));
         {
             MainWindow restored;
@@ -1887,15 +1888,19 @@ class Tests : public QObject {
         const auto revision = window.document()->revision();
         const auto pixels = render(before);
         window.findChild<QAction *>("preferencesAction")->trigger();
-        auto *pages = window.findChild<QTabWidget *>("workspacePages");
-        QCOMPARE(pages->currentIndex(), 1);
-        QVERIFY(!window.findChild<QAction *>("undoAction")->isEnabled());
+        auto *dialog = window.findChild<PreferencesDialog *>();
+        QVERIFY(dialog);
+        QVERIFY(dialog->isWindow());
+        QVERIFY(dialog->isModal());
+        QCOMPARE(QApplication::activeModalWidget(), dialog);
+        QVERIFY(!window.findChild<QTabWidget *>("workspacePages"));
+        QCOMPARE(window.findChild<QTabBar *>("documentTabs")->count(), 1);
         auto *language = window.findChild<QComboBox *>("languageSelector");
         QCOMPARE(language->count(), 9);
         for (const auto &entry : Localization::languages()) {
             language->setCurrentIndex(language->findData(entry.first));
             QCOMPARE(window.localization()->language(), entry.first);
-            QCOMPARE(pages->tabText(1), window.localization()->text("preferences"));
+            QCOMPARE(dialog->windowTitle(), window.localization()->text("preferences"));
             QCOMPARE(window.document()->revision(), revision);
             QCOMPARE(window.document()->state().layers[0].name, QString("Keep this name"));
             QVERIFY(window.document()->dirty());
@@ -1909,8 +1914,9 @@ class Tests : public QObject {
         window.findChild<QSpinBox *>("gridSpacingPreference")->setValue(72);
         QCOMPARE(render(window.document()->state()), pixels);
         QCOMPARE(window.document()->revision(), revision);
-        window.findChild<QPushButton *>("returnToWorkspace")->click();
-        QCOMPARE(pages->currentIndex(), 0);
+        dialog->findChild<QPushButton *>("closePreferences")->click();
+        QVERIFY(!dialog->isVisible());
+        QVERIFY(!QApplication::activeModalWidget());
         QVERIFY(window.findChild<QAction *>("undoAction")->isEnabled());
         window.findChild<QAction *>("undoAction")->trigger();
         QVERIFY(window.document()->state().layers[0].name != "Keep this name");
@@ -1950,6 +1956,7 @@ class Tests : public QObject {
         depth->setCurrentIndex(depth->findData(16));
         resolution->setCurrentIndex(resolution->findData(300));
         QCOMPARE(window.findChild<QComboBox *>("welcomeBitDepth")->currentData().toInt(), 16);
+        window.findChild<PreferencesDialog *>()->close();
         bool dialogChecked = false;
         QTimer::singleShot(40, [&] {
             auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
@@ -1963,7 +1970,7 @@ class Tests : public QObject {
         });
         window.findChild<QAction *>("newAction")->trigger();
         QVERIFY(dialogChecked);
-        QCOMPARE(window.findChild<QTabWidget *>("workspacePages")->currentIndex(), 0);
+        QVERIFY(!window.findChild<PreferencesDialog *>()->isVisible());
         QCOMPARE(window.document()->state().bitDepth, 16);
         QCOMPARE(window.document()->state().resolution, 300.);
         const auto revision = window.document()->revision();
@@ -2012,30 +2019,95 @@ class Tests : public QObject {
         QSettings().remove("shortcuts");
         QSettings().setValue("language", "en");
     }
+    void preferencesDialogLifecycle() {
+        QSettings().remove("shortcuts");
+        MainWindow window;
+        window.show();
+        window.sample();
+        QCoreApplication::processEvents();
+        const auto canvasGeometry = window.canvas()->geometry();
+        const auto revision = window.document()->revision();
+        auto *preferencesAction = window.findChild<QAction *>("preferencesAction");
+        QCOMPARE(preferencesAction->shortcut(), QKeySequence("Ctrl+,"));
+        preferencesAction->trigger();
+        auto *dialog = window.findChild<PreferencesDialog *>();
+        QVERIFY(dialog);
+        QCOMPARE(dialog->parentWidget(), &window);
+        QCOMPARE(dialog->windowModality(), Qt::WindowModal);
+        auto *editor = dialog->findChild<QKeySequenceEdit *>("transformLayersActionShortcut");
+        auto *action = window.findChild<QAction *>("transformLayersAction");
+        const auto original = action->shortcut();
+        auto *sections = dialog->findChild<QTabWidget *>("preferenceSections");
+        sections->setCurrentIndex(2);
+        editor->setKeySequence(QKeySequence("Ctrl+Alt+T"));
+        preferencesAction->trigger();
+        QCOMPARE(window.findChildren<PreferencesDialog *>().size(), 1);
+        QCOMPARE(editor->keySequence(), QKeySequence("Ctrl+Alt+T"));
+        QCOMPARE(window.canvas()->geometry(), canvasGeometry);
+        QCOMPARE(window.document()->revision(), revision);
+        dialog->findChild<QPushButton *>("closePreferences")->click();
+        QVERIFY(!dialog->isVisible());
+        QCOMPARE(action->shortcut(), original);
+        preferencesAction->trigger();
+        QCOMPARE(editor->keySequence(), original);
+        editor->setKeySequence(QKeySequence("Ctrl+Alt+T"));
+        QTest::keyClick(dialog->findChild<QPushButton *>("closePreferences"), Qt::Key_Escape);
+        QVERIFY(!dialog->isVisible());
+        preferencesAction->trigger();
+        QCOMPARE(editor->keySequence(), original);
+        editor->setKeySequence(QKeySequence("Ctrl+Alt+T"));
+        dialog->findChild<QPushButton *>("applyShortcuts")->click();
+        QVERIFY(dialog->isVisible());
+        dialog->close();
+        QVERIFY(!dialog->isVisible());
+        preferencesAction->trigger();
+        QCOMPARE(editor->keySequence(), QKeySequence("Ctrl+Alt+T"));
+        editor->setKeySequence(QKeySequence("Ctrl+Alt+U"));
+        dialog->close();
+        preferencesAction->trigger();
+        QCOMPARE(editor->keySequence(), QKeySequence("Ctrl+Alt+T"));
+        dialog->close();
+        QVERIFY(!QApplication::activeModalWidget());
+        QVERIFY(window.canvas()->isVisible());
+        QCOMPARE(window.canvas()->geometry(), canvasGeometry);
+        QCOMPARE(window.document()->revision(), revision);
+        QSettings().remove("shortcuts");
+        window.document()->markSaved(window.document()->revision());
+    }
     void preferencesCaptureLayouts() {
         const QString output = qEnvironmentVariable("COMPOSITOR_PREFERENCES_CAPTURES");
         MainWindow window;
         window.resize(1100, 800);
         window.show();
         window.findChild<QAction *>("preferencesAction")->trigger();
-        auto *sections = window.findChild<QTabWidget *>("preferenceSections");
+        auto *dialog = window.findChild<PreferencesDialog *>();
+        auto *sections = dialog->findChild<QTabWidget *>("preferenceSections");
         for (const auto &entry : Localization::languages()) {
             window.localization()->setLanguage(entry.first);
-            for (int section = 0; section < 3; ++section) {
-                sections->setCurrentIndex(section);
-                QCoreApplication::processEvents();
-                auto *shortcut = window.findChild<QKeySequenceEdit *>("aboutActionShortcut");
-                QCOMPARE(shortcut->findChild<QLineEdit *>()->placeholderText(),
-                         window.localization()->text("pressShortcut"));
-                QCOMPARE(window.size(), QSize(1100, 800));
-                QVERIFY(window.findChild<QPushButton *>("returnToWorkspace")->isVisible());
-                if (!output.isEmpty()) {
-                    QDir().mkpath(output);
-                    QVERIFY(window.grab().save(output + "/preferences-" + entry.first + "-" + QString::number(section) +
-                                               ".png"));
+            for (const QSize size : {QSize(820, 640), QSize(680, 480)}) {
+                dialog->resize(size);
+                for (int section = 0; section < 3; ++section) {
+                    sections->setCurrentIndex(section);
+                    QCoreApplication::processEvents();
+                    auto *shortcut = dialog->findChild<QKeySequenceEdit *>("aboutActionShortcut");
+                    QCOMPARE(shortcut->findChild<QLineEdit *>()->placeholderText(),
+                             window.localization()->text("pressShortcut"));
+                    QCOMPARE(dialog->windowTitle(), window.localization()->text("preferences"));
+                    QCOMPARE(window.size(), QSize(1100, 800));
+                    QCOMPARE(dialog->size(), size);
+                    auto *close = dialog->findChild<QPushButton *>("closePreferences");
+                    QVERIFY(close->isVisible());
+                    QVERIFY(dialog->rect().contains(QRect(close->mapTo(dialog, QPoint()), close->size())));
+                    if (!output.isEmpty()) {
+                        QDir().mkpath(output);
+                        QVERIFY(dialog->grab().save(output + "/preferences-" + entry.first + "-" +
+                                                    QString::number(section) + "-" + QString::number(size.width()) +
+                                                    ".png"));
+                    }
                 }
             }
         }
+        dialog->close();
         QSettings().setValue("language", "en");
     }
     void standardDialogsFollowLanguage() {

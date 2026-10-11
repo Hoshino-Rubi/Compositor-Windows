@@ -1,6 +1,6 @@
 #pragma once
 #include "Localization.h"
-#include <QWidget>
+#include <QDialog>
 #include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
@@ -18,16 +18,15 @@ struct Preferences {
     static Preferences load();
     void save() const;
 };
-class PreferencesPage : public QWidget {
+class PreferencesDialog : public QDialog {
     Q_OBJECT
   public:
-    PreferencesPage(Localization *localization, QList<QAction *> actions, QWidget *parent = nullptr);
+    PreferencesDialog(Localization *localization, QList<QAction *> actions, QWidget *parent = nullptr);
     void refresh();
     void showShortcuts();
   signals:
     void settingsChanged();
     void shortcutsChanged();
-    void returnRequested();
 
   private:
     Localization *localization_;

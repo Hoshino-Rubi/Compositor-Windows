@@ -150,12 +150,7 @@ void MainWindow::buildActions() {
     add("undo", "Ctrl+Z", [this] { document_.undo(); });
     add("redo", "Ctrl+Shift+Z", [this] { document_.redo(); });
     auto *redo = new QShortcut(QKeySequence("Ctrl+Y"), this);
-    connect(redo, &QShortcut::activated, this, [this] {
-        invoke([this] {
-            if (workspacePages_->currentIndex() == 0)
-                document_.redo();
-        });
-    });
+    connect(redo, &QShortcut::activated, this, [this] { invoke([this] { document_.redo(); }); });
     add("duplicate", "Ctrl+J", [this] {
         const int i = document_.state().index(document_.state().active);
         if (i >= 0)

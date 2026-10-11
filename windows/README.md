@@ -8,15 +8,15 @@ Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.
 Download the portable application from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
 Extract `Compositor-0.3.4-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
-Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately from the Preferences tab: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
 
 ## Version 0.3.4
 
-- An independent **Preferences** tab beside **Workspace**, also available from Edit → Preferences (`Ctrl+,`). Open documents, unsaved edits and undo history remain in the workspace.
+- A **Preferences** window, available from Edit → Preferences (`Ctrl+,`), with General, Canvas and Keyboard shortcuts settings.
 - **General:** interface language or Follow system, remembered window size/position, and automatic reload of externally changed projects. Only clean documents reload; unsaved edits remain protected.
 - **Canvas:** default 8/16-bit depth and 72/300 DPI for new canvases, rulers, grid, guides, snapping and grid spacing. Display settings apply immediately and persist across launches; document defaults do not convert existing images.
-- **Keyboard shortcuts:** edit and Apply from the same preferences page, with duplicate/reserved-key checks and per-section defaults. Escape, Delete and Ctrl+Y remain fixed shortcuts. Unapplied shortcut edits stay pending while switching pages and are discarded when the application exits.
-- Added complete Japanese, Korean, German, French and Spanish catalogs, bringing the total to eight languages. All 555 strings, placeholders and import extensions are checked. Regional locales resolve to the corresponding language; unsupported system languages fall back to English. Qt dialog translations are bundled too.
+- **Keyboard shortcuts:** edit and Apply in Preferences, with duplicate/reserved-key checks and per-section defaults. Escape, Delete and Ctrl+Y remain fixed shortcuts. Choose Apply to save shortcut changes; closing Preferences discards unapplied shortcuts.
+- Added complete Japanese, Korean, German, French and Spanish catalogs, bringing the total to eight languages. All 553 strings, placeholders and import extensions are checked. Regional locales resolve to the corresponding language; unsupported system languages fall back to English. Qt dialog translations are bundled too.
 - Updated stale import, RAW and project-format messages to match the existing 16-bit support. The `.comp` format and editing precision are unchanged.
 
 ## Version 0.3.3

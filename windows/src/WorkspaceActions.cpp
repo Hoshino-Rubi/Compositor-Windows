@@ -280,7 +280,6 @@ void MainWindow::stashTab() {
         documents_[currentTab_] = {document_.session(), path_, name_, diskDigest_, canvas_->zoom()};
 }
 void MainWindow::adoptDocument(State state, QString name, QString path, QByteArray digest, bool saved) {
-    workspacePages_->setCurrentIndex(0);
     canvas_->finishInlineText();
     canvas_->cancelGesture();
     stashTab();

@@ -36,11 +36,17 @@ void Preferences::save() const {
     s.setValue("preferences/rememberWindow", rememberWindow);
     s.setValue("preferences/autoReload", autoReload);
 }
-PreferencesPage::PreferencesPage(Localization *localization, QList<QAction *> actions, QWidget *parent)
-    : QWidget(parent), localization_(localization), actions_(std::move(actions)) {
-    setObjectName("preferencesPage");
+PreferencesDialog::PreferencesDialog(Localization *localization, QList<QAction *> actions, QWidget *parent)
+    : QDialog(parent), localization_(localization), actions_(std::move(actions)) {
+    setObjectName("preferencesDialog");
+    setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+    setWindowModality(Qt::WindowModal);
+    setMinimumSize(680, 480);
+    resize(820, 640);
+    if (parent && parent->testAttribute(Qt::WA_DontShowOnScreen))
+        setAttribute(Qt::WA_DontShowOnScreen);
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(28, 22, 28, 22);
+    outer->setContentsMargins(20, 18, 20, 18);
     outer->setSpacing(16);
     auto label = [&](const QString &key) {
         auto *l = new QLabel;
@@ -167,14 +173,22 @@ PreferencesPage::PreferencesPage(Localization *localization, QList<QAction *> ac
     buttons_.append({reset, "resetSection"});
     footer->addWidget(reset);
     footer->addStretch();
-    auto *back = new QPushButton;
-    back->setObjectName("returnToWorkspace");
-    buttons_.append({back, "backToWorkspace"});
-    footer->addWidget(back);
+    auto *close = new QPushButton;
+    close->setObjectName("closePreferences");
+    close->setAutoDefault(false);
+    reset->setAutoDefault(false);
+    apply_->setAutoDefault(false);
+    buttons_.append({close, "close"});
+    footer->addWidget(close);
     outer->addLayout(footer);
-    connect(back, &QPushButton::clicked, this, &PreferencesPage::returnRequested);
-    connect(reset, &QPushButton::clicked, this, &PreferencesPage::resetSection);
-    connect(apply_, &QPushButton::clicked, this, &PreferencesPage::applyShortcuts);
+    connect(close, &QPushButton::clicked, this, &QDialog::reject);
+    connect(this, &QDialog::finished, this, [this] {
+        shortcutDirty_ = false;
+        conflict_.clear();
+        refresh();
+    });
+    connect(reset, &QPushButton::clicked, this, &PreferencesDialog::resetSection);
+    connect(apply_, &QPushButton::clicked, this, &PreferencesDialog::applyShortcuts);
     connect(language_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
         if (!refreshing_) {
             localization_->setLanguage(language_->currentData().toString());
@@ -182,14 +196,14 @@ PreferencesPage::PreferencesPage(Localization *localization, QList<QAction *> ac
         }
     });
     for (auto *box : {remember_, reload_, rulers_, grid_, guides_, snap_})
-        connect(box, &QCheckBox::toggled, this, &PreferencesPage::saveSettings);
+        connect(box, &QCheckBox::toggled, this, &PreferencesDialog::saveSettings);
     for (auto *box : {depth_, resolution_})
-        connect(box, qOverload<int>(&QComboBox::currentIndexChanged), this, &PreferencesPage::saveSettings);
-    connect(spacing_, qOverload<int>(&QSpinBox::valueChanged), this, &PreferencesPage::saveSettings);
-    connect(localization_, &Localization::changed, this, &PreferencesPage::retranslate);
+        connect(box, qOverload<int>(&QComboBox::currentIndexChanged), this, &PreferencesDialog::saveSettings);
+    connect(spacing_, qOverload<int>(&QSpinBox::valueChanged), this, &PreferencesDialog::saveSettings);
+    connect(localization_, &Localization::changed, this, &PreferencesDialog::retranslate);
     refresh();
 }
-void PreferencesPage::refresh() {
+void PreferencesDialog::refresh() {
     refreshing_ = true;
     const auto p = Preferences::load();
     language_->setCurrentIndex(language_->findData(localization_->selection()));
@@ -208,10 +222,10 @@ void PreferencesPage::refresh() {
     refreshing_ = false;
     retranslate();
 }
-void PreferencesPage::showShortcuts() {
+void PreferencesDialog::showShortcuts() {
     sections_->setCurrentIndex(2);
 }
-void PreferencesPage::saveSettings() {
+void PreferencesDialog::saveSettings() {
     if (refreshing_)
         return;
     Preferences p;
@@ -227,7 +241,7 @@ void PreferencesPage::saveSettings() {
     p.save();
     emit settingsChanged();
 }
-void PreferencesPage::resetSection() {
+void PreferencesDialog::resetSection() {
     if (sections_->currentIndex() == 2) {
         for (int i = 0; i < actions_.size(); ++i)
             editors_[i]->setKeySequence(
@@ -254,7 +268,7 @@ void PreferencesPage::resetSection() {
     refresh();
     emit settingsChanged();
 }
-void PreferencesPage::applyShortcuts() {
+void PreferencesDialog::applyShortcuts() {
     // Escape, Delete and Ctrl+Y are contextual/fixed workspace shortcuts.
     QSet<QString> used{"Esc", "Del", "Ctrl+Y"};
     for (auto *editor : editors_) {
@@ -284,14 +298,15 @@ void PreferencesPage::applyShortcuts() {
     emit shortcutsChanged();
     updateShortcutStatus();
 }
-void PreferencesPage::updateShortcutStatus() {
+void PreferencesDialog::updateShortcutStatus() {
     shortcutStatus_->setText(!conflict_.isEmpty() ? t("shortcutConflict").replace("{detail}", conflict_)
                              : shortcutDirty_     ? t("shortcutPending")
                                                   : t("shortcutNote"));
     shortcutStatus_->setStyleSheet(conflict_.isEmpty() ? "" : "color:#ffb3a7;");
     apply_->setEnabled(shortcutDirty_);
 }
-void PreferencesPage::retranslate() {
+void PreferencesDialog::retranslate() {
+    setWindowTitle(t("preferences"));
     for (const auto &entry : labels_)
         entry.first->setText(t(entry.second));
     for (const auto &entry : buttons_)

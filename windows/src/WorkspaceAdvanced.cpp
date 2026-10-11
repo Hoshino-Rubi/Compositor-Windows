@@ -21,6 +21,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QSignalBlocker>
+#include <QScreen>
 namespace comp {
 void MainWindow::selectSubject(QPoint point, bool remove) {
     if (!document_.hasDocument() || busy_)
@@ -58,10 +59,16 @@ void MainWindow::shortcutsDialog() {
     showPreferences(true);
 }
 void MainWindow::showPreferences(bool shortcuts) {
-    preferences_->refresh();
+    if (!preferences_->isVisible()) {
+        preferences_->refresh();
+        const QSize available = screen()->availableGeometry().size() - QSize(48, 64);
+        preferences_->resize(preferences_->size().boundedTo(available));
+        preferences_->open();
+    }
     if (shortcuts)
         preferences_->showShortcuts();
-    workspacePages_->setCurrentIndex(1);
+    preferences_->raise();
+    preferences_->activateWindow();
 }
 void MainWindow::applyPreferences() {
     const auto p = Preferences::load();
