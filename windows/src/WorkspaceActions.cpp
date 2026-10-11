@@ -4,6 +4,11 @@
 #include "Renderer.h"
 #include "Icons.h"
 #include "Filters.h"
+#include "LayerClipboard.h"
+#include <QMimeData>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QClipboard>
 #include <QApplication>
 #include <QDialog>
@@ -19,6 +24,7 @@
 #include <QTextEdit>
 #include <QTimer>
 #include <QMenu>
+#include <QMenuBar>
 #include <QVBoxLayout>
 #include <QStatusBar>
 #include <QSignalBlocker>
@@ -41,15 +47,35 @@ void MainWindow::buildEditingActions() {
             closeTab(currentTab_);
     });
     add("cut", "Ctrl+X", [this] {
-        auto image = document_.copyPixels();
-        if (!image.isNull())
-            QApplication::clipboard()->setImage(image);
-        document_.fill(Qt::transparent, true);
+        if (document_.state().selectionActive) {
+            auto image = document_.copyPixels();
+            if (!image.isNull()) {
+                QApplication::clipboard()->setImage(image);
+                document_.fill(Qt::transparent, true);
+            }
+        } else {
+            const auto ids = selectedLayers();
+            const auto encoded = encodeLayers(document_.state(), ids);
+            if (!encoded.isEmpty()) {
+                auto *mime = new QMimeData;
+                mime->setData(LayerMimeType, encoded);
+                QApplication::clipboard()->setMimeData(mime);
+                cutLayers(document_, ids);
+            }
+        }
     });
     add("copy", "Ctrl+C", [this] {
-        auto image = document_.copyPixels();
-        if (!image.isNull())
-            QApplication::clipboard()->setImage(image);
+        if (document_.state().selectionActive) {
+            auto image = document_.copyPixels();
+            if (!image.isNull()) QApplication::clipboard()->setImage(image);
+        } else {
+            const auto encoded = encodeLayers(document_.state(), selectedLayers());
+            if (!encoded.isEmpty()) {
+                auto *mime = new QMimeData;
+                mime->setData(LayerMimeType, encoded);
+                QApplication::clipboard()->setMimeData(mime);
+            }
+        }
     });
     add("copyMerged", "Ctrl+Shift+C", [this] {
         auto image = document_.copyPixels(true);
@@ -57,9 +83,13 @@ void MainWindow::buildEditingActions() {
             QApplication::clipboard()->setImage(image);
     });
     add("paste", "Ctrl+V", [this] {
-        auto image = QApplication::clipboard()->image();
-        if (!image.isNull())
-            document_.pastePixels(image, t("pastedLayer"));
+        const auto *mime = QApplication::clipboard()->mimeData();
+        if (mime && mime->hasFormat(LayerMimeType))
+            pasteLayers(document_, mime->data(LayerMimeType));
+        else {
+            auto image = QApplication::clipboard()->image();
+            if (!image.isNull()) document_.pastePixels(image, t("pastedLayer"));
+        }
     });
     add("fillForeground", "Alt+Backspace", [this] { document_.fill(canvas_->color(), false, mask_->isChecked()); });
     add("fillBackground", "Ctrl+Backspace",
@@ -140,17 +170,12 @@ void MainWindow::buildEditingActions() {
         if (!lastFilter_.isEmpty())
             document_.applyFilter(lastFilter_, mask_->isChecked());
     });
-    add("toggleFullscreen", "F", [this] {
-        if (isFullScreen())
-            showNormal();
-        else
-            showFullScreen();
-    });
+    add("toggleFullscreen", "F", [this] { toggleCanvasFullscreen(); });
     auto *leaveFullscreen = new QAction(this);
     leaveFullscreen->setShortcut(Qt::Key_Escape);
     connect(leaveFullscreen, &QAction::triggered, this, [this] {
-        if (isFullScreen())
-            showNormal();
+        if (fullscreenCanvas_)
+            toggleCanvasFullscreen();
         canvas_->cancelGesture();
     });
     addAction(leaveFullscreen);
@@ -163,6 +188,18 @@ void MainWindow::buildEditingActions() {
     add("snap", "", [this] { canvas_->setSnap(actions_["snap"]->isChecked()); });
     actions_["snap"]->setCheckable(true);
     actions_["snap"]->setChecked(true);
+    for (const auto &entry : QList<QPair<QString, bool>>{{"snapGuides", true}, {"snapGrid", false},
+                                                         {"snapLayers", true}, {"snapBounds", true},
+                                                         {"lockGuides", false}, {"pixelGrid", false},
+                                                         {"transformControls", true}}) {
+        add(entry.first, "", [this, key = entry.first] {
+            QSettings().setValue("preferences/" + key, actions_[key]->isChecked());
+            applyPreferences();
+            preferences_->refresh();
+        });
+        actions_[entry.first]->setCheckable(true);
+        actions_[entry.first]->setChecked(entry.second);
+    }
     add("gridSettings", "", [this] {
         bool ok = false;
         int n = QInputDialog::getInt(this, t("gridSettings"), t("gridSpacing"), Preferences::load().gridSpacing, 4,
@@ -205,7 +242,12 @@ void MainWindow::buildEditingActions() {
                                                             {"colorBalance", "Color Balance"},
                                                             {"gradientMap", "Gradient Map"},
                                                             {"cameraRaw", "Camera Raw"},
-                                                            {"scanlines", "Scanlines"}}) {
+                                                            {"scanlines", "Scanlines"},
+                                                             {"vignette", "Vignette"},
+                                                             {"bloom", "Bloom / Glow"},
+                                                             {"dither", "Dither"},
+                                                             {"tonalContrast", "Tonal Contrast"},
+                                                             {"lensCorrection", "Lens Correction"}}) {
         const QString key = "filter." + entry.first;
         add(key, "", [this, kind = entry.second] { filterDialog(kind, false); });
     }
@@ -350,5 +392,44 @@ bool MainWindow::closeTab(int index) {
         switchTab(next);
     }
     return true;
+}
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == tabs_ && (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)) {
+        auto *drag = static_cast<QDropEvent *>(event);
+        if (drag->mimeData()->hasFormat(LayerMimeType) && tabs_->tabAt(drag->position().toPoint()) >= 0) {
+            drag->acceptProposedAction();
+            return true;
+        }
+    }
+    if (watched == tabs_ && event->type() == QEvent::Drop) {
+        auto *drop = static_cast<QDropEvent *>(event);
+        const int index = tabs_->tabAt(drop->position().toPoint());
+        if (index >= 0 && drop->mimeData()->hasFormat(LayerMimeType)) {
+            const auto encodedLayers = drop->mimeData()->data(LayerMimeType);
+            invoke([&] {
+                tabs_->setCurrentIndex(index);
+                if (layerClipboardDocument(encodedLayers) != document_.state().id)
+                    pasteLayers(document_, encodedLayers);
+            });
+            drop->acceptProposedAction();
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+void MainWindow::toggleCanvasFullscreen() {
+    fullscreenCanvas_ = !fullscreenCanvas_;
+    const auto widgets = QList<QWidget *>{menuBar(), statusBar(), findChild<QWidget *>("documentBar"),
+                                          findChild<QWidget *>("toolHeader"), findChild<QWidget *>("toolRail"),
+                                          findChild<QWidget *>("layerPanel")};
+    if (fullscreenCanvas_) {
+        windowStateBeforeFullscreen_ = windowState();
+        showFullScreen();
+    }
+    for (auto *widget : widgets)
+        if (widget) widget->setVisible(!fullscreenCanvas_);
+    canvas_->setFullscreenCanvas(fullscreenCanvas_);
+    if (!fullscreenCanvas_) setWindowState(windowStateBeforeFullscreen_);
+    canvas_->setFocus();
 }
 } // namespace comp

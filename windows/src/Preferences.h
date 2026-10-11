@@ -14,6 +14,8 @@ namespace comp {
 struct Preferences {
     int depth = 8, resolution = 72, gridSpacing = 100;
     bool rulers = false, grid = false, guides = true, snap = true;
+    bool snapGuides = true, snapGrid = false, snapLayers = true, snapBounds = true;
+    bool lockGuides = false, pixelGrid = false, transformControls = true;
     bool rememberWindow = true, autoReload = true;
     static Preferences load();
     void save() const;
@@ -34,6 +36,7 @@ class PreferencesDialog : public QDialog {
     QComboBox *language_, *depth_, *resolution_;
     QSpinBox *spacing_;
     QCheckBox *remember_, *reload_, *rulers_, *grid_, *guides_, *snap_;
+    QCheckBox *snapGuides_, *snapGrid_, *snapLayers_, *snapBounds_, *lockGuides_, *pixelGrid_, *transformControls_;
     QTableWidget *shortcuts_;
     QLabel *shortcutStatus_;
     QPushButton *apply_;

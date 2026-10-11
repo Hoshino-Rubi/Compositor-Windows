@@ -52,6 +52,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(&document_, &Document::selectionChanged, this, &MainWindow::refreshSelection);
     connect(&document_, &Document::visualChanged, this, &MainWindow::refreshSelection);
     connect(canvas_, &Canvas::objectRequested, this, [this](QPoint point) { selectSubject(point); });
+    connect(canvas_, &Canvas::fullscreenRequested, this, &MainWindow::toggleCanvasFullscreen);
     connect(canvas_, &Canvas::deleteRequested, this, [this] { actions_["delete"]->trigger(); });
     connect(canvas_, &Canvas::failed, this, &MainWindow::showError);
     connect(canvas_, &Canvas::textRequested, this, &MainWindow::addText);
@@ -208,7 +209,7 @@ void MainWindow::buildActions() {
     group->setExclusive(true);
     const auto keys = ToolKeys;
     const QStringList shortcuts{"V", "B", "E", "U", "Shift+U", "T", "I", "H", "C",
-                                "M", "L", "W", "S", "R",       "G", "Z", "J"};
+                                "M", "L", "W", "S", "R",       "G", "Z", "J", ""};
     for (int i = 0; i < keys.size(); ++i) {
         auto *a = new QAction(this);
         a->setCheckable(true);

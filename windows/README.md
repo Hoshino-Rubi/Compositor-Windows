@@ -1,14 +1,32 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.3.4**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.0**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
 Download the portable application from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.3.4-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.0-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.0
+
+Merged the upstream `main` branch through `3081719d5178b466214860fe5fcf5691394dc558` (October 11, 2026). The Qt port now adds:
+
+- Separate Vignette, Bloom / Glow, Dither (including halftone and text styles), Tonal Contrast and Lens Correction filters, with previews, editable controls and undo. Both 8- and 16-bit documents are supported; dithering intentionally reduces RGB color levels.
+- Basic and Advanced Remove Background preview. Advanced mode offers edge refinement, matte contrast and edge shift; both modes commit a reversible layer mask rather than deleting image pixels.
+- Copy/cut/paste entire selected layers and folders when no pixel selection is active, including masks, live metadata, group hierarchy and 16-bit precision. Alt-drag duplicates a layer; drag to another document tab or layer panel copies it. A pixel selection retains pixel clipboard behavior.
+- Snap To Guides, Grid, Layers and Canvas Bounds controls for moving and cropping; crop can start from a selection, snap during drag, or expand symmetrically with Alt. Movable/lockable guides, pixel grid at high zoom and togglable transform controls. Line shape tool, aligned clone/sample-all-layers controls, three healing modes and separate Blur radius.
+- Canvas-only full screen (`F`, `Escape` to leave) and Open Recent for projects and images.
+- Memory-scaled document limits: up to 30,000px per side, 200MP per canvas, 400MP of image pixels and 400MP of masks, and 10,000 layers on sufficiently equipped machines. Lower-memory systems retain conservative floors (64MP canvas, 100MP each for image and mask); CPU editing of very large canvases can be slow or run out of memory.
+- Oversized layered PSD/PSB imports crop pixels outside the canvas when that lets the document fit the memory budget; a conversion report identifies affected layers. Raw, RLE, ZIP and ZIP-prediction 8/16-bit layers are covered.
+- Original-resolution 512px preview tiles at 100% physical-pixel zoom and above, with bounded visible-tile caching, pan/zoom updates, edit invalidation and exact-pixel eyedropper sampling. The overview/navigator remains at most 2560px per side.
+- Direct3D 11 hardware compute preview compositing for 8/16-bit raster layers and all 24 blend modes, including masks and folder opacity. Unsupported documents/devices automatically use the reference CPU renderer; document pixels and exports are unchanged.
+- Group duplication offsets descendants and independent masks together; multi-layer reordering is one undo step. Leaving canvas-only fullscreen restores the previous maximized state.
+- All new UI labels are available in the eight bundled languages.
+
+**Known limitations:** GPU acceleration covers preview blend compositing, not brushes, filters, transforms, export or the full Metal pipeline. Documents with live adjustments/effects use CPU preview compositing. Noise, grain and motion-blur adjustment layers require a full-size temporary composite for accurate tile coordinates; other region renders use effect/blur halos. Those cases can remain slow or memory-intensive. CMYK/32-bit PSD and floating-point HDR remain unsupported. This release does not claim full performance or pixel-for-pixel feature parity with macOS.
 
 ## Version 0.3.4
 
@@ -72,9 +90,9 @@ Reads `.comp` versions 1–12. Writes version 11 for 8-bit documents and version
 
 PSD/PSB import supports 8-bit and 16-bit RGB, extending the upstream 8-bit scope. CMYK and 32-bit PSD remain unsupported. Editing uses integer sRGB, not a floating-point/HDR pipeline. Complex Photoshop objects, text warps and effects use raster fallbacks or conversion notices; PSD export is not provided.
 Camera Raw matches this application's controls, not Adobe's proprietary plugin or lens database. Windows object selection uses local U2Netp foreground inference and connected components, which can differ from macOS Vision.
-CPU rendering, fonts, geometry interpolation and effect edges can differ from Metal; pixel-identical output is not claimed.
+CPU/Direct3D preview rendering, fonts, geometry interpolation and effect edges can differ from Metal; pixel-identical output is not claimed. GPU previews can differ from integer CPU output by small rounding amounts; saved/exported pixels keep the reference CPU path. High-zoom tiles display source-resolution pixels; the overview is limited to 2560px per side. PSD layers cropped during import lose their off-canvas pixels. Set `COMPOSITOR_DISABLE_GPU=1` before launch to force CPU previews.
 
-Canvas: 16,384px per side, 64MP total, 100MP of source images and masks each, 1,000 layers. Large operations take time and memory.
+Canvas: up to 30,000px per side, 200MP total, 400MP each for source images and masks, and 10,000 layers; actual pixel budgets scale down with physical RAM. Large operations take time and memory.
 External changes reload clean tabs; dirty tabs retain their edits. Staged saves keep backups and check disk digests; directory replacement is not power-loss atomic.
 
 ## Build

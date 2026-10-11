@@ -1,6 +1,7 @@
 #include "Pixels.h"
 #include "MainWindow.h"
 #include "Icons.h"
+#include "LayerClipboard.h"
 #include <QApplication>
 #include <QMenuBar>
 #include <QMenu>
@@ -16,6 +17,10 @@
 #include <QPainter>
 #include <QHeaderView>
 #include <QDropEvent>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QMimeData>
+#include <QFileInfo>
 #include <QColorDialog>
 #include <QStyledItemDelegate>
 namespace comp {
@@ -40,15 +45,34 @@ class LayerDelegate final : public QStyledItemDelegate {
 };
 class LayerTree final : public QTreeWidget {
   public:
-    std::function<void(QString, QString, QString)> moved;
+    std::function<void(QStringList, QString, QString)> moved;
+    std::function<QByteArray(QStringList)> encoded;
+    std::function<QString()> documentId;
+    std::function<void(QByteArray, QString, QString, bool)> pasted;
     using QTreeWidget::QTreeWidget;
 
   protected:
+    QMimeData *mimeData(const QList<QTreeWidgetItem *> &items) const override {
+        auto *mime = QTreeWidget::mimeData(items);
+        QStringList ids;
+        for (auto *item : items) ids.append(item->data(0, Qt::UserRole).toString());
+        if (encoded) mime->setData(LayerMimeType, encoded(ids));
+        return mime;
+    }
+    void dragEnterEvent(QDragEnterEvent *event) override {
+        if (event->mimeData()->hasFormat(LayerMimeType)) event->acceptProposedAction();
+        else QTreeWidget::dragEnterEvent(event);
+    }
+    void dragMoveEvent(QDragMoveEvent *event) override {
+        if (event->mimeData()->hasFormat(LayerMimeType)) event->acceptProposedAction();
+        else QTreeWidget::dragMoveEvent(event);
+    }
     void dropEvent(QDropEvent *event) override {
-        auto *dragged = currentItem(), *target = itemAt(event->position().toPoint());
-        if (!dragged)
+        auto *target = itemAt(event->position().toPoint());
+        if (!event->mimeData()->hasFormat(LayerMimeType)) {
+            QTreeWidget::dropEvent(event);
             return;
-        const QString id = dragged->data(0, Qt::UserRole).toString();
+        }
         QString parent, before;
         if (target) {
             const QRect box = visualItemRect(target);
@@ -70,9 +94,16 @@ class LayerTree final : public QTreeWidget {
                 }
             }
         }
+        const auto encodedLayers = event->mimeData()->data(LayerMimeType);
+        const bool duplicate = event->modifiers().testFlag(Qt::AltModifier);
+        if (duplicate || layerClipboardDocument(encodedLayers) != documentId()) {
+            if (pasted) pasted(encodedLayers, parent, before, duplicate);
+        } else {
+            QStringList ids;
+            for (auto *item : selectedItems()) ids.append(item->data(0, Qt::UserRole).toString());
+            if (moved) moved(ids, parent, before);
+        }
         event->acceptProposedAction();
-        if (moved)
-            moved(id, parent, before);
     }
 };
 void MainWindow::buildUi() {
@@ -102,7 +133,23 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
                 m->addAction(actions_[a]);
         return m;
     };
-    menu("file", {"new", "open", "openProject", "import", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
+    auto *fileMenu = menu("file", {"new", "open", "openProject", "import", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
+    auto *recentMenu = new QMenu(fileMenu);
+    recentMenu->setObjectName("recentMenu");
+    fileMenu->insertMenu(actions_["import"], recentMenu);
+    connect(recentMenu, &QMenu::aboutToShow, this, [this, recentMenu] {
+        recentMenu->clear();
+        for (const QString &path : QSettings().value("recent").toStringList()) {
+            if (!QFileInfo::exists(path)) continue;
+            auto *action = recentMenu->addAction(QFileInfo(path).fileName());
+            action->setToolTip(path);
+            connect(action, &QAction::triggered, this, [this, path] { openProject(path); });
+        }
+        if (recentMenu->isEmpty()) {
+            auto *empty = recentMenu->addAction(t("recentEmpty"));
+            empty->setEnabled(false);
+        }
+    });
     menu("edit", {"undo", "redo", "", "cut", "copy", "copyMerged", "paste", "", "fillForeground", "fillBackground",
                   "clearPixels", "contentFill", "", "preferences"});
     menu("image", {"depth8", "depth16", "", "imageSize", "canvasSize", "trim", "", "flipCanvasX", "flipCanvasY",
@@ -116,14 +163,20 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     auto *adjust = menu("adjustments", {"filter.hsv", "filter.levels", "filter.curves", "filter.exposure",
                                         "filter.grayscale", "filter.invert", "filter.blur", "filter.motionBlur",
                                         "filter.noise", "filter.grain", "filter.colorBalance", "filter.gradientMap",
-                                        "filter.cameraRaw", "filter.scanlines", "", "lastFilter"});
+                                        "filter.cameraRaw", "filter.scanlines", "filter.vignette", "filter.bloom",
+                                         "filter.dither", "filter.tonalContrast", "filter.lensCorrection", "", "lastFilter"});
     auto *adjustLayer = adjust->addMenu("");
     adjustLayer->setObjectName("adjustmentLayerMenu");
     for (const auto &key : QStringList{"hsv", "levels", "curves", "exposure", "grayscale", "colorBalance",
                                        "gradientMap", "grain", "noise", "blur", "motionBlur", "invert"})
         adjustLayer->addAction(actions_["adjustment." + key]);
-    menu("view", {"fit", "actualSize", "zoomIn", "zoomOut", "", "showRulers", "showGuides", "showGrid", "snap",
-                  "gridSettings", "addGuide", "clearGuides", "", "toggleFullscreen", "searchCommands"});
+    auto *view = menu("view", {"fit", "actualSize", "zoomIn", "zoomOut", "", "showRulers", "showGuides", "showGrid", "snap",
+                  "gridSettings", "addGuide", "clearGuides", "lockGuides", "pixelGrid", "transformControls",
+                  "", "toggleFullscreen", "searchCommands"});
+    auto *snapMenu = view->addMenu("");
+    snapMenu->setObjectName("snapTargetsMenu");
+    for (const auto &key : QStringList{"snapGuides", "snapGrid", "snapLayers", "snapBounds"})
+        snapMenu->addAction(actions_[key]);
     menu("help", {"shortcuts", "about"});
     auto *root = new QWidget;
     auto *outer = new QVBoxLayout(root);
@@ -152,6 +205,8 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     tabs_->setDrawBase(false);
     tabs_->setElideMode(Qt::ElideRight);
     tabs_->setTabsClosable(false);
+    tabs_->setAcceptDrops(true);
+    tabs_->installEventFilter(this);
     barRow->addWidget(tabs_, 1);
     connect(tabs_, &QTabBar::currentChanged, this, &MainWindow::switchTab);
     connect(tabs_, &QTabBar::tabCloseRequested, this, &MainWindow::closeTab);
@@ -233,6 +288,27 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     retouchMode_->addItems({"", "", ""});
     brush->addWidget(retouchMode_);
     connect(retouchMode_, qOverload<int>(&QComboBox::currentIndexChanged), canvas_, &Canvas::setRetouchMode);
+    connect(retouchMode_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this] { setTool(canvas_->tool()); });
+    healingMode_ = new QComboBox;
+    healingMode_->setObjectName("healingMode");
+    healingMode_->addItems({"", "", ""});
+    brush->addWidget(healingMode_);
+    connect(healingMode_, qOverload<int>(&QComboBox::currentIndexChanged), canvas_, &Canvas::setHealingMode);
+    cloneAligned_ = new QCheckBox;
+    cloneAligned_->setChecked(true);
+    brush->addWidget(cloneAligned_);
+    connect(cloneAligned_, &QCheckBox::toggled, canvas_, &Canvas::setCloneAligned);
+    cloneSampleAll_ = new QCheckBox;
+    brush->addWidget(cloneSampleAll_);
+    connect(cloneSampleAll_, &QCheckBox::toggled, canvas_, &Canvas::setCloneSampleAll);
+    label("blurRadius", brush)->setObjectName("blurRadiusLabel");
+    blurRadius_ = new QSpinBox;
+    blurRadius_->setRange(1, 250);
+    blurRadius_->setValue(5);
+    blurRadius_->setSuffix(" px");
+    brush->addWidget(blurRadius_);
+    connect(blurRadius_, qOverload<int>(&QSpinBox::valueChanged), canvas_, &Canvas::setBlurRadius);
     label("size", brush);
     brushSize_ = new QSpinBox;
     brushSize_->setRange(1, 2000);
@@ -305,16 +381,24 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     selection->addStretch();
     auto *shape = page();
     shapeMode_ = new QComboBox;
-    shapeMode_->addItems({"", ""});
+    shapeMode_->addItems({"", "", ""});
     shape->addWidget(shapeMode_);
     connect(shapeMode_, qOverload<int>(&QComboBox::activated), this,
-            [this](int i) { setTool(i == 0 ? Tool::Rectangle : Tool::Ellipse); });
-    label("radius", shape);
+            [this](int i) { setTool(i == 0 ? Tool::Rectangle : i == 1 ? Tool::Ellipse : Tool::Line); });
+    label("radius", shape)->setObjectName("cornerRadiusLabel");
     auto *radius = new QSpinBox;
     radius->setRange(0, 5000);
     radius->setSuffix(" px");
+    radius->setObjectName("cornerRadiusSpin");
     shape->addWidget(radius);
     connect(radius, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) { canvas_->setCornerRadius(v); });
+    label("lineWidth", shape)->setObjectName("lineWidthLabel");
+    lineWidth_ = new QSpinBox;
+    lineWidth_->setRange(1, 5000);
+    lineWidth_->setValue(4);
+    lineWidth_->setSuffix(" px");
+    shape->addWidget(lineWidth_);
+    connect(lineWidth_, qOverload<int>(&QSpinBox::valueChanged), canvas_, &Canvas::setLineWidth);
     auto *shapeColor = new QPushButton;
     buttons_.append({shapeColor, "color"});
     shape->addWidget(shapeColor);
@@ -388,7 +472,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     railLayout->setSpacing(3);
     const QVector<Tool> order{Tool::Move,      Tool::Marquee, Tool::Lasso,      Tool::Wand, Tool::Crop,
                               Tool::Brush,     Tool::Healing, Tool::Clone,      Tool::Blur, Tool::Gradient,
-                              Tool::Rectangle, Tool::Text,    Tool::Eyedropper, Tool::Hand, Tool::Zoom};
+                              Tool::Rectangle, Tool::Line, Tool::Text,    Tool::Eyedropper, Tool::Hand, Tool::Zoom};
     for (auto tool : order) {
         auto *b = toolButton(tools_[int(tool)], 36);
         b->setObjectName(ToolKeys[int(tool)] + "Button");
@@ -399,6 +483,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     }
     addAction(tools_[int(Tool::Eraser)]);
     addAction(tools_[int(Tool::Ellipse)]);
+    addAction(tools_[int(Tool::Line)]);
     railLayout->addSpacing(6);
     color_ = new QToolButton;
     color_->setObjectName("foregroundColor");
@@ -427,6 +512,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     split->setChildrenCollapsible(false);
     split->addWidget(stack_);
     auto *panel = new QWidget;
+    panel->setObjectName("layerPanel");
     panel->setMinimumWidth(235);
     panel->setMaximumWidth(430);
     auto *panelLayout = new QVBoxLayout(panel);
@@ -488,7 +574,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     layers_->setIndentation(14);
     layers_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     layers_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    layers_->setDragDropMode(QAbstractItemView::InternalMove);
+    layers_->setDragDropMode(QAbstractItemView::DragDrop);
     layers_->setDefaultDropAction(Qt::MoveAction);
     layers_->setEditTriggers(QAbstractItemView::EditKeyPressed);
     layers_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -499,9 +585,14 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     layers_->header()->setSectionResizeMode(2, QHeaderView::Fixed);
     layers_->setColumnWidth(2, 42);
     panelLayout->addWidget(layers_, 1);
-    tree->moved = [this](QString id, QString parent, QString before) {
+    tree->encoded = [this](QStringList ids) { return encodeLayers(document_.state(), ids); };
+    tree->documentId = [this] { return document_.state().id; };
+    tree->pasted = [this](QByteArray encodedLayers, QString parent, QString before, bool duplicate) {
+        invoke([&] { pasteLayers(document_, encodedLayers, parent, before, duplicate); });
+    };
+    tree->moved = [this](QStringList ids, QString parent, QString before) {
         QTimer::singleShot(0, this,
-                           [this, id, parent, before] { invoke([&] { document_.relocate(id, parent, before); }); });
+                           [this, ids, parent, before] { invoke([&] { moveLayers(document_, ids, parent, before); }); });
     };
     connect(layers_, &QTreeWidget::itemSelectionChanged, this, [this] {
         if (!refreshing_)
@@ -625,7 +716,10 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     connect(preferences_, &PreferencesDialog::settingsChanged, this, &MainWindow::applyPreferences);
     connect(preferences_, &PreferencesDialog::shortcutsChanged, this, &MainWindow::retranslate);
     const QList<QPair<QString, QString>> flags{
-        {"showRulers", "rulers"}, {"showGrid", "grid"}, {"showGuides", "guides"}, {"snap", "snap"}};
+        {"showRulers", "rulers"}, {"showGrid", "grid"}, {"showGuides", "guides"}, {"snap", "snap"},
+        {"snapGuides", "snapGuides"}, {"snapGrid", "snapGrid"}, {"snapLayers", "snapLayers"},
+        {"snapBounds", "snapBounds"}, {"lockGuides", "lockGuides"}, {"pixelGrid", "pixelGrid"},
+        {"transformControls", "transformControls"}};
     for (const auto &flag : flags)
         connect(actions_[flag.first], &QAction::toggled, this, [this, flag](bool enabled) {
             QSettings().setValue("preferences/" + flag.second, enabled);
@@ -667,6 +761,8 @@ void MainWindow::retranslate() {
         if (auto *menu = findChild<QMenu *>(key + "Menu"))
             menu->setTitle(t(key));
     }
+    findChild<QMenu *>("snapTargetsMenu")->setTitle(t("snapTargets"));
+    findChild<QMenu *>("recentMenu")->setTitle(t("openRecent"));
     for (const auto &l : labels_)
         l.first->setText(l.second == "x" ? "X" : l.second == "y" ? "Y" : t(l.second));
     for (const auto &b : buttons_)
@@ -684,6 +780,12 @@ void MainWindow::retranslate() {
     brushMode_->setItemText(1, t("eraser"));
     shapeMode_->setItemText(0, t("rectangle"));
     shapeMode_->setItemText(1, t("ellipse"));
+    shapeMode_->setItemText(2, t("line"));
+    healingMode_->setItemText(0, t("healingContentAware"));
+    healingMode_->setItemText(1, t("healingCreateTexture"));
+    healingMode_->setItemText(2, t("healingProximityMatch"));
+    cloneAligned_->setText(t("cloneAligned"));
+    cloneSampleAll_->setText(t("cloneSampleAll"));
     marqueeShape_->setItemText(0, t("rectangle"));
     marqueeShape_->setItemText(1, t("ellipse"));
     int i = 0;
@@ -697,7 +799,7 @@ void MainWindow::retranslate() {
     autoSelect_->setText(t("autoSelect"));
     contiguous_->setText(t("contiguous"));
     mask_->setText(t("mask"));
-    canvas_->setShapeNames(t("rectangle"), t("ellipse"));
+    canvas_->setShapeNames(t("rectangle"), t("ellipse"), t("line"));
     color_->setToolTip(t("color"));
     backgroundColor_->setToolTip(t("background"));
     opacity_->setToolTip(t("opacity"));
@@ -732,6 +834,7 @@ void MainWindow::setTool(Tool tool) {
         break;
     case Tool::Rectangle:
     case Tool::Ellipse:
+    case Tool::Line:
         page = 3;
         hint = "toolHintShape";
         break;
@@ -759,15 +862,24 @@ void MainWindow::setTool(Tool tool) {
     {
         QSignalBlocker b(brushMode_), s(shapeMode_);
         brushMode_->setCurrentIndex(tool == Tool::Eraser ? 1 : 0);
-        shapeMode_->setCurrentIndex(tool == Tool::Ellipse ? 1 : 0);
+        shapeMode_->setCurrentIndex(tool == Tool::Ellipse ? 1 : tool == Tool::Line ? 2 : 0);
     }
     brushMode_->setVisible(tool == Tool::Brush || tool == Tool::Eraser);
     if (tool == Tool::Eraser)
         findChild<QToolButton *>("brushButton")->setChecked(true);
-    if (tool == Tool::Ellipse)
+    if (tool == Tool::Ellipse || tool == Tool::Line)
         findChild<QToolButton *>("rectangleButton")->setChecked(true);
     wandMode_->setVisible(tool == Tool::Wand);
     retouchMode_->setVisible(tool == Tool::Blur);
+    healingMode_->setVisible(tool == Tool::Healing);
+    cloneAligned_->setVisible(tool == Tool::Clone);
+    cloneSampleAll_->setVisible(tool == Tool::Clone);
+    blurRadius_->setVisible(tool == Tool::Blur && retouchMode_->currentIndex() == 0);
+    findChild<QLabel *>("blurRadiusLabel")->setVisible(tool == Tool::Blur && retouchMode_->currentIndex() == 0);
+    lineWidth_->setVisible(tool == Tool::Line);
+    findChild<QLabel *>("lineWidthLabel")->setVisible(tool == Tool::Line);
+    findChild<QLabel *>("cornerRadiusLabel")->setVisible(tool == Tool::Rectangle);
+    findChild<QSpinBox *>("cornerRadiusSpin")->setVisible(tool == Tool::Rectangle);
     lassoMode_->setVisible(tool == Tool::Lasso);
     marqueeShape_->setVisible(tool == Tool::Marquee);
     tolerance_->setVisible(tool == Tool::Wand);

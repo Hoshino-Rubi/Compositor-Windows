@@ -65,6 +65,25 @@ def layered(records,name):
  info=struct.pack('>h',len(records))+b''.join(a for a,b in records)+b''.join(b for a,b in records);info+=b'\0'*(len(info)%2)
  section=u32(len(info))+info+u32(0)
  (out/name).write_bytes(b'8BPS'+u16(1)+b'\0'*6+u16(3)+u32(6)+u32(8)+u16(8)+u16(3)+u32(0)+u32(0)+u32(len(section))+section+u16(0)+b'\0'*(8*6*3))
+for compression in range(4):
+ def outside_layer(name,rect,rgb):
+  top,left,bottom,right=rect;ww,hh=right-left,bottom-top
+  planes=[]
+  for value in [*rgb,255]:
+   raw=bytes([value])*ww*hh
+   if compression==0:blob=u16(0)+raw
+   elif compression==1:
+    row=bytes([257-ww,value]);blob=u16(1)+u16(len(row))*hh+row*hh
+   else:
+    packed=raw if compression==2 else b''.join(bytes([value])+b'\0'*(ww-1) for _ in range(hh))
+    blob=u16(compression)+zlib.compress(packed)
+   planes.append(blob)
+  label=name.encode();pascal=bytes([len(label)])+label;pascal+=b'\0'*((-len(pascal))%4)
+  ext=u32(0)+u32(0)+pascal
+  record=b''.join(i32(v) for v in rect)+u16(4)+b''.join(struct.pack('>h',channel)+u32(len(blob)) for channel,blob in zip([0,1,2,-1],planes))+b'8BIMnorm'+bytes([255,0,0,0])+u32(len(ext))+ext
+  return record,b''.join(planes)
+ layered([outside_layer('Outside',(-2,-2,8,10),(20,180,60)),
+          outside_layer('Base',(0,0,6,8),(160,30,20))],f'oversize-layer-{compression}.psd')
 layered([make_layer('Group',(0,0,0,0),section=1),make_layer('Masked',(0,0,6,8),(180,40,30),mask=(0,0,6,8,[255 if x<4 else 0 for y in range(6) for x in range(8)])),make_layer('End',(0,0,0,0),section=3)],'group-mask.psd')
 curves=b'\0'+u16(1)+u16(1)+u16(3)+u16(0)+u16(0)+u16(220)+u16(128)+u16(255)+u16(255)
 layered([make_layer('Curve',extras=extra(b'curv',curves)),make_layer('Base',rgb=(80,120,150))],'curves.psd')
@@ -98,7 +117,7 @@ def psd16_plane(values,w,h,compression,psb):
   data=b''.join(u16((values[y*w+x]-(values[y*w+x-1] if x else 0))&65535) for y in range(h) for x in range(w))
  return u16(compression)+zlib.compress(data)
 
-def psd16(psb,compression,flat=False):
+def psd16(psb,compression,flat=False,outside=False):
  w,h=17,9; length=u64 if psb else u32
  values=[[10001+p*31 for p in range(w*h)],[20002+p*29 for p in range(w*h)],[30003+p*23 for p in range(w*h)],[65535]*(w*h)]
  parts=[psd16_plane(v,w,h,compression,psb) for v in values]
@@ -109,7 +128,7 @@ def psd16(psb,compression,flat=False):
  if flat:section=b''
  else:
   records=[];payloads=[]
-  for name,rect,base,masked in [('Top',(2,3,7,10),[12345,23456,34567,40001],True),('Background',(0,0,h,w),[10001,20002,30003,65535],False)]:
+  for name,rect,base,masked in [('Top',(-2,-2,11,19) if outside else (2,3,7,10),[12345,23456,34567,40001],True),('Background',(0,0,h,w),[10001,20002,30003,65535],False)]:
    top,left,bottom,right=rect;ww,hh=right-left,bottom-top
    colors=[[base[c]+(p*7 if c<3 else 0) for p in range(ww*hh)] for c in range(4)]
    if masked:colors.append([31001+p for p in range(ww*hh)])
@@ -129,6 +148,7 @@ for psb in [False,True]:
   for flat in [False,True]:
    name=f'wide-{ "flat" if flat else "layers"}-{compression}.{ "psb" if psb else "psd"}'
    (out/name).write_bytes(psd16(psb,compression,flat))
+  (out/f'wide-oversize-{compression}.{ "psb" if psb else "psd"}').write_bytes(psd16(psb,compression,outside=True))
 
 # Uncompressed RGB16 TIFF with exact low-order bits, independent of Qt's encoder.
 def rgb16_tiff():

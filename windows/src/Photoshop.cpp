@@ -192,12 +192,87 @@ QByteArray plane(Reader &r, int w, int h, bool psb, int depth) {
     }
     throw Error("psdCompression");
 }
+QByteArray croppedPlane(Reader &r, int width, int height, bool psb, int depth, QRect crop) {
+    if (crop == QRect(0, 0, width, height)) return plane(r, width, height, psb, depth);
+    if (crop.isEmpty()) return {};
+    const int sampleBytes = depth / 8;
+    const qint64 rowBytes = qint64(width) * sampleBytes;
+    const qint64 total = rowBytes * height;
+    if (width > 30000 || height > 30000 || qint64(width) * height > qint64(MaxSide) * MaxSide)
+        throw Error("tooLarge");
+    QByteArray result(qsizetype(qint64(crop.width()) * crop.height() * sampleBytes), 0);
+    const int compression = r.u16();
+    auto copyRow = [&](int y, const char *row) {
+        if (y >= crop.top() && y < crop.bottom() + 1)
+            memcpy(result.data() + qint64(y - crop.top()) * crop.width() * sampleBytes,
+                   row + qint64(crop.left()) * sampleBytes, qsizetype(crop.width() * sampleBytes));
+    };
+    if (compression == 0) {
+        r.need(total);
+        for (int y = crop.top(); y <= crop.bottom(); ++y)
+            copyRow(y, r.data.constData() + r.pos + y * rowBytes);
+        r.skip(total);
+    } else if (compression == 1) {
+        QVector<quint32> lengths;
+        lengths.reserve(height);
+        for (int y = 0; y < height; ++y) lengths.append(psb ? r.u32() : r.u16());
+        for (int y = 0; y < height; ++y) {
+            auto encoded = r.section(lengths[y]);
+            if (y < crop.top() || y > crop.bottom()) continue;
+            QByteArray row(qsizetype(rowBytes), 0);
+            qsizetype position = 0;
+            while (position < rowBytes) {
+                const int count = qint8(encoded.u8());
+                if (count >= 0) {
+                    const int n = count + 1;
+                    if (position + n > rowBytes) throw Error("psdCorrupt");
+                    const auto literal = encoded.bytes(n);
+                    memcpy(row.data() + position, literal.constData(), n);
+                    position += n;
+                } else if (count != -128) {
+                    const int n = 1 - count;
+                    if (position + n > rowBytes) throw Error("psdCorrupt");
+                    memset(row.data() + position, encoded.u8(), n);
+                    position += n;
+                }
+            }
+            copyRow(y, row.constData());
+        }
+    } else if (compression == 2 || compression == 3) {
+        z_stream stream{};
+        stream.next_in = reinterpret_cast<Bytef *>(r.data.data() + r.pos);
+        stream.avail_in = uInt(r.data.size() - r.pos);
+        if (inflateInit(&stream) != Z_OK) throw Error("psdCorrupt");
+        try {
+            QByteArray row(qsizetype(rowBytes), 0);
+            for (int y = 0; y < height; ++y) {
+                stream.next_out = reinterpret_cast<Bytef *>(row.data());
+                stream.avail_out = uInt(rowBytes);
+                while (stream.avail_out) {
+                    const int status = inflate(&stream, Z_NO_FLUSH);
+                    if (status != Z_OK && status != Z_STREAM_END) throw Error("psdCorrupt");
+                    if (status == Z_STREAM_END && stream.avail_out) throw Error("psdCorrupt");
+                }
+                if (y >= crop.top() && y <= crop.bottom()) {
+                    if (compression == 3) undoPrediction(row, width, 1, depth);
+                    copyRow(y, row.constData());
+                }
+            }
+            if (qint64(stream.total_out) != total) throw Error("psdCorrupt");
+        } catch (...) {
+            inflateEnd(&stream);
+            throw;
+        }
+        inflateEnd(&stream);
+    } else throw Error("psdCompression");
+    return result;
+}
 int sampleChannel(const QByteArray &data, qint64 pixel, int depth) {
     return depth == 16 ? qFromBigEndian<quint16>(data.constData() + pixel * 2) : quint8(data[pixel]);
 }
 struct Record {
     Layer layer;
-    QRect bounds, maskBounds;
+    QRect bounds, maskBounds, originalBounds, originalMaskBounds;
     int section = 0, maskDefault = 255;
     bool clipping = false, hasMask = false;
     QVector<QPair<int, quint64>> channels;
@@ -717,7 +792,7 @@ void textMetadata(Record &record, QStringList &notices) {
     }
 }
 } // namespace
-ImportResult readPhotoshop(const QString &path) {
+ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         throw Error("fileError");
@@ -798,6 +873,7 @@ ImportResult readPhotoshop(const QString &path) {
                 Record rec;
                 rec.layer.id = newId();
                 rec.bounds = bounds(layerInfo);
+                rec.originalBounds = rec.bounds;
                 auto n = layerInfo.u16();
                 if (n > 56)
                     throw Error("psdCorrupt");
@@ -823,6 +899,7 @@ ImportResult readPhotoshop(const QString &path) {
                 if (mask.data.size() >= 18) {
                     rec.hasMask = true;
                     rec.maskBounds = bounds(mask);
+                    rec.originalMaskBounds = rec.maskBounds;
                     rec.maskDefault = mask.u8();
                     int flags = mask.u8();
                     rec.layer.maskEnabled = !(flags & 2);
@@ -861,26 +938,46 @@ ImportResult readPhotoshop(const QString &path) {
                     rec.layer.name = "Layer " + QString::number(i + 1);
                 records.append(rec);
             }
+            auto fits = [&] {
+                qint64 images = 0, masks = 0;
+                for (const auto &rec : records) {
+                    if (!rec.layer.group && rec.section == 0)
+                        images += qint64(rec.bounds.width()) * rec.bounds.height();
+                    if (rec.hasMask)
+                        masks += qint64(rec.maskBounds.width()) * rec.maskBounds.height();
+                }
+                return images <= pixelBudget && masks <= pixelBudget;
+            };
+            if (!fits()) {
+                const QRect canvas(QPoint(0, 0), state.size);
+                for (auto &rec : records) {
+                    rec.bounds = rec.bounds.intersected(canvas);
+                    rec.maskBounds = rec.maskBounds.intersected(canvas);
+                    if (rec.bounds != rec.originalBounds || rec.maskBounds != rec.originalMaskBounds)
+                        notices.append(rec.layer.name + ": psdCropped");
+                }
+                if (!fits()) throw Error("tooLarge");
+            }
             qint64 budget = 0, maskBudget = 0;
             for (auto &rec : records) {
                 QHash<int, QByteArray> planes;
                 if (!rec.bounds.isEmpty() && !rec.layer.group) {
                     budget += qint64(rec.bounds.width()) * rec.bounds.height();
-                    if (budget > MaxSourcePixels)
-                        throw Error("tooLarge");
+                    if (budget > pixelBudget) throw Error("tooLarge");
                 }
                 for (auto channel : rec.channels) {
                     auto data = layerInfo.section(channel.second);
                     bool isMask = channel.first == -2;
-                    QSize size = isMask ? rec.maskBounds.size() : rec.bounds.size();
-                    if (!QList<int>{-2, -1, 0, 1, 2}.contains(channel.first) || size.isEmpty())
+                    const QRect original = isMask ? rec.originalMaskBounds : rec.originalBounds;
+                    const QRect clipped = isMask ? rec.maskBounds : rec.bounds;
+                    if (!QList<int>{-2, -1, 0, 1, 2}.contains(channel.first) || original.isEmpty() || clipped.isEmpty())
                         continue;
                     if (isMask) {
-                        maskBudget += qint64(size.width()) * size.height();
-                        if (maskBudget > MaxSourcePixels)
-                            throw Error("tooLarge");
+                        maskBudget += qint64(clipped.width()) * clipped.height();
+                        if (maskBudget > pixelBudget) throw Error("tooLarge");
                     }
-                    planes[channel.first] = plane(data, size.width(), size.height(), psb, depth);
+                    planes[channel.first] = croppedPlane(data, original.width(), original.height(), psb, depth,
+                                                          clipped.translated(-original.topLeft()));
                 }
                 if (rec.section != 1 && rec.section != 2 && rec.section != 3 && !rec.bounds.isEmpty()) {
                     QImage image(rec.bounds.size(), pixelFormat(depth));

@@ -43,8 +43,10 @@ void MainWindow::importNext(QStringList paths, bool openAsDocument) {
                       message.setDetailedText(details.join('\n'));
                       accepted = message.exec() == QMessageBox::Ok;
                   }
-                  if (accepted)
+                  if (accepted) {
                       adoptDocument(result->state, QFileInfo(path).completeBaseName());
+                      remember(path);
+                  }
                   importNext(paths, openAsDocument);
               });
         return;
@@ -56,7 +58,10 @@ void MainWindow::importNext(QStringList paths, bool openAsDocument) {
     auto image = std::make_shared<QImage>();
     runIO([image, path] { *image = readImage(path); },
           [this, image, path, paths, openAsDocument] {
-              invoke([&] { insertImported(QFileInfo(path).completeBaseName(), *image, openAsDocument); });
+              invoke([&] {
+                  insertImported(QFileInfo(path).completeBaseName(), *image, openAsDocument);
+                  if (openAsDocument) remember(path);
+              });
               importNext(paths, openAsDocument);
           });
 }
@@ -125,7 +130,10 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
               auto image = std::make_shared<QImage>();
               runIO([frame, image, e, temp, ti, b] { *image = developRaw(*frame, e, temp, ti, b); },
                     [this, image, path, remaining, openAsDocument] {
-                        invoke([&] { insertImported(QFileInfo(path).completeBaseName(), *image, openAsDocument); });
+                        invoke([&] {
+                            insertImported(QFileInfo(path).completeBaseName(), *image, openAsDocument);
+                            if (openAsDocument) remember(path);
+                        });
                         importNext(remaining, openAsDocument);
                     });
           });

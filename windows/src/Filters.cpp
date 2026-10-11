@@ -170,6 +170,8 @@ void validateAdjustment(const QJsonObject &settings) {
             number(gradient[end].toObject(), key, 0, 1);
 }
 QImage filtered(const QImage &source, const QJsonObject &settings) {
+    if (isStandaloneFilter(settings["kind"].toString()))
+        return standaloneFilter(source, settings);
     if (wideImage(source))
         return filtered16(source, settings);
     const QString kind = settings["kind"].toString();

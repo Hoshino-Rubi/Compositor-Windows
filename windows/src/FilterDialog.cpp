@@ -9,6 +9,8 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QCheckBox>
+#include <QLineEdit>
+#include <QColorDialog>
 #include <QPainter>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -33,7 +35,10 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                                          {"Grain", "filter.grain"},
                                          {"Camera Raw", "filter.cameraRaw"},
                                          {"Motion Blur", "filter.motionBlur"},
-                                         {"Scanlines", "filter.scanlines"}};
+                                         {"Scanlines", "filter.scanlines"},
+                                         {"Vignette", "filter.vignette"}, {"Bloom / Glow", "filter.bloom"},
+                                         {"Dither", "filter.dither"}, {"Tonal Contrast", "filter.tonalContrast"},
+                                         {"Lens Correction", "filter.lensCorrection"}};
     const int active = document_.state().index(document_.state().active);
     if (active < 0 && !adjustment)
         return;
@@ -59,6 +64,11 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         controls[key] = box;
         form->addRow(t(label.isEmpty() ? key : label), box);
     };
+    QComboBox ditherStyle, ditherColors, pixelShape;
+    QCheckBox lightOnDark(t("lightOnDark"));
+    QLineEdit characters;
+    QPushButton vignetteColor(t("color")), darkColor(t("dark")), lightColor(t("white"));
+    QColor vignette = Qt::black, dark = Qt::black, light = Qt::white;
     QComboBox channel;
     channel.addItems({"RGB", t("red"), t("green"), t("blue")});
     QComboBox hsvRange;
@@ -158,6 +168,48 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         field("amount", v["amount"].toDouble(25), 0, 100);
         field("size", v["size"].toDouble(1.5), .5, 20);
         field("roughness", v["roughness"].toDouble(50), 0, 100);
+    } else if (kind == "Vignette") {
+        field("vignetteAmount", 35, 0, 100, "amount");
+        field("vignetteMidpoint", 50, 0, 100, "midpoint");
+        field("vignetteRoundness", 100, -100, 100, "roundness");
+        field("vignetteFeather", 60, 0, 100, "feather");
+        field("vignetteHighlights", 25, 0, 100, "highlights");
+        form->addRow(t("color"), &vignetteColor);
+    } else if (kind == "Bloom / Glow") {
+        field("bloomAmount", 40, 0, 100, "amount");
+        field("bloomRadius", 24, 1, 150, "radius");
+    } else if (kind == "Tonal Contrast") {
+        field("tonalAmount", 50, 0, 100, "amount");
+        field("tonalRadius", 16, 1, 150, "radius");
+        field("tonalShadows", 40, -100, 100, "shadows");
+        field("tonalMidtones", 60, -100, 100, "midtones");
+        field("tonalHighlights", 30, -100, 100, "highlights");
+    } else if (kind == "Lens Correction") {
+        field("distortion", 0, -100, 100, "distortion");
+    } else if (kind == "Dither") {
+        for (const auto &key : QStringList{"dither.atkinson", "dither.floyd", "dither.bayer2", "dither.bayer4",
+                                            "dither.bayer8", "dither.dots", "dither.lines", "dither.diamonds",
+                                            "dither.patterns", "dither.ascii"})
+            ditherStyle.addItem(t(key));
+        form->addRow(t("style"), &ditherStyle);
+        field("pixelSize", 2, 1, 32);
+        field("cellSize", 8, 4, 64);
+        field("textSize", 14, 6, 64);
+        field("levels", 2, 2, 8);
+        field("angle", 45, -180, 180, "rotation");
+        field("diffusion", 100, 0, 100);
+        field("density", 0, -100, 100);
+        field("contrast", 0, -100, 100);
+        ditherColors.addItems({t("scan.monochrome"), t("scan.twoColors"), t("scan.original")});
+        form->addRow(t("color"), &ditherColors);
+        pixelShape.addItems({t("square"), t("dot")});
+        form->addRow(t("shape"), &pixelShape);
+        lightOnDark.setChecked(true);
+        form->addRow(&lightOnDark);
+        characters.setText(" .:-=+*#%@");
+        form->addRow(t("characters"), &characters);
+        form->addRow(t("dark"), &darkColor);
+        form->addRow(t("white"), &lightColor);
     } else if (kind == "Scanlines") {
         field("lineSpacing", 4, 2, 32, "scan.lineSpacing");
         field("thickness", 70, 5, 100, "scan.thickness");
@@ -319,6 +371,17 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         } else
             for (auto it = v.begin(); it != v.end(); ++it)
                 settings[it.key()] = it.value();
+        if (kind == "Vignette")
+            settings["vignetteColor"] = vignette.name();
+        if (kind == "Dither") {
+            settings["style"] = ditherStyle.currentIndex();
+            settings["colors"] = ditherColors.currentIndex();
+            settings["pixelShape"] = pixelShape.currentIndex();
+            settings["lightOnDark"] = lightOnDark.isChecked();
+            settings["characters"] = characters.text();
+            settings["dark"] = dark.name();
+            settings["light"] = light.name();
+        }
         if (kind == "Scanlines") {
             settings["colors"] = channel.currentIndex();
             settings["dark"] = canvas_->color().name();
@@ -369,6 +432,10 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                         candidate.layers.insert(active < 0 ? int(candidate.layers.size()) : active + 1, l);
                     }
                 } else if (active >= 0 && !source.isNull()) {
+                    if (sourceSize.width() > 0 && kind == "Bloom / Glow")
+                        settings["bloomRadius"] = settings["bloomRadius"].toDouble() * source.width() / sourceSize.width();
+                    if (sourceSize.width() > 0 && kind == "Tonal Contrast")
+                        settings["tonalRadius"] = settings["tonalRadius"].toDouble() * source.width() / sourceSize.width();
                     if (kind == "Gaussian Blur" && sourceSize.width() > 0)
                         settings["blurRadius"] =
                             settings["blurRadius"].toDouble() * source.width() / sourceSize.width();
@@ -412,6 +479,17 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
     connect(&hsvRange, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
     connect(&colorize, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
     connect(&invertRange, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
+    connect(&ditherStyle, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
+    connect(&ditherColors, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
+    connect(&pixelShape, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
+    connect(&lightOnDark, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
+    connect(&characters, &QLineEdit::textChanged, &dialog, [&] { debounce.start(); });
+    for (auto [button, value] : {std::pair{&vignetteColor, &vignette}, std::pair{&darkColor, &dark},
+                                 std::pair{&lightColor, &light}})
+        connect(button, &QPushButton::clicked, &dialog, [&, value] {
+            QColor next = QColorDialog::getColor(*value, &dialog);
+            if (next.isValid()) { *value = next; debounce.start(); }
+        });
     connect(&live, &QCheckBox::toggled, &dialog, [&] { update(); });
     update();
     if (dialog.exec() != QDialog::Accepted)

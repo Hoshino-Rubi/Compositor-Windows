@@ -3,8 +3,18 @@
 #include <QRegularExpression>
 #include <QTabWidget>
 #include "Pixels.h"
+#include "LayerClipboard.h"
+#include <QClipboard>
+#include <QMimeData>
+#include <QDropEvent>
+#include <QMenuBar>
+#include <QStatusBar>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
 #include "WideKernels.h"
 #include "Renderer.h"
+#include "PreviewRenderer.h"
+#include "GpuPreview.h"
 #include "Filters.h"
 #include "Icons.h"
 #include "Effects.h"
@@ -105,6 +115,364 @@ PickResult pickFile(MainWindow &window, const char *action, const QString &path 
 class Tests : public QObject {
     Q_OBJECT
   private slots:
+    void multiLayerMovePreservesOrderAndUsesOneUndo() {
+        auto state = fixture({64,48});
+        Layer second = state.layers.first(); second.id = newId();
+        Layer group; group.id = newId(); group.name = "Folder"; group.group = true;
+        group.placement.size = state.size;
+        state.layers.append(second); state.layers.append(group);
+        Document document; document.reset(state,true);
+        QVERIFY(moveLayers(document, {state.active, second.id}, group.id, {}));
+        QCOMPARE(document.state().layers[1].id, state.active);
+        QCOMPARE(document.state().layers[2].id, second.id);
+        QCOMPARE(document.state().layers[1].parent, group.id);
+        QCOMPARE(document.state().layers[2].parent, group.id);
+        QVERIFY(!moveLayers(document, {group.id}, second.id, {}));
+        document.undo();
+        QCOMPARE(document.state().layers[0].id, state.active);
+        QVERIFY(document.state().layers[0].parent.isEmpty());
+        QVERIFY(document.state().layers[1].parent.isEmpty());
+    }
+    void gpuPreviewMatchesAllBlendModesAtBothDepths() {
+        for (int depth : {8, 16}) {
+            auto state = fixture({37, 29});
+            state.bitDepth = depth;
+            state.layers[0].image = state.layers[0].image.convertToFormat(pixelFormat(depth));
+            Layer top = state.layers[0];
+            top.id = newId();
+            top.image.fill(QColor::fromRgbF(.31f, .73f, .45f, .68f));
+            state.layers[0].image.fill(QColor::fromRgbF(.61f, .21f, .87f, .81f));
+            state.layers.append(top);
+            for (const auto &mode : blendModes()) {
+                state.layers.last().blend = mode;
+                const auto actual = renderGpuPreview(state, state.size);
+                if (actual.isNull()) {
+                    QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"), qPrintable(gpuPreviewStatus()));
+                    QSKIP(qPrintable(gpuPreviewStatus()));
+                }
+                const auto expected = render(state);
+                const auto a = actual.convertToFormat(QImage::Format_RGBA64_Premultiplied);
+                const auto b = expected.convertToFormat(QImage::Format_RGBA64_Premultiplied);
+                int difference = 0;
+                for (int y = 0; y < a.height(); ++y) {
+                    const auto *ar = reinterpret_cast<const quint16 *>(a.constScanLine(y));
+                    const auto *br = reinterpret_cast<const quint16 *>(b.constScanLine(y));
+                    for (int x = 0; x < a.width() * 4; ++x)
+                        difference = std::max(difference, std::abs(int(ar[x]) - int(br[x])));
+                }
+                QVERIFY2(difference <= (depth == 8 ? 514 : 4),
+                         qPrintable(QString("%1-bit %2: difference %3").arg(depth).arg(mode).arg(difference)));
+            }
+        }
+    }
+    void gpuPreviewPreservesMasksGroupsAndFallsBack() {
+        auto state = fixture({64, 48});
+        Layer group;
+        group.id = newId(); group.group = true; group.opacity = .7;
+        group.placement.size = state.size;
+        group.mask = QImage(state.size, QImage::Format_Grayscale8); group.mask.fill(QColor(150,150,150));
+        state.layers[0].parent = group.id;
+        state.layers[0].mask = group.mask;
+        state.layers.append(group);
+        const auto result = renderGpuPreview(state, state.size);
+        if (result.isNull()) QSKIP(qPrintable(gpuPreviewStatus()));
+        const auto expected = render(state);
+        QVERIFY(std::abs(result.pixelColor(20,20).alpha() - expected.pixelColor(20,20).alpha()) <= 2);
+        state.layers[0].metadata["effects"] = QJsonObject{{"shadow", QJsonObject{{"blur",2}}}};
+        QVERIFY(renderGpuPreview(state, state.size).isNull());
+        QCOMPARE(renderPreview(state), render(state));
+    }
+    void regionPreviewMatchesFullCompositeWithHalos() {
+        for (int depth : {8,16}) {
+            auto state = fixture({200, 160});
+            state.bitDepth = depth;
+            state.layers[0].image = QImage(QSize(80,60), pixelFormat(depth));
+            state.layers[0].image.fill(QColor(150,60,200,210));
+            state.layers[0].placement.size = QSize(80,60);
+            state.layers[0].placement.origin = QPointF(42,31);
+            state.layers[0].metadata["effects"] = QJsonObject{
+                {"shadow", QJsonObject{{"distance",7},{"blur",4},{"opacity",.6}}},
+                {"outerGlow", QJsonObject{{"size",5},{"opacity",.3}}}};
+            const QRect region(37,23,83,79);
+            QCOMPARE(renderRegion(state, region), render(state).copy(region));
+            Layer adjustment;
+            adjustment.id = newId();
+            adjustment.metadata["adjustment"] = QJsonObject{{"kind","Gaussian Blur"},{"blurRadius",4}};
+            state.layers.append(adjustment);
+            QCOMPARE(renderRegion(state, region), render(state).copy(region));
+            state.layers.last().metadata["adjustment"] = QJsonObject{{"kind","Add Noise"},{"noiseAmount",20},{"noiseSeed",42}};
+            QCOMPARE(renderRegion(state, region), render(state).copy(region));
+        }
+    }
+    void tiledPreviewUsesOriginalPixelsAndReusesUnchangedTiles() {
+        auto state = fixture({4096,128});
+        for (int y = 0; y < 128; ++y) {
+            auto *row = reinterpret_cast<QRgb *>(state.layers[0].image.scanLine(y));
+            for (int x = 0; x < 4096; ++x) row[x] = x % 2 ? qRgb(255,255,255) : qRgb(0,0,0);
+        }
+        auto cancelled = std::make_shared<std::atomic_bool>(false);
+        const auto first = renderCanvasPreview(state, QRect(1536,0,512,128), QSize(1024,32), true, 1, {}, cancelled);
+        QCOMPARE(first.tiles.size(), 1);
+        QCOMPARE(first.tiles[0].image, render(state).copy(first.tiles[0].rectangle));
+        QCOMPARE(first.tiles[0].image.pixelColor(0,0), QColor(Qt::black));
+        QCOMPARE(first.tiles[0].image.pixelColor(1,0), QColor(Qt::white));
+        const auto second = renderCanvasPreview(state, QRect(1536,0,1024,128), QSize(1024,32), true, 1, first, cancelled);
+        QCOMPARE(second.tiles.size(), 2);
+        QCOMPARE(second.overview.cacheKey(), first.overview.cacheKey());
+        QCOMPARE(second.tiles[0].image.cacheKey(), first.tiles[0].image.cacheKey());
+        state.layers[0].image.fill(Qt::red);
+        const auto edited = renderCanvasPreview(state, QRect(1536,0,512,128), QSize(1024,32), true, 2, second, cancelled);
+        QCOMPARE(edited.tiles[0].image.pixelColor(0,0), QColor(Qt::red));
+        cancelled->store(true);
+        QVERIFY(renderCanvasPreview(state, QRect(0,0,4096,128), QSize(1024,32), true, 2, edited, cancelled).tiles.isEmpty());
+    }
+    void eyedropperReadsFullResolutionBeyondOverviewLimit() {
+        auto state = fixture({4096,128});
+        state.layers[0].image.fill(Qt::black);
+        state.layers[0].image.setPixelColor(2048,64,Qt::red);
+        Document document;
+        document.reset(state,true);
+        Canvas canvas(&document);
+        canvas.resize(800,400); canvas.show(); canvas.fit(); canvas.setZoom(1);
+        canvas.setTool(Tool::Hand);
+        const QPoint sample = canvas.viewPoint(QPointF(2048,64)).toPoint();
+        QTRY_COMPARE_WITH_TIMEOUT(canvas.grab().toImage().pixelColor(sample), QColor(Qt::red), 5000);
+        canvas.setTool(Tool::Eyedropper);
+        QTest::mouseClick(&canvas, Qt::LeftButton, Qt::NoModifier, canvas.viewPoint(QPointF(2048,64)).toPoint());
+        QCOMPARE(canvas.color(), QColor(Qt::red));
+    }
+    void layerGroupDuplicateOffsetsEveryDescendantAndMask() {
+        auto state = fixture({64,48});
+        Layer group;
+        group.id = newId(); group.name = "Folder"; group.group = true; group.placement.size = state.size;
+        state.layers[0].parent = group.id;
+        state.layers[0].maskLinked = false;
+        state.layers[0].maskPlacement.origin = QPointF(4,7);
+        state.layers[0].maskPlacement.size = state.size;
+        state.layers[0].mask = QImage(state.size, QImage::Format_Grayscale8);
+        state.layers[0].mask.fill(Qt::white);
+        state.layers.append(group);
+        Document document; document.reset(state,true);
+        QVERIFY(pasteLayers(document, encodeLayers(state, {group.id}), {}, {}, true));
+        const auto &child = document.state().layers[2];
+        QCOMPARE(child.placement.origin, QPointF(12,12));
+        QCOMPARE(child.maskPlacement.origin, QPointF(16,19));
+        QCOMPARE(child.parent, document.state().layers[3].id);
+        document.undo(); QCOMPARE(document.state().layers.size(), 2);
+    }
+    void fullscreenRestoresMaximizedState() {
+        MainWindow window;
+        window.showMaximized();
+        window.document()->reset(fixture({64,48}),true);
+        window.findChild<QAction *>("toggleFullscreenAction")->trigger();
+        window.findChild<QAction *>("toggleFullscreenAction")->trigger();
+        QVERIFY(window.isMaximized());
+    }
+    void canvasFullscreenKeepsOnlyCanvasAndRestoresWorkspace() {
+        MainWindow window;
+        window.show();
+        window.document()->reset(fixture({64, 48}), true);
+        window.findChild<QAction *>("toggleFullscreenAction")->trigger();
+        QVERIFY(window.menuBar()->isHidden());
+        QVERIFY(window.statusBar()->isHidden());
+        for (auto name : {"documentBar", "toolHeader", "toolRail", "layerPanel"})
+            QVERIFY(window.findChild<QWidget *>(name)->isHidden());
+        window.canvas()->setFocus();
+        QTest::keyClick(window.canvas(), Qt::Key_F);
+        QVERIFY(!window.menuBar()->isHidden());
+        QVERIFY(!window.statusBar()->isHidden());
+        QVERIFY(!window.findChild<QWidget *>("layerPanel")->isHidden());
+    }
+    void cropCanStartFromSelectionAndApplyWithEnter() {
+        MainWindow window;
+        window.show();
+        window.document()->reset(fixture({64, 48}), true);
+        QPainterPath selection;
+        selection.addRect(QRectF(10, 8, 20, 15));
+        window.document()->setSelection(selection);
+        window.canvas()->setTool(Tool::Crop);
+        window.canvas()->setFocus();
+        QTest::keyClick(window.canvas(), Qt::Key_Return);
+        QCOMPARE(window.document()->state().size, QSize(20, 15));
+        window.document()->undo();
+        QCOMPARE(window.document()->state().size, QSize(64, 48));
+    }
+    void oversizedPhotoshopLayersCropToCanvasAcrossCompressions() {
+        const QString root = COMPOSITOR_FIXTURES;
+        for (int compression = 0; compression < 4; ++compression) {
+            const QString file = root + "/oversize-layer-" + QString::number(compression) + ".psd";
+            const auto full = readPhotoshop(file);
+            const auto cropped = readPhotoshop(file, 100);
+            QVERIFY(cropped.notices.join(' ').contains("psdCropped"));
+            QCOMPARE(cropped.state.layers.size(), 2);
+            QCOMPARE(cropped.state.layers.last().placement.origin, QPointF(0, 0));
+            QCOMPARE(cropped.state.layers.last().image.size(), QSize(8, 6));
+            QCOMPARE(render(cropped.state), render(full.state));
+            for (const QString extension : {QString("psd"), QString("psb")}) {
+                const QString wide = root + "/wide-oversize-" + QString::number(compression) + "." + extension;
+                const auto high = readPhotoshop(wide);
+                const auto small = readPhotoshop(wide, 350);
+                QVERIFY(small.notices.join(' ').contains("psdCropped"));
+                QCOMPARE(small.state.bitDepth, 16);
+                QCOMPARE(small.state.layers.size(), 2);
+                QCOMPARE(small.state.layers.last().image.size(), QSize(17, 9));
+                QCOMPARE(small.state.layers.last().mask.size(), QSize(17, 9));
+                QCOMPARE(render(small.state), render(high.state));
+            }
+        }
+    }
+    void memoryBudgetBoundsFollowInstalledMemory() {
+        QCOMPARE(MaxSide, 30000);
+        QCOMPARE(MaxLayers, 10000);
+        QVERIFY(MaxCanvasPixels >= 64000000 && MaxCanvasPixels <= 200000000);
+        QVERIFY(MaxSourcePixels >= 100000000 && MaxSourcePixels <= 400000000);
+        QVERIFY(MaxCanvasPixels < qint64(MaxSide) * MaxSide);
+    }
+    void layerClipboardPreservesGroupsMasksPrecisionAndUndo() {
+        auto source = fixture({32, 24});
+        source.bitDepth = 16;
+        Layer group;
+        group.id = newId();
+        group.name = "Folder";
+        group.group = true;
+        group.placement.size = source.size;
+        source.layers.append(group);
+        Layer child;
+        child.id = newId();
+        child.parent = group.id;
+        child.name = "Edited pixels";
+        child.image = QImage(source.size, pixelFormat(16));
+        child.image.fill(QColor(25, 90, 130, 200));
+        child.mask = QImage(source.size, maskFormat(16));
+        child.mask.fill(Qt::white);
+        child.placement.size = source.size;
+        child.maskPlacement = child.placement;
+        child.maskSource = source.layers[0].id;
+        child.metadata["effects"] = QJsonObject{{"stroke", QJsonObject{{"size", 2}}}};
+        source.layers.append(child);
+        const auto encoded = encodeLayers(source, {group.id, child.id});
+        QVERIFY(!encoded.isEmpty());
+        QCOMPARE(layerClipboardDocument(encoded), source.id);
+        auto destination = fixture({32, 24});
+        Document document;
+        document.reset(destination, true);
+        QVERIFY(pasteLayers(document, encoded));
+        QCOMPARE(document.state().layers.size(), 3);
+        QCOMPARE(document.state().bitDepth, 16);
+        const auto &folder = document.state().layers[1], &copied = document.state().layers[2];
+        QVERIFY(folder.id != group.id);
+        QCOMPARE(copied.parent, folder.id);
+        QCOMPARE(copied.image, child.image);
+        QCOMPARE(copied.mask.size(), child.mask.size());
+        QCOMPARE(copied.metadata["effects"], child.metadata["effects"]);
+        QVERIFY(copied.maskSource.isEmpty());
+        document.undo();
+        QCOMPARE(document.state().bitDepth, 8);
+        QCOMPARE(document.state().layers.size(), 1);
+        Document origin;
+        origin.reset(source, true);
+        QVERIFY(cutLayers(origin, {group.id}));
+        QCOMPARE(origin.state().layers.size(), 1);
+        origin.undo();
+        QCOMPARE(origin.state().layers.size(), 3);
+        QVERIFY(rejects("invalidProject", [&] { pasteLayers(document, "not a layer payload"); }));
+    }
+    void layerClipboardActionsCopyPasteWholeLayer() {
+        MainWindow window;
+        window.show();
+        window.document()->reset(fixture({32, 24}), true);
+        window.findChild<QAction *>("copyAction")->trigger();
+        QVERIFY(QApplication::clipboard()->mimeData()->hasFormat(LayerMimeType));
+        window.findChild<QAction *>("pasteAction")->trigger();
+        QCOMPARE(window.document()->state().layers.size(), 2);
+        window.document()->undo();
+        QCOMPARE(window.document()->state().layers.size(), 1);
+    }
+    void layerDragAltDuplicatesAndCrossTabDrop() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        auto first = fixture({32, 24}), second = fixture({32, 24});
+        const auto firstPath = directory.filePath("A.comp"), secondPath = directory.filePath("B.comp");
+        writeProject(firstPath, first);
+        writeProject(secondPath, second);
+        MainWindow window;
+        window.show();
+        window.openProject(firstPath);
+        QTRY_COMPARE_WITH_TIMEOUT(window.document()->state().id, first.id, 5000);
+        window.openProject(secondPath);
+        QTRY_COMPARE_WITH_TIMEOUT(window.document()->state().id, second.id, 5000);
+        auto *tabs = window.findChild<QTabBar *>("documentTabs");
+        auto *layers = window.findChild<QTreeWidget *>("layerList");
+        QVERIFY(tabs && layers);
+        QCOMPARE(tabs->count(), 2);
+        QMimeData payload;
+        payload.setData(LayerMimeType, encodeLayers(window.document()->state(), {second.active}));
+        const QPointF row = layers->visualItemRect(layers->topLevelItem(0)).center();
+        QDragEnterEvent enter(row.toPoint(), Qt::CopyAction, &payload, Qt::LeftButton, Qt::AltModifier);
+        QApplication::sendEvent(layers->viewport(), &enter);
+        QVERIFY(enter.isAccepted());
+        QDragMoveEvent move(row.toPoint(), Qt::CopyAction, &payload, Qt::LeftButton, Qt::AltModifier);
+        QApplication::sendEvent(layers->viewport(), &move);
+        QDropEvent duplicate(row, Qt::CopyAction, &payload, Qt::LeftButton, Qt::AltModifier);
+        QApplication::sendEvent(layers->viewport(), &duplicate);
+        QVERIFY(duplicate.isAccepted());
+        QCOMPARE(window.document()->state().layers.size(), 2);
+        QCOMPARE(window.document()->state().layers.last().placement.origin, QPointF(12, 12));
+        window.document()->undo();
+        QCOMPARE(window.document()->state().layers.size(), 1);
+        const QPointF tab = tabs->tabRect(0).center();
+        QDragEnterEvent tabEnter(tab.toPoint(), Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tabs, &tabEnter);
+        QVERIFY(tabEnter.isAccepted());
+        QDropEvent crossTab(tab, Qt::CopyAction, &payload, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tabs, &crossTab);
+        QVERIFY(crossTab.isAccepted());
+        QCOMPARE(window.document()->state().id, first.id);
+        QCOMPARE(window.document()->state().layers.size(), 2);
+        window.document()->undo();
+        QCOMPARE(window.document()->state().layers.size(), 1);
+    }
+    void backgroundRefinementIsReversible() {
+        QImage source(QSize(80, 80), QImage::Format_RGB32);
+        source.fill(Qt::black);
+        QPainter painter(&source); painter.fillRect(20, 20, 40, 40, Qt::white); painter.end();
+        QImage mask(source.size(), QImage::Format_Grayscale8);
+        mask.fill(0);
+        QPainter matte(&mask); matte.fillRect(21, 21, 38, 38, Qt::white); matte.end();
+        auto expand = refineSubjectMask(source, mask, 12, 25, 5);
+        auto contract = refineSubjectMask(source, mask, 12, 25, -5);
+        QCOMPARE(expand.size(), mask.size());
+        QVERIFY(expand.pixelColor(19, 40).red() >= contract.pixelColor(19, 40).red());
+        QVERIFY(refineSubjectMask(source, mask, 0, 0, 0).pixelColor(40, 40).red() == 255);
+    }
+    void standaloneFiltersPreserveDepthAndUndo() {
+        for (int depth : {8, 16}) {
+            QImage image(QSize(24, 24), pixelFormat(depth));
+            image.fill(QColor(100, 140, 190, 173));
+            for (auto [kind, settings] : QVector<QPair<QString, QJsonObject>>{
+                     {"Vignette", {{"vignetteAmount", 80}}},
+                     {"Bloom / Glow", {{"bloomAmount", 70}, {"bloomRadius", 3}}},
+                     {"Dither", {{"style", 2}, {"levels", 2}}},
+                     {"Tonal Contrast", {{"tonalAmount", 50}, {"tonalRadius", 3}}},
+                     {"Lens Correction", {{"distortion", 40}}}}) {
+                settings["kind"] = kind;
+                QVERIFY(isStandaloneFilter(kind));
+                auto out = filtered(image, settings);
+                QCOMPARE(out.size(), image.size());
+                QCOMPARE(wideImage(out), depth == 16);
+                QVERIFY(qAbs(out.pixelColor(12, 12).alphaF() - image.pixelColor(12, 12).alphaF()) < .01);
+                Document doc;
+                auto state = fixture(image.size());
+                state.bitDepth = depth;
+                state.layers[0].image = image;
+                doc.reset(state, true);
+                doc.applyFilter(settings);
+                QVERIFY(doc.dirty());
+                doc.undo();
+                QCOMPARE(doc.state().layers[0].image, image);
+            }
+        }
+    }
     void sixteenBitProjectPngAndDepthConversion() {
         QTemporaryDir dir;
         auto s = fixture({1024, 4});
@@ -1625,8 +1993,19 @@ class Tests : public QObject {
             p.drawEllipse(30, 15, 40, 50);
         }
         window.document()->reset(state, true);
+        QTimer acceptBackground;
+        acceptBackground.setInterval(30);
+        QObject::connect(&acceptBackground, &QTimer::timeout, &window, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (dialog && dialog->objectName() == "backgroundDialog") {
+                acceptBackground.stop();
+                dialog->accept();
+            }
+        });
+        acceptBackground.start();
         window.findChild<QAction *>("removeBackgroundAction")->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(!window.document()->state().layers[0].mask.isNull(), 10000);
+        acceptBackground.stop();
         QCOMPARE(window.document()->state().layers[0].image, state.layers[0].image);
         window.document()->undo();
         QVERIFY(window.document()->state().layers[0].mask.isNull());
@@ -1651,6 +2030,7 @@ class Tests : public QObject {
             QVERIFY(picked.filters.join(' ').contains("*.dng"));
             const int count = format == "png" ? 1 : 2;
             QTRY_COMPARE_WITH_TIMEOUT(tabs->count(), count, 10000);
+            QVERIFY(QSettings().value("recent").toStringList().contains(path));
             QCOMPARE(window.document()->state().size, image.size());
             QCOMPARE(window.document()->state().layers.size(), 1);
             QCOMPARE(window.document()->state().layers[0].image, readImage(path));

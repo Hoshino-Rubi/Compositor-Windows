@@ -40,20 +40,85 @@ void MainWindow::selectSubject(QPoint point, bool remove) {
                 throw Error("subjectError", QString::fromUtf8(e.what()));
             }
         },
-        [this, mask, remove, i] {
+        [this, mask, source, remove, id = snapshot.id, layer = i >= 0 ? snapshot.layers[i].id : QString()] {
+            if (document_.state().id != id) return;
             if (remove)
-                document_.edit([&](State &s) {
-                    auto &l = s.layers[i];
-                    l.mask = *mask;
-                    l.maskLinked = false;
-                    l.maskEnabled = true;
-                    l.maskPlacement = {};
-                    l.maskPlacement.size = s.size;
-                    l.originalMaskPng.clear();
-                });
+                backgroundDialog(*mask, source, layer, id);
             else
                 document_.setSelectionMask(*mask);
         });
+}
+void MainWindow::backgroundDialog(QImage mask, QImage source, QString layerId, QString documentId) {
+    QDialog dialog(this);
+    dialog.setObjectName("backgroundDialog");
+    dialog.setWindowTitle(t("removeBackground"));
+    dialog.resize(630, 560);
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *form = new QFormLayout;
+    QComboBox quality;
+    quality.setObjectName("backgroundQuality");
+    quality.addItems({t("backgroundBasic"), t("backgroundAdvanced")});
+    form->addRow(t("quality"), &quality);
+    QSpinBox radius, contrast, shift;
+    radius.setObjectName("refineEdges"); radius.setRange(0, 40); radius.setValue(12);
+    contrast.setObjectName("matteContrast"); contrast.setRange(0, 100); contrast.setValue(25);
+    shift.setObjectName("shiftEdge"); shift.setRange(-10, 10);
+    form->addRow(t("refineEdges"), &radius);
+    form->addRow(t("matteContrast"), &contrast);
+    form->addRow(t("shiftEdge"), &shift);
+    layout->addLayout(form);
+    auto *preview = new QLabel;
+    preview->setObjectName("backgroundPreview");
+    preview->setMinimumSize(380, 320);
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setStyleSheet("background:#282828;border:1px solid #555;");
+    layout->addWidget(preview, 1);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    auto refresh = [&] {
+        const bool advanced = quality.currentIndex() == 1;
+        radius.setEnabled(advanced);
+        contrast.setEnabled(advanced);
+        shift.setEnabled(advanced);
+        const QSize size = source.size().scaled(440, 380, Qt::KeepAspectRatio);
+        QImage image = source.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                             .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        const QImage initial = mask.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        const QImage coverage = advanced ? refineSubjectMask(image, initial, radius.value(), contrast.value(), shift.value())
+                                         : initial;
+        QPainter p(&image);
+        p.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+        p.drawImage(0, 0, alphaFromGray(coverage, 8));
+        p.end();
+        preview->setPixmap(QPixmap::fromImage(image));
+    };
+    connect(&quality, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, refresh);
+    for (auto *field : {&radius, &contrast, &shift})
+        connect(field, qOverload<int>(&QSpinBox::valueChanged), &dialog, refresh);
+    refresh();
+    if (dialog.exec() != QDialog::Accepted) return;
+    const bool advanced = quality.currentIndex() == 1;
+    const int radiusValue = radius.value(), contrastValue = contrast.value(), shiftValue = shift.value();
+    auto finalMask = std::make_shared<QImage>();
+    runIO([finalMask, mask, source, advanced, radiusValue, contrastValue, shiftValue] {
+              *finalMask = advanced ? refineSubjectMask(source, mask, radiusValue, contrastValue, shiftValue) : mask;
+          },
+          [this, finalMask, documentId, layerId] {
+              if (document_.state().id != documentId) return;
+              document_.edit([&](State &state) {
+                  const int index = state.index(layerId);
+                  if (index < 0) return;
+                  auto &layer = state.layers[index];
+                  layer.mask = *finalMask;
+                  layer.maskLinked = false;
+                  layer.maskEnabled = true;
+                  layer.maskPlacement = {};
+                  layer.maskPlacement.size = state.size;
+                  layer.originalMaskPng.clear();
+              });
+          });
 }
 void MainWindow::shortcutsDialog() {
     showPreferences(true);
@@ -73,7 +138,10 @@ void MainWindow::showPreferences(bool shortcuts) {
 void MainWindow::applyPreferences() {
     const auto p = Preferences::load();
     const QList<QPair<QString, bool>> flags{
-        {"showRulers", p.rulers}, {"showGrid", p.grid}, {"showGuides", p.guides}, {"snap", p.snap}};
+        {"showRulers", p.rulers}, {"showGrid", p.grid}, {"showGuides", p.guides}, {"snap", p.snap},
+        {"snapGuides", p.snapGuides}, {"snapGrid", p.snapGrid}, {"snapLayers", p.snapLayers},
+        {"snapBounds", p.snapBounds}, {"lockGuides", p.lockGuides}, {"pixelGrid", p.pixelGrid},
+        {"transformControls", p.transformControls}};
     for (const auto &flag : flags) {
         QSignalBlocker block(actions_[flag.first]);
         actions_[flag.first]->setChecked(flag.second);
@@ -82,6 +150,10 @@ void MainWindow::applyPreferences() {
     canvas_->setGrid(p.grid);
     canvas_->setGuides(p.guides);
     canvas_->setSnap(p.snap);
+    canvas_->setSnapTargets(p.snapGuides, p.snapGrid, p.snapLayers, p.snapBounds);
+    canvas_->setLockGuides(p.lockGuides);
+    canvas_->setPixelGrid(p.pixelGrid);
+    canvas_->setTransformControls(p.transformControls);
     canvas_->setGridSpacing(p.gridSpacing);
     if (auto *depth = findChild<QComboBox *>("welcomeBitDepth"))
         depth->setCurrentIndex(depth->findData(p.depth));

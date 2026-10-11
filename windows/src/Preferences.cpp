@@ -20,6 +20,13 @@ Preferences Preferences::load() {
     p.grid = s.value("preferences/grid", false).toBool();
     p.guides = s.value("preferences/guides", true).toBool();
     p.snap = s.value("preferences/snap", true).toBool();
+    p.snapGuides = s.value("preferences/snapGuides", true).toBool();
+    p.snapGrid = s.value("preferences/snapGrid", false).toBool();
+    p.snapLayers = s.value("preferences/snapLayers", true).toBool();
+    p.snapBounds = s.value("preferences/snapBounds", true).toBool();
+    p.lockGuides = s.value("preferences/lockGuides", false).toBool();
+    p.pixelGrid = s.value("preferences/pixelGrid", false).toBool();
+    p.transformControls = s.value("preferences/transformControls", true).toBool();
     p.rememberWindow = s.value("preferences/rememberWindow", true).toBool();
     p.autoReload = s.value("preferences/autoReload", true).toBool();
     return p;
@@ -33,6 +40,13 @@ void Preferences::save() const {
     s.setValue("preferences/grid", grid);
     s.setValue("preferences/guides", guides);
     s.setValue("preferences/snap", snap);
+    s.setValue("preferences/snapGuides", snapGuides);
+    s.setValue("preferences/snapGrid", snapGrid);
+    s.setValue("preferences/snapLayers", snapLayers);
+    s.setValue("preferences/snapBounds", snapBounds);
+    s.setValue("preferences/lockGuides", lockGuides);
+    s.setValue("preferences/pixelGrid", pixelGrid);
+    s.setValue("preferences/transformControls", transformControls);
     s.setValue("preferences/rememberWindow", rememberWindow);
     s.setValue("preferences/autoReload", autoReload);
 }
@@ -123,6 +137,17 @@ PreferencesDialog::PreferencesDialog(Localization *localization, QList<QAction *
     snap_->setObjectName("snapPreference");
     for (auto *box : {rulers_, grid_, guides_, snap_})
         canvas->addWidget(box);
+    auto snapLabel = label("snapTargets");
+    canvas->addWidget(snapLabel);
+    snapGuides_ = new QCheckBox;
+    snapGrid_ = new QCheckBox;
+    snapLayers_ = new QCheckBox;
+    snapBounds_ = new QCheckBox;
+    lockGuides_ = new QCheckBox;
+    pixelGrid_ = new QCheckBox;
+    transformControls_ = new QCheckBox;
+    for (auto *box : {snapGuides_, snapGrid_, snapLayers_, snapBounds_, lockGuides_, pixelGrid_, transformControls_})
+        canvas->addWidget(box);
     canvas->addStretch();
     auto *shortcutPage = new QWidget;
     auto *shortcutLayout = new QVBoxLayout(shortcutPage);
@@ -195,7 +220,7 @@ PreferencesDialog::PreferencesDialog(Localization *localization, QList<QAction *
             QSettings().setValue("language", localization_->selection());
         }
     });
-    for (auto *box : {remember_, reload_, rulers_, grid_, guides_, snap_})
+    for (auto *box : {remember_, reload_, rulers_, grid_, guides_, snap_, snapGuides_, snapGrid_, snapLayers_, snapBounds_, lockGuides_, pixelGrid_, transformControls_})
         connect(box, &QCheckBox::toggled, this, &PreferencesDialog::saveSettings);
     for (auto *box : {depth_, resolution_})
         connect(box, qOverload<int>(&QComboBox::currentIndexChanged), this, &PreferencesDialog::saveSettings);
@@ -216,6 +241,13 @@ void PreferencesDialog::refresh() {
     grid_->setChecked(p.grid);
     guides_->setChecked(p.guides);
     snap_->setChecked(p.snap);
+    snapGuides_->setChecked(p.snapGuides);
+    snapGrid_->setChecked(p.snapGrid);
+    snapLayers_->setChecked(p.snapLayers);
+    snapBounds_->setChecked(p.snapBounds);
+    lockGuides_->setChecked(p.lockGuides);
+    pixelGrid_->setChecked(p.pixelGrid);
+    transformControls_->setChecked(p.transformControls);
     if (!shortcutDirty_)
         for (int i = 0; i < actions_.size(); ++i)
             editors_[i]->setKeySequence(actions_[i]->shortcut());
@@ -238,6 +270,13 @@ void PreferencesDialog::saveSettings() {
     p.grid = grid_->isChecked();
     p.guides = guides_->isChecked();
     p.snap = snap_->isChecked();
+    p.snapGuides = snapGuides_->isChecked();
+    p.snapGrid = snapGrid_->isChecked();
+    p.snapLayers = snapLayers_->isChecked();
+    p.snapBounds = snapBounds_->isChecked();
+    p.lockGuides = lockGuides_->isChecked();
+    p.pixelGrid = pixelGrid_->isChecked();
+    p.transformControls = transformControls_->isChecked();
     p.save();
     emit settingsChanged();
 }
@@ -263,6 +302,13 @@ void PreferencesDialog::resetSection() {
         p.grid = defaults.grid;
         p.guides = defaults.guides;
         p.snap = defaults.snap;
+        p.snapGuides = defaults.snapGuides;
+        p.snapGrid = defaults.snapGrid;
+        p.snapLayers = defaults.snapLayers;
+        p.snapBounds = defaults.snapBounds;
+        p.lockGuides = defaults.lockGuides;
+        p.pixelGrid = defaults.pixelGrid;
+        p.transformControls = defaults.transformControls;
     }
     p.save();
     refresh();
@@ -327,6 +373,13 @@ void PreferencesDialog::retranslate() {
     grid_->setText(t("showGrid"));
     guides_->setText(t("showGuides"));
     snap_->setText(t("snap"));
+    snapGuides_->setText(t("snapGuides"));
+    snapGrid_->setText(t("snapGrid"));
+    snapLayers_->setText(t("snapLayers"));
+    snapBounds_->setText(t("snapBounds"));
+    lockGuides_->setText(t("lockGuides"));
+    pixelGrid_->setText(t("pixelGrid"));
+    transformControls_->setText(t("transformControls"));
     shortcuts_->setHorizontalHeaderLabels({t("command"), t("shortcut")});
     for (int i = 0; i < actions_.size(); ++i) {
         QString key = actions_[i]->objectName();

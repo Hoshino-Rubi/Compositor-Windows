@@ -13,10 +13,12 @@ struct ProjectManifest {
     static constexpr int current = 12;
     static constexpr int eightBit = 11;
 };
-inline constexpr int MaxSide = 16384;
-inline constexpr qint64 MaxCanvasPixels = 64000000;
-inline constexpr qint64 MaxSourcePixels = 100000000;
-inline constexpr int MaxLayers = 1000;
+qint64 documentCapacity(qint64 memoryDivisor, qint64 minimum, qint64 maximum);
+inline constexpr int MaxSide = 30000;
+inline const qint64 MaxCanvasPixels = documentCapacity(128, 64000000, 200000000);
+// Image and mask allocations each receive half of the memory-scaled document budget.
+inline const qint64 MaxSourcePixels = documentCapacity(64, 100000000, 400000000);
+inline constexpr int MaxLayers = 10000;
 struct Error : std::runtime_error {
     QString key, detail;
     explicit Error(QString key, QString detail = {});

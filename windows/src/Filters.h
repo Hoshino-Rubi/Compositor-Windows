@@ -1,6 +1,8 @@
 #pragma once
 #include "Project.h"
 namespace comp {
+bool isStandaloneFilter(const QString &kind);
+QImage standaloneFilter(const QImage &source, const QJsonObject &settings);
 QImage filtered(const QImage &source, const QJsonObject &settings);
 QImage blurImage(const QImage &source, double radius);
 QPainterPath alphaPath(const QImage &image);

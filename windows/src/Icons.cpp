@@ -100,6 +100,8 @@ class VectorIcon final : public QIconEngine {
             }
         } else if (n == "ellipse")
             p->drawEllipse(QRectF(3, 3, 18, 18));
+        else if (n == "line")
+            line(4, 20, 20, 4);
         else if (n == "text") {
             line(4, 4, 20, 4);
             line(12, 4, 12, 21);

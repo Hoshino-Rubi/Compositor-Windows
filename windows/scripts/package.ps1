@@ -11,7 +11,7 @@ $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -QtDir $QtDir -BuildDir $BuildDir }
 $distributionRoot = Join-Path $sourceRoot 'dist'
 # A fresh staging directory prevents old plugins from leaking into a release.
-$stage = Join-Path $distributionRoot ('Compositor-0.3.4-win-x64-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+$stage = Join-Path $distributionRoot ('Compositor-0.4.0-win-x64-' + [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $BuildDir 'Release/Compositor.exe') -Destination $stage
 $env:PATH = (Join-Path $QtDir 'bin') + [IO.Path]::PathSeparator + $env:PATH
@@ -53,7 +53,7 @@ foreach ($module in 'qtbase','qtimageformats','qtsvg') {
 }
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'README.zh-CN.md') -Destination (Join-Path $stage 'README.zh-CN.md')
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'README.md') -Destination (Join-Path $stage 'README.md')
-$archive = Join-Path $distributionRoot 'Compositor-0.3.4-win-x64.zip'
+$archive = Join-Path $distributionRoot 'Compositor-0.4.0-win-x64.zip'
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'dependencies.lock.json') -Destination $stage
 Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal -Force
 Write-Output "Application: $(Join-Path $stage 'Compositor.exe')"

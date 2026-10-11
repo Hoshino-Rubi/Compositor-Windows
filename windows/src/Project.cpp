@@ -18,8 +18,24 @@
 #include <QtEndian>
 #include <cmath>
 #include <functional>
+#include <algorithm>
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <Windows.h>
+#endif
 
 namespace comp {
+qint64 documentCapacity(qint64 memoryDivisor, qint64 minimum, qint64 maximum) {
+    static const quint64 bytes = [] {
+#ifdef Q_OS_WIN
+        MEMORYSTATUSEX status{};
+        status.dwLength = sizeof(status);
+        if (GlobalMemoryStatusEx(&status)) return quint64(status.ullTotalPhys);
+#endif
+        return quint64(8) * 1024 * 1024 * 1024;
+    }();
+    return std::clamp(qint64(bytes / quint64(memoryDivisor)), minimum, maximum);
+}
 Error::Error(QString key, QString detail)
     : std::runtime_error(key.toStdString()), key(std::move(key)), detail(std::move(detail)) {}
 QString newId() {

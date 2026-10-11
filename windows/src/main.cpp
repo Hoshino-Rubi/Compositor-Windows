@@ -8,15 +8,16 @@
 #include <QImageWriter>
 #include <QImageReader>
 #include <cstdio>
+#include <algorithm>
 int main(int argc, char **argv) {
     Q_INIT_RESOURCE(translations);
     Q_INIT_RESOURCE(icons);
     Q_INIT_RESOURCE(controls);
     QApplication app(argc, argv);
-    QImageReader::setAllocationLimit(1024);
+    QImageReader::setAllocationLimit(int(std::max<qint64>(1024, (comp::MaxSourcePixels * 8 + 1048575) / 1048576)));
     QCoreApplication::setOrganizationName("Compositor");
     QCoreApplication::setApplicationName("Compositor");
-    QCoreApplication::setApplicationVersion("0.3.4");
+    QCoreApplication::setApplicationVersion("0.4.0");
     QApplication::setStyle("Fusion");
     QCommandLineParser parser;
     parser.setApplicationDescription("Compositor native Windows image editor");

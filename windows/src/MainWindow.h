@@ -34,6 +34,7 @@ class MainWindow : public QMainWindow {
 
   protected:
     void closeEvent(QCloseEvent *) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
   private:
     Document document_;
@@ -66,6 +67,9 @@ class MainWindow : public QMainWindow {
     std::function<void()> completion_;
     QString t(const QString &key) const { return localization_.text(key); }
     void commandPalette();
+    void toggleCanvasFullscreen();
+    bool fullscreenCanvas_ = false;
+    Qt::WindowStates windowStateBeforeFullscreen_;
     QJsonObject lastFilter_;
     void buildActions();
     void buildUi();
@@ -96,6 +100,7 @@ class MainWindow : public QMainWindow {
     void effectsDialog();
     void cameraRawDialog();
     void selectSubject(QPoint point = QPoint(-1, -1), bool removeBackground = false);
+    void backgroundDialog(QImage mask, QImage source, QString layerId, QString documentId);
     void shortcutsDialog();
     void transformDialog(bool distort = false);
     void watchProjects();
@@ -127,11 +132,12 @@ class MainWindow : public QMainWindow {
     QStackedWidget *toolOptions_ = nullptr;
     QLabel *toolTitle_ = nullptr, *layerCount_ = nullptr;
     QComboBox *brushMode_ = nullptr, *shapeMode_ = nullptr, *retouchMode_ = nullptr, *lassoMode_ = nullptr,
+              *healingMode_ = nullptr,
               *wandMode_ = nullptr;
     QComboBox *selectionModeBox_ = nullptr, *marqueeShape_ = nullptr, *gradientShape_ = nullptr,
               *gradientStyle_ = nullptr, *cropRatioBox_ = nullptr;
-    QSpinBox *hardness_ = nullptr, *tolerance_ = nullptr;
-    QCheckBox *autoSelect_ = nullptr, *contiguous_ = nullptr;
+    QSpinBox *hardness_ = nullptr, *tolerance_ = nullptr, *blurRadius_ = nullptr, *lineWidth_ = nullptr;
+    QCheckBox *autoSelect_ = nullptr, *contiguous_ = nullptr, *cloneAligned_ = nullptr, *cloneSampleAll_ = nullptr;
     QToolButton *backgroundColor_ = nullptr;
     QColor backgroundColorValue_{Qt::white};
     QString maskLayer_;
