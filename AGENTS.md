@@ -22,3 +22,5 @@ If you've been asked to make or change an image in a `.comp` project, you don't 
 - Add or change UI strings in all `windows/translations/*.json` catalogs (currently eight languages).
 
 - GitHub release titles and complete release notes use English first, with Simplified Chinese notes in a collapsible section below.
+
+- Incremental GPU-pipeline batches use `0.4.1a1`, `0.4.1a2`, and so on. Publish every batch as a GitHub **pre-release**, never as stable/latest without explicit user approval. Keep stable `windows-v0.4.0` as Latest.

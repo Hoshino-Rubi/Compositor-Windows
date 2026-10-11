@@ -9,7 +9,7 @@ struct CanvasPreview {
     QVector<PreviewTile> tiles;
     quint64 revision = 0;
 };
-QImage renderPreview(const State &state, QSize target = {});
+QImage renderPreview(const State &state, QSize target = {}, QPoint viewportOrigin = {});
 QImage renderRegion(const State &state, QRect region, bool accelerated = false);
 CanvasPreview renderCanvasPreview(const State &state, QRect visible, QSize overviewSize, bool detailed,
                                   quint64 revision, const CanvasPreview &previous,

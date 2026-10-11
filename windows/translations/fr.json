@@ -142,7 +142,7 @@
   "rasterFallback": "Les textes et formes importés utilisent leur rendu PNG enregistré.",
   "shortcuts": "Raccourcis clavier",
   "shortcutBody": "Ctrl+N Nouveau · Ctrl+O Ouvrir · Ctrl+S Enregistrer · Ctrl+Maj+S Enregistrer sous · Ctrl+I Importer · Ctrl+Maj+E Exporter\nCtrl+Z Annuler · Ctrl+Maj+Z / Ctrl+Y Rétablir · Ctrl+J Dupliquer · Suppr Supprimer\nV Déplacement · B Pinceau · E Gomme · U Rectangle · O Ellipse · T Texte · I Pipette · H Main · C Recadrage\nEspace Déplacer la vue · Ctrl+0 Ajuster · Ctrl+1 Taille réelle · [ / ] Taille du pinceau\nFlèches 1 px · Maj+flèches 10 px\nM / L / W · G · S · J · R · Z\nCtrl+A / Ctrl+D / Ctrl+Maj+I\nCtrl+C / Ctrl+V / Ctrl+Maj+C\nAlt+Retour arrière / Ctrl+Retour arrière\nCtrl+G / Ctrl+Maj+G / Ctrl+E / Ctrl+W\nMaj+F5",
-  "aboutBody": "Compositor pour Windows 0.4.0\nPortage natif C++ / Qt 6 de Compositor, créé par Robbie Tilton.\nLicence MIT. Consultez le README pour la compatibilité des fonctions.",
+  "aboutBody": "Compositor pour Windows 0.4.1a1\nPortage natif C++ / Qt 6 de Compositor, créé par Robbie Tilton.\nLicence MIT. Consultez le README pour la compatibilité des fonctions.",
   "ok": "OK",
   "busy": "Fin de l’opération en cours…",
   "cropDone": "Zone de travail recadrée",

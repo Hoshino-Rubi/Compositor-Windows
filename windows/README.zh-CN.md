@@ -1,13 +1,24 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.0**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a1（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a1) 下载便携包。
 
-解压 `Compositor-0.4.0-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a1 — GPU 预览缓存（预发布）
+
+这是 GPU 管线分批迁移的第一批，不是完整 GPU 编辑器。后续批次依次使用 `0.4.1a2`、`0.4.1a3` 等名称，未得到明确许可前**一律只发布为 Pre-release**。稳定版 Latest 保持为 0.4.0；请在 Releases 页面选择 alpha 版本，测试前保留项目备份。
+
+- 复用 Direct3D 图层预览纹理、交替合成纹理及回读纹理，不再每帧重复分配。未变化图层跳过 CPU 准备和上传；相同合成请求直接复用最终图像，不再调度计算或回读。
+- 像素编辑后比较 CPU 准备的图层表面与缓存，仅上传实际改变区域的包围矩形，保留原生 16 位样本。只切换混合模式时复用源纹理。
+- 缓存区分文档、视口原点、画布／目标尺寸和位深；像素、蒙版、蒙版链接、剪贴来源、组不透明度、显隐、变换、层序、撤销／重做和位深变化均参与失效判断。
+- 按最近使用顺序淘汰，CPU／GPU 缓存的估算保留资源总量上限为 512 MiB，并按显卡报告的预算及可用量进一步降低；超出预算的请求回退 CPU。环境变量 `COMPOSITOR_GPU_CACHE_MB`（1–512）可下调上限；`COMPOSITOR_DISABLE_GPU=1` 清理缓存并禁用 GPU 预览。
+
+**尚未迁移：** 画笔／橡皮／克隆／修复内核、变换、蒙版、滤镜／Camera Raw、图层效果及导出。发生变化的图层表面仍由 CPU 准备和比较，变化的合成仍需计算整个视口并回读给 Qt Widgets；不是零拷贝显示，也不保证所有显卡都提速。项目格式与导出精度不变。
 
 ## 0.4.0 更新
 

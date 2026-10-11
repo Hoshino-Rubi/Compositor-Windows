@@ -1,3 +1,17 @@
+# Windows 0.4.1a1 pre-release verification
+
+Verified on Windows x64 / MSVC 2022 / Qt 6.8.3, October 11, 2026 (Asia/Taipei). First GPU-pipeline batch; **pre-release only**, with stable Latest remaining `windows-v0.4.0`. Upstream remains `3081719d5178b466214860fe5fcf5691394dc558`.
+
+- Native and extracted portable suites: **93 passed, 1 optional HEIC-alpha fixture skipped, 0 failed**. GPU tests required hardware via `COMPOSITOR_REQUIRE_GPU=1`; the benchmark also ran with `COMPOSITOR_GPU_BENCHMARK=1`. Both processes exited normally.
+- Reports: `windows/test-results/native-0.4.1a1.xml`, `windows/test-results/package-native-0.4.1a1.xml`, and the isolated `windows/test-results/gpu-cache-0.4.1a1.xml` (local generated artifacts).
+- New coverage: unchanged-frame reuse without GPU dispatch/readback; 8/16-bit partial uploads; zero new texture allocations on warm edits; masks, clipping, hierarchy, placement, blend mode, visibility, ordering, undo/redo and depth invalidation; document/viewport separation; LRU eviction and CPU fallback under a 2 MiB test cap; disabling acceleration releases cached resources.
+- Portable-package benchmark: 1024×1024, 8-bit, 6 layers, 12 changes in a 32×32 region. Cold cache: 308.505 ms, 301,989,888 uploaded bytes, 108 allocations, 72 prepared surfaces, 12 readbacks. Reused cache: 124.306 ms, 49,152 uploaded bytes, 0 allocations, 12 prepared surfaces, 12 readbacks. This measures this implementation with/without retained cache in one workload, not a universal guarantee or a complete old-release benchmark.
+- ZIP `Compositor-0.4.1a1-win-x64.zip`: **26,262,098 bytes**, SHA-256 `43e13273a00221b968908f32c04d0a73b6f778595dfef81ade5906968a70af97`. Packaged executable matches the tested Release build byte for byte; test executable/Qt6Test/offscreen plugin were added to the verification extraction only, not the ZIP.
+- Minimal-PATH launch using bundled Windows Qt plugin and application-owned capture succeeded: `windows/test-results/capture-0.4.1a1-windows.png`. Eight catalogs retain the same 607 keys and report version 0.4.1a1.
+- Scope limits: CPU surface preparation/diffing, full changed-viewport GPU recomposition/readback, CPU editing/filter/export kernels, and existing format limits remain. Cache budget describes estimated retained CPU/GPU resources, not peak working-set or exact driver allocation. No macOS/Xcode tests were run.
+
+---
+
 # Windows 0.4.0 verification
 
 Built on Windows x64 with MSVC 2022 and Qt 6.8.3 on October 11, 2026 (Asia/Taipei). The merged upstream `main` commit is `3081719d5178b466214860fe5fcf5691394dc558`.

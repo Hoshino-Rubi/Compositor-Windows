@@ -37,11 +37,11 @@ int padding(const State &s) {
     return total;
 }
 } // namespace
-QImage renderPreview(const State &s, QSize target) {
+QImage renderPreview(const State &s, QSize target, QPoint viewportOrigin) {
     if (!target.isValid()) target = s.size;
     // Small images are cheaper on the CPU than a GPU upload/readback.
     if (qint64(target.width()) * target.height() >= 65536) {
-        auto image = renderGpuPreview(s, target);
+        auto image = renderGpuPreview(s, target, viewportOrigin);
         if (!image.isNull()) return image;
     }
     return render(s, target);
@@ -58,7 +58,7 @@ QImage renderRegion(const State &s, QRect region, bool accelerated) {
         l.placement.origin -= work.topLeft();
         l.maskPlacement.origin -= work.topLeft();
     }
-    auto result = accelerated ? renderPreview(local) : render(local);
+    auto result = accelerated ? renderPreview(local, {}, work.topLeft()) : render(local);
     return result.copy(region.translated(-work.topLeft()));
 }
 CanvasPreview renderCanvasPreview(const State &s, QRect visible, QSize overviewSize, bool detailed,

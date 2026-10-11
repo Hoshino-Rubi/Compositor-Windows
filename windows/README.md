@@ -1,14 +1,25 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.0**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a1 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the portable application from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a1). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.0-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a1 — GPU preview cache (pre-release)
+
+This is the first incremental GPU-pipeline alpha, not a complete GPU editor. Subsequent batches use `0.4.1a2`, `0.4.1a3`, and so on, and are published **only as pre-releases** until explicitly approved for a stable release.
+
+- Reuses Direct3D preview layer-surface textures, ping-pong compositing targets and staging textures across frames instead of allocating them on every render. Unchanged layer surfaces skip CPU preparation and upload; identical composite requests reuse the final image without compute dispatch or GPU readback.
+- Pixel edits compare the new CPU-prepared surface against its cached mirror and upload only the changed bounding rectangle with `UpdateSubresource`, including native 16-bit samples. Blend-mode-only changes reuse existing source textures.
+- Cache identities include document, viewport origin, canvas/target dimensions and depth. Pixel/mask edits, linked/unlinked masks, clipping sources, folder opacity, visibility, transforms, order, undo/redo and depth changes invalidate the affected entries.
+- Least-recently-used eviction limits estimated retained GPU and CPU cache resources to at most 512 MiB, further reduced by the Direct3D adapter's reported memory budget/availability. Requests that do not fit use the reference CPU renderer. Set `COMPOSITOR_GPU_CACHE_MB` (1–512) to lower this cap; `COMPOSITOR_DISABLE_GPU=1` releases the preview cache and uses CPU previews.
+
+**Still CPU-backed:** brush/eraser/clone/healing kernels, transforms, masks, filters/Camera Raw, effects and export. Changed surfaces are still prepared and compared on the CPU; changed composites still require a complete viewport compute pass and readback for Qt Widgets. This alpha does not introduce zero-copy display or promise faster results on every GPU. Project format and export precision are unchanged. Keep backups when testing pre-releases.
 
 ## Version 0.4.0
 
