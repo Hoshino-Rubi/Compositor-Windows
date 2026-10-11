@@ -9,8 +9,8 @@
 #include <QVBoxLayout>
 #include <QMessageBox>
 namespace comp {
-void MainWindow::insertImported(const QString &name, const QImage &image) {
-    if (!document_.hasDocument()) {
+void MainWindow::insertImported(const QString &name, const QImage &image, bool openAsDocument) {
+    if (openAsDocument || !document_.hasDocument()) {
         State s;
         s.id = newId();
         s.size = image.size();
@@ -18,19 +18,19 @@ void MainWindow::insertImported(const QString &name, const QImage &image) {
             s.size.scale(MaxSide, MaxSide, Qt::KeepAspectRatio);
         while (qint64(s.size.width()) * s.size.height() > MaxCanvasPixels)
             s.size *= .9;
-        adoptDocument(s, t("untitled"));
+        adoptDocument(s, openAsDocument ? name : t("untitled"));
     }
     document_.addLayer(name, image);
     canvas_->fit();
 }
-void MainWindow::importNext(QStringList paths) {
+void MainWindow::importNext(QStringList paths, bool openAsDocument) {
     if (paths.isEmpty() || busy_)
         return;
     const QString path = paths.takeFirst(), suffix = QFileInfo(path).suffix().toLower();
     if (suffix == "psd" || suffix == "psb") {
         auto result = std::make_shared<ImportResult>();
         runIO([result, path] { *result = readPhotoshop(path); },
-              [this, result, path, paths] {
+              [this, result, path, paths, openAsDocument] {
                   bool accepted = true;
                   if (!result->notices.isEmpty()) {
                       QStringList details;
@@ -45,28 +45,28 @@ void MainWindow::importNext(QStringList paths) {
                   }
                   if (accepted)
                       adoptDocument(result->state, QFileInfo(path).completeBaseName());
-                  importNext(paths);
+                  importNext(paths, openAsDocument);
               });
         return;
     }
     if (isRawPath(path)) {
-        importRaw(path, paths);
+        importRaw(path, paths, openAsDocument);
         return;
     }
     auto image = std::make_shared<QImage>();
     runIO([image, path] { *image = readImage(path); },
-          [this, image, path, paths] {
-              invoke([&] { insertImported(QFileInfo(path).completeBaseName(), *image); });
-              importNext(paths);
+          [this, image, path, paths, openAsDocument] {
+              invoke([&] { insertImported(QFileInfo(path).completeBaseName(), *image, openAsDocument); });
+              importNext(paths, openAsDocument);
           });
 }
 void MainWindow::importPhotoshop(const QString &path) {
     importNext({path});
 }
-void MainWindow::importRaw(const QString &path, QStringList remaining) {
+void MainWindow::importRaw(const QString &path, QStringList remaining, bool openAsDocument) {
     auto frame = std::make_shared<RawFrame>();
     runIO([frame, path] { *frame = decodeRaw(path); },
-          [this, frame, path, remaining] {
+          [this, frame, path, remaining, openAsDocument] {
               QDialog dialog(this);
               dialog.setObjectName("rawDevelopDialog");
               dialog.setWindowTitle(t("rawDevelop"));
@@ -118,15 +118,15 @@ void MainWindow::importRaw(const QString &path, QStringList remaining) {
               });
               update();
               if (dialog.exec() != QDialog::Accepted) {
-                  importNext(remaining);
+                  importNext(remaining, openAsDocument);
                   return;
               }
               double e = exposure.value(), temp = temperature.value(), ti = tint.value(), b = boost.value();
               auto image = std::make_shared<QImage>();
               runIO([frame, image, e, temp, ti, b] { *image = developRaw(*frame, e, temp, ti, b); },
-                    [this, image, path, remaining] {
-                        invoke([&] { insertImported(QFileInfo(path).completeBaseName(), *image); });
-                        importNext(remaining);
+                    [this, image, path, remaining, openAsDocument] {
+                        invoke([&] { insertImported(QFileInfo(path).completeBaseName(), *image, openAsDocument); });
+                        importNext(remaining, openAsDocument);
                     });
           });
 }

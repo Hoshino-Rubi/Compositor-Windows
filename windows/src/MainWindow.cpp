@@ -131,7 +131,12 @@ void MainWindow::buildActions() {
     };
     add("new", "Ctrl+N", [this] { newDialog(); });
     add("open", "Ctrl+O", [this] {
-        const auto path = QFileDialog::getExistingDirectory(this, t("open"));
+        const auto path = QFileDialog::getOpenFileName(this, t("open"), {}, t("imageFilter"));
+        if (!path.isEmpty())
+            openProject(path);
+    });
+    add("openProject", "Ctrl+Shift+O", [this] {
+        const auto path = QFileDialog::getExistingDirectory(this, t("openProject"));
         if (!path.isEmpty())
             openProject(path);
     });
@@ -274,7 +279,7 @@ void MainWindow::buildWelcome() {
         return b;
     };
     button("open", [this] { actions_["open"]->trigger(); });
-    button("import", [this] { importImages(); });
+    button("openProject", [this] { actions_["openProject"]->trigger(); });
     row->addStretch();
     auto *create = button("create", [=, this] {
         State s;
@@ -488,7 +493,7 @@ void MainWindow::openProject(const QString &path) {
         return;
     canvas_->finishInlineText();
     if (QFileInfo(path).isFile()) {
-        importImages({path});
+        importNext({path}, true);
         return;
     }
     auto loaded = std::make_shared<LoadedProject>();

@@ -101,7 +101,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
                 m->addAction(actions_[a]);
         return m;
     };
-    menu("file", {"new", "open", "import", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
+    menu("file", {"new", "open", "openProject", "import", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
     menu("edit", {"undo", "redo", "", "cut", "copy", "copyMerged", "paste", "", "fillForeground", "fillBackground",
                   "clearPixels", "contentFill", "", "shortcuts"});
     menu("image",

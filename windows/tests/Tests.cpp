@@ -26,6 +26,7 @@
 #include <QPainter>
 #include <QApplication>
 #include <QFile>
+#include <QFileDialog>
 #include <QJsonDocument>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -64,6 +65,36 @@ bool rejects(const QString &key, const std::function<void()> &f) {
         return e.key == key;
     }
     return false;
+}
+struct PickResult {
+    bool shown = false;
+    QFileDialog::FileMode mode = QFileDialog::AnyFile;
+    QStringList filters;
+};
+PickResult pickFile(MainWindow &window, const char *action, const QString &path = {}) {
+    PickResult result;
+    QTimer::singleShot(0, &window, [&] {
+        auto *dialog = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        result = {true, dialog->fileMode(), dialog->nameFilters()};
+        if (path.isEmpty()) {
+            dialog->reject();
+        } else {
+            dialog->setDirectory(QFileInfo(path).absolutePath());
+            dialog->selectFile(path);
+            QMetaObject::invokeMethod(dialog, "accept", Qt::QueuedConnection);
+        }
+    });
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &window, [&] {
+        if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
+            dialog->reject();
+    });
+    timeout.start(5000);
+    window.findChild<QAction *>(action)->trigger();
+    return result;
 }
 } // namespace
 class Tests : public QObject {
@@ -1228,6 +1259,128 @@ class Tests : public QObject {
         window.document()->undo();
         QVERIFY(window.document()->state().layers[0].mask.isNull());
     }
+    void openImagePickerKeepsDocumentsAndImport() {
+        QTemporaryDir dir;
+        MainWindow window;
+        window.show();
+        auto *tabs = window.findChild<QTabBar *>();
+        QVERIFY(tabs);
+        QString firstId;
+        for (const auto &format : {QString("png"), QString("jpg")}) {
+            const QString path = dir.filePath("照片 with spaces." + format);
+            QImage image(37, 29, QImage::Format_ARGB32);
+            image.fill(QColor(25, 80, 160));
+            QVERIFY(image.save(path));
+            const auto picked = pickFile(window, "openAction", path);
+            QVERIFY(picked.shown);
+            QCOMPARE(picked.mode, QFileDialog::ExistingFile);
+            QVERIFY(picked.filters.join(' ').contains("*.png"));
+            QVERIFY(picked.filters.join(' ').contains("*.psd"));
+            QVERIFY(picked.filters.join(' ').contains("*.dng"));
+            const int count = format == "png" ? 1 : 2;
+            QTRY_COMPARE_WITH_TIMEOUT(tabs->count(), count, 10000);
+            QCOMPARE(window.document()->state().size, image.size());
+            QCOMPARE(window.document()->state().layers.size(), 1);
+            QCOMPARE(window.document()->state().layers[0].image, readImage(path));
+            QVERIFY(tabs->tabText(tabs->currentIndex()).contains("照片 with spaces"));
+            if (format == "png") {
+                firstId = window.document()->state().id;
+                window.document()->moveBy({3, 4});
+            }
+        }
+        const QString secondId = window.document()->state().id;
+        QVERIFY(secondId != firstId);
+        tabs->setCurrentIndex(0);
+        QCOMPARE(window.document()->state().id, firstId);
+        QCOMPARE(window.document()->state().layers.size(), 1);
+        QCOMPARE(window.document()->state().layers[0].placement.origin, QPointF(3, 4));
+        QVERIFY(window.document()->dirty());
+        QVERIFY(window.document()->canUndo());
+        tabs->setCurrentIndex(1);
+        const auto imported = pickFile(window, "importAction", dir.filePath("照片 with spaces.png"));
+        QVERIFY(imported.shown);
+        QCOMPARE(imported.mode, QFileDialog::ExistingFiles);
+        QTRY_COMPARE_WITH_TIMEOUT(window.document()->state().layers.size(), 2, 10000);
+        QCOMPARE(tabs->count(), 2);
+        QCOMPARE(window.document()->state().id, secondId);
+        window.document()->undo();
+        QCOMPARE(window.document()->state().layers.size(), 1);
+        QVERIFY(pickFile(window, "openAction").shown);
+        QCOMPARE(tabs->count(), 2);
+        QCOMPARE(window.document()->state().id, secondId);
+        const QString invalid = dir.filePath("invalid.png");
+        QFile broken(invalid);
+        QVERIFY(broken.open(QIODevice::WriteOnly));
+        broken.write("not an image");
+        broken.close();
+        bool reported = false;
+        QTimer error;
+        connect(&error, &QTimer::timeout, this, [&] {
+            if (auto *dialog = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                reported = true;
+                dialog->accept();
+            }
+        });
+        error.start(20);
+        window.openProject(invalid);
+        QTRY_VERIFY_WITH_TIMEOUT(reported, 10000);
+        QCOMPARE(tabs->count(), 2);
+        QCOMPARE(window.document()->state().id, secondId);
+        QCOMPARE(window.document()->state().layers.size(), 1);
+    }
+    void openProjectPickerStillLoadsComp() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("项目 with spaces.comp");
+        const auto state = fixture({40, 30});
+        writeProject(path, state);
+        MainWindow window;
+        window.show();
+        const auto picked = pickFile(window, "openProjectAction", path);
+        QVERIFY(picked.shown);
+        QCOMPARE(picked.mode, QFileDialog::Directory);
+        QTRY_COMPARE_WITH_TIMEOUT(window.document()->state().id, state.id, 10000);
+        QCOMPARE(window.document()->state().size, state.size);
+        QCOMPARE(window.document()->state().layers[0].image, state.layers[0].image);
+        QVERIFY(!window.document()->dirty());
+        QVERIFY(pickFile(window, "openProjectAction").shown);
+        QCOMPARE(window.findChild<QTabBar *>()->count(), 1);
+        QCOMPARE(window.document()->state().id, state.id);
+    }
+    void openRawCreatesTabOnlyAfterDevelopment() {
+        MainWindow window;
+        window.show();
+        window.openProject(QString(COMPOSITOR_FIXTURES) + "/layers-0.psd");
+        QTRY_VERIFY_WITH_TIMEOUT(window.document()->hasDocument(), 10000);
+        auto *tabs = window.findChild<QTabBar *>();
+        const QString original = window.document()->state().id;
+        bool accept = false;
+        int dialogs = 0;
+        QTimer modal;
+        connect(&modal, &QTimer::timeout, this, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (dialog && dialog->objectName() == "rawDevelopDialog") {
+                ++dialogs;
+                if (accept)
+                    dialog->accept();
+                else
+                    dialog->reject();
+            }
+        });
+        modal.start(20);
+        window.openProject(QString(COMPOSITOR_FIXTURES) + "/linear.dng");
+        QTRY_COMPARE_WITH_TIMEOUT(dialogs, 1, 10000);
+        QCOMPARE(tabs->count(), 1);
+        QCOMPARE(window.document()->state().id, original);
+        accept = true;
+        window.openProject(QString(COMPOSITOR_FIXTURES) + "/linear.dng");
+        QTRY_COMPARE_WITH_TIMEOUT(tabs->count(), 2, 10000);
+        QCOMPARE(dialogs, 2);
+        QCOMPARE(window.document()->state().layers.size(), 1);
+        QVERIFY(window.document()->state().id != original);
+        tabs->setCurrentIndex(0);
+        QCOMPARE(window.document()->state().id, original);
+        QCOMPARE(window.document()->state().layers.size(), 2);
+    }
     void importPsdAndRawThroughWindow() {
         MainWindow window;
         window.show();
@@ -1244,7 +1397,7 @@ class Tests : public QObject {
             }
         });
         modal.start(50);
-        window.openProject(QString(COMPOSITOR_FIXTURES) + "/linear.dng");
+        window.canvas()->filesDropped({QString(COMPOSITOR_FIXTURES) + "/linear.dng"});
         QTRY_COMPARE_WITH_TIMEOUT(window.document()->state().layers.size(), 3, 10000);
         QVERIFY(developed);
         window.document()->undo();
@@ -1429,6 +1582,7 @@ int main(int argc, char **argv) {
     Q_INIT_RESOURCE(icons);
     Q_INIT_RESOURCE(controls);
     QApplication app(argc, argv);
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QCoreApplication::setOrganizationName("CompositorTests");
     QCoreApplication::setApplicationName("Tests");
     QSettings::setDefaultFormat(QSettings::IniFormat);

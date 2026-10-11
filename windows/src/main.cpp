@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("Compositor");
     QCoreApplication::setApplicationName("Compositor");
-    QCoreApplication::setApplicationVersion("0.3.1");
+    QCoreApplication::setApplicationVersion("0.3.2");
     QApplication::setStyle("Fusion");
     QCommandLineParser parser;
     parser.setApplicationDescription("Compositor native Windows image editor");

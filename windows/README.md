@@ -1,14 +1,21 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.3.1**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.3.2**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
 Download the portable application from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.3.1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.3.2-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. English, Simplified Chinese and Traditional Chinese switch immediately.
+
+## Version 0.3.2
+
+- Open Image (`Ctrl+O`) now selects supported image files, including PNG, JPEG, WebP, TIFF, PSD/PSB and RAW, and opens them in a new document tab.
+- Open Project (`Ctrl+Shift+O`) still selects a `.comp` directory. Both actions are available on the welcome page.
+- Import Images (`Ctrl+I`) and canvas drops keep adding image layers to the current document. Opening preserves unsaved edits in other tabs; canceling the picker/RAW development or failing to decode leaves the current document intact.
+- Updated English, Simplified Chinese and Traditional Chinese labels and documentation.
 
 ## Version 0.3.1
 
@@ -39,7 +46,7 @@ Version 0.3 adds:
 - Liquify/smudge, polygonal lasso, feathered selections, ranged HSV, Motion Blur adjustment layers, group effects, group transforms and free distort.
 - Local U2Netp subject/object selection and reversible background masks, inline rich text, configurable shortcuts and safe external-project reload.
 
-Use Import or drag a PSD/RAW image onto the canvas. Open a `.comp` by selecting the project directory. R selects Blur; its mode selector offers Smudge and Liquify. Ctrl+T transforms selected layers/groups; the Layer menu offers Free Distort. Shift+F6 feathers a selection. Ctrl+Enter accepts inline text, Escape cancels.
+Use Open Image (`Ctrl+O`) for a new image document, Open Project (`Ctrl+Shift+O`) for a `.comp` directory, or Import (`Ctrl+I`)/canvas drops to add image layers to the current document. PSD/PSB always open as layered documents. R selects Blur; its mode selector offers Smudge and Liquify. Ctrl+T transforms selected layers/groups; the Layer menu offers Free Distort. Shift+F6 feathers a selection. Ctrl+Enter accepts inline text, Escape cancels.
 
 ## Compatibility
 

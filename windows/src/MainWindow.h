@@ -101,10 +101,10 @@ class MainWindow : public QMainWindow {
     QVector<QString> watchPaths_;
     QHash<QString, QByteArray> watchStamps_;
     QSet<QString> changedProjects_;
-    void importNext(QStringList paths);
+    void importNext(QStringList paths, bool openAsDocument = false);
     void importPhotoshop(const QString &path);
-    void importRaw(const QString &path, QStringList remaining);
-    void insertImported(const QString &name, const QImage &image);
+    void importRaw(const QString &path, QStringList remaining, bool openAsDocument);
+    void insertImported(const QString &name, const QImage &image, bool openAsDocument);
     QStringList selectedLayers() const;
     void stashTab();
     void adoptDocument(State state, QString name, QString path = {}, QByteArray digest = {}, bool saved = false);

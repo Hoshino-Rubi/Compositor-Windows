@@ -1,13 +1,20 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.3.1**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.3.2**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
 从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) 下载便携包。
 
-解压 `Compositor-0.3.1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.3.2-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 右上角即时切换 English、简体中文、繁體中文，语言选择会保存。
+
+## 0.3.2 更新
+
+- 修复“打开图像 / Ctrl+O”只能选择文件夹的问题，现在可选择 PNG、JPEG、WebP、TIFF、PSD/PSB、RAW 等支持的图片文件，并在新标签页打开。
+- “打开项目 / Ctrl+Shift+O”继续选择整个 `.comp` 项目目录；欢迎页提供图像和项目两个打开入口。
+- “导入图像 / Ctrl+I”及拖入画布仍向当前文档添加图片图层。打开新图片保留其他标签的未保存编辑；取消选择、取消 RAW 显影或解码失败不创建空白标签。
+- 同步更新 English、简体中文、繁體中文菜单、快捷键及说明。
 
 ## 0.3.1 更新
 
@@ -47,7 +54,7 @@ Windows 原生端同步适配：
 
 ## 常用操作
 
-- `.comp` 选择整个项目目录；PSD、RAW 等使用“导入”、拖放或命令行文件路径。
+- `Ctrl+O` 在新标签页打开图片；`Ctrl+Shift+O` 选择整个 `.comp` 项目目录；`Ctrl+I` 或拖入画布将图片导入当前文档。命令行文件路径同样在新文档打开。PSD/PSB 保留分层并作为独立文档打开。
 - `V` 移动，`Ctrl+T` 多层/组变换；图层菜单 → 自由扭曲。
 - `M` 选框，`L` 套索（参数栏选择多边形），`W` 魔棒/对象选择，`Shift+F6` 羽化。
 - `B` 画笔，`E` 橡皮，`J` 修复，`S` 克隆（Alt 点击设置来源）。`R` 模糊/涂抹/液化。
