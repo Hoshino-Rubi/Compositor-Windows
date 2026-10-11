@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "MainWindow.h"
 #include "Filters.h"
 #include "Renderer.h"
@@ -431,7 +432,7 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                 if (active >= 0)
                     l.parent = s.layers[active].parent;
                 if (s.selectionActive) {
-                    l.mask = QImage(s.size, QImage::Format_Grayscale8);
+                    l.mask = QImage(s.size, maskFormat(s.bitDepth));
                     l.mask.fill(Qt::black);
                     QPainter p(&l.mask);
                     p.fillPath(s.selection, Qt::white);

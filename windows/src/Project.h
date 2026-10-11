@@ -9,6 +9,10 @@
 #include <QStringList>
 #include <stdexcept>
 namespace comp {
+struct ProjectManifest {
+    static constexpr int current = 12;
+    static constexpr int eightBit = 11;
+};
 inline constexpr int MaxSide = 16384;
 inline constexpr qint64 MaxCanvasPixels = 64000000;
 inline constexpr qint64 MaxSourcePixels = 100000000;
@@ -44,6 +48,7 @@ struct State {
     QString id;
     QSize size{1200, 800};
     double resolution = 72;
+    int bitDepth = 8;
     QString active;
     QPainterPath selection;
     QImage selectionMask;

@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+#include "Pixels.h"
+#include "WideKernels.h"
 #include "Renderer.h"
 #include "Filters.h"
 #include "Icons.h"
@@ -100,6 +102,373 @@ PickResult pickFile(MainWindow &window, const char *action, const QString &path 
 class Tests : public QObject {
     Q_OBJECT
   private slots:
+    void sixteenBitProjectPngAndDepthConversion() {
+        QTemporaryDir dir;
+        auto s = fixture({1024, 4});
+        s.bitDepth = 16;
+        QImage image(s.size, QImage::Format_RGBA64_Premultiplied);
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                reinterpret_cast<QRgba64 *>(image.scanLine(y))[x] = rgba64(12001 + x, 23002 + x, 34003 + x, 65535);
+        s.layers[0].image = image;
+        image.setColorSpace(QColorSpace::SRgb);
+        s.layers[0].image = image;
+        const auto png = pngBytes(image);
+        QCOMPARE(quint8(png[24]), quint8(16));
+        QFile file(dir.filePath("input.png"));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(png);
+        file.close();
+        const auto decoded = readImage(file.fileName());
+        QCOMPARE(decoded, image);
+        const QString project = dir.filePath("Wide.comp");
+        writeProject(project, s);
+        auto loaded = readProject(project);
+        QCOMPARE(loaded.state.bitDepth, 16);
+        QCOMPARE(loaded.state.metadata["version"].toInt(), 12);
+        QCOMPARE(loaded.state.layers[0].image, image);
+        QCOMPARE(render(loaded.state), image);
+        exportDocument(s, dir.filePath("out.png"), "png", s.size);
+        QCOMPARE(readImage(dir.filePath("out.png")), image);
+        Document d;
+        d.reset(s, true);
+        d.setBitDepth(8);
+        QCOMPARE(d.state().bitDepth, 8);
+        QVERIFY(!wideImage(d.state().layers[0].image));
+        d.undo();
+        QCOMPARE(d.state().bitDepth, 16);
+        QCOMPARE(d.state().layers[0].image, image);
+        auto eight = fixture();
+        writeProject(dir.filePath("Eight.comp"), eight);
+        QCOMPARE(readProject(dir.filePath("Eight.comp")).state.metadata["version"].toInt(), 11);
+        rewrite(project, [](QJsonObject &m) { m["version"] = 11; });
+        QVERIFY(rejects("missingAsset", [&] { readProject(project); }) ||
+                rejects("invalidProject", [&] { readProject(project); }));
+    }
+    void sixteenBitPhotoshopCompressionAndLayers() {
+        for (const auto &ext : QStringList{"psd", "psb"})
+            for (int compression = 0; compression < 4; ++compression) {
+                for (const auto &kind : QStringList{"layers", "flat"}) {
+                    const auto path =
+                        QString(COMPOSITOR_FIXTURES) + QString("/wide-%1-%2.%3").arg(kind).arg(compression).arg(ext);
+                    const auto imported = readPhotoshop(path);
+                    QCOMPARE(imported.state.bitDepth, 16);
+                    QCOMPARE(imported.state.size, QSize(17, 9));
+                    QCOMPARE(imported.state.layers.size(), kind == "layers" ? 2 : 1);
+                    const auto &bottom = imported.state.layers[0];
+                    QVERIFY(wideImage(bottom.image));
+                    QCOMPARE(pixel64(bottom.image, 0, 0).red(), quint16(10001));
+                    QCOMPARE(pixel64(bottom.image, 1, 0).red(), quint16(kind == "layers" ? 10008 : 10032));
+                    if (kind == "layers") {
+                        const auto &top = imported.state.layers[1];
+                        QCOMPARE(top.placement.origin, QPointF(3, 2));
+                        QCOMPARE(top.mask.format(), QImage::Format_Grayscale16);
+                        QCOMPARE(reinterpret_cast<const quint16 *>(top.mask.constScanLine(0))[1], quint16(31002));
+                        QCOMPARE(pixel64(top.image, 0, 0).alpha(), quint16(40001));
+                    }
+                    QTemporaryDir dir;
+                    writeProject(dir.filePath("test.comp"), imported.state);
+                    const auto reopened = readProject(dir.filePath("test.comp"));
+                    QCOMPARE(reopened.state.bitDepth, 16);
+                    QCOMPARE(reopened.state.layers[0].image, bottom.image);
+                }
+            }
+        const QString references = qEnvironmentVariable("COMPOSITOR_PSD16_FIXTURES");
+        if (!references.isEmpty())
+            for (const auto &name : QStringList{"16bit5x5.psd", "16bit5x5.psb", "4x4_16bit_rgb.psd"}) {
+                const auto imported = readPhotoshop(references + "/" + name);
+                QCOMPARE(imported.state.bitDepth, 16);
+                QVERIFY(!imported.state.layers.isEmpty());
+                QVERIFY(wideImage(render(imported.state)));
+            }
+    }
+    void sixteenBitFiltersPreserveFineTones() {
+        QImage image(1024, 16, QImage::Format_RGBA64_Premultiplied);
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                reinterpret_cast<QRgba64 *>(image.scanLine(y))[x] = rgba64(12001 + x, 23002 + x, 34003 + x, 65535);
+        for (const auto &kind : QStringList{"Invert", "Exposure", "Levels", "Curves", "Hue/Saturation", "Gaussian Blur",
+                                            "Motion Blur", "Black & White", "Color Balance", "Gradient Map", "Grain",
+                                            "Add Noise", "Camera Raw", "Scanlines"}) {
+            QJsonObject settings{{"kind", kind}};
+            if (kind == "Grain")
+                settings["grainSettings"] = QJsonObject{{"amount", 0}};
+            if (kind == "Add Noise")
+                settings["noiseAmount"] = 0;
+            auto out = filtered(image, settings);
+            QVERIFY2(wideImage(out), qPrintable(kind));
+            QSet<int> tones;
+            bool fractional = false;
+            for (int y = 4; y < 12; ++y)
+                for (int x = 100; x < 900; ++x) {
+                    const auto pixel = pixel64(out, x, y);
+                    tones.insert(pixel.red());
+                    fractional |= pixel.red() % 257 != 0;
+                }
+            QVERIFY2(fractional, qPrintable(kind));
+            if (kind != "Scanlines")
+                QVERIFY2(tones.size() > 300, qPrintable(kind + ":" + QString::number(tones.size())));
+        }
+        auto inverse = filtered(image, {{"kind", "Invert"}});
+        QCOMPARE(pixel64(inverse, 0, 0).red(), quint16(65535 - 12001));
+        auto neutral = filtered(image, {{"kind", "Exposure"}});
+        QCOMPARE(neutral, image);
+        auto s = fixture(image.size());
+        s.bitDepth = 16;
+        s.layers[0].image = image;
+        Document d;
+        d.reset(s, true);
+        d.applyFilter({{"kind", "Invert"}});
+        d.undo();
+        QCOMPARE(d.state().layers[0].image, image);
+    }
+    void sixteenBitBlendsEffectsAndRetouching() {
+        auto s = fixture({48, 32});
+        s.bitDepth = 16;
+        QImage image(s.size, pixelFormat(16));
+        image.fill(QColor::fromRgba64(12345, 23456, 34567, 65535));
+        s.layers[0].image = image;
+        Layer top = s.layers[0];
+        top.id = newId();
+        top.image.fill(QColor::fromRgba64(45678, 34567, 12345, 32769));
+        s.layers.append(top);
+        for (const auto &mode : blendModes()) {
+            s.layers[1].blend = mode;
+            auto out = render(s);
+            QVERIFY2(wideImage(out), qPrintable(mode));
+            const auto a = pixel64(out, 3, 3);
+            QVERIFY(a.red() % 257 || a.green() % 257 || a.blue() % 257);
+        }
+        for (const auto &key :
+             QStringList{"shadow", "innerShadow", "innerGlow", "outerGlow", "colorOverlay", "stroke"}) {
+            QJsonObject effect{{key, QJsonObject{{"opacity", .37},
+                                                 {"red", .12345},
+                                                 {"green", .23456},
+                                                 {"blue", .34567},
+                                                 {"size", 2},
+                                                 {"blur", 2},
+                                                 {"distance", 1}}}};
+            const auto out = applyEffects(top.image, effect, 1);
+            QVERIFY(wideImage(out));
+        }
+        auto warped = image;
+        reinterpret_cast<QRgba64 *>(warped.scanLine(12))[22] = rgba64(12401, 23502, 34603, 65535);
+        const auto before = warped;
+        warpDab(warped, {22, 12}, {25, 14}, 6, .5, .8, false);
+        QVERIFY(wideImage(warped));
+        QVERIFY(warped != before);
+        QCOMPARE(pixel64(warped, 1, 1), pixel64(before, 1, 1));
+        auto perspective = perspectiveWarp(before, QPolygonF{{0, 0}, {48, 1}, {47, 32}, {1, 31}});
+        QVERIFY(wideImage(perspective));
+        QByteArray coverage(48 * 32, 0);
+        coverage[15 * 48 + 24] = char(-1);
+        auto healing = image;
+        QCOMPARE(wide::spot_heal(reinterpret_cast<quint16 *>(healing.bits()),
+                                 reinterpret_cast<const uint8_t *>(coverage.constData()), 48, 32,
+                                 healing.bytesPerLine() / 2, 1, 0, 0),
+                 0);
+        QCOMPARE(pixel64(healing, 24, 15), pixel64(image, 24, 15));
+        QCOMPARE(wide::content_fill(reinterpret_cast<quint16 *>(healing.bits()), healing.bytesPerLine() / 2,
+                                    reinterpret_cast<const uint8_t *>(coverage.constData()), 48, 48, 32),
+                 1);
+        QCOMPARE(pixel64(healing, 24, 15), pixel64(image, 24, 15));
+    }
+    void sixteenBitCanvasBrushAndRawDevelopment() {
+        MainWindow window;
+        window.show();
+        auto s = fixture({120, 80});
+        s.bitDepth = 16;
+        s.layers[0].image = QImage(s.size, pixelFormat(16));
+        s.layers[0].image.fill(QColor::fromRgba64(12345, 23456, 34567, 65535));
+        window.document()->reset(s, true);
+        auto *canvas = window.canvas();
+        canvas->fit();
+        canvas->setTool(Tool::Brush);
+        canvas->setColor(QColor::fromRgba64(45678, 12345, 23456, 65535));
+        const auto point = canvas->viewPoint(QPointF(60, 40)).toPoint();
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, point);
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, point);
+        QVERIFY(wideImage(window.document()->state().layers[0].image));
+        QVERIFY(pixel64(window.document()->state().layers[0].image, 60, 40).red() % 257 != 0);
+        QCOMPARE(pixel64(window.document()->state().layers[0].image, 1, 1), pixel64(s.layers[0].image, 1, 1));
+        window.document()->undo();
+        QCOMPARE(window.document()->state().layers[0].image, s.layers[0].image);
+        window.document()->maskAction("addMask");
+        QCOMPARE(window.document()->state().layers[0].mask.format(), QImage::Format_Grayscale16);
+        window.document()->fill(QColor::fromRgba64(30001, 30001, 30001, 65535), false, true);
+        QVERIFY(wideImage(window.document()->state().layers[0].mask));
+        QCOMPARE(reinterpret_cast<const quint16 *>(window.document()->state().layers[0].mask.constScanLine(40))[60],
+                 quint16(30001));
+        window.document()->undo();
+        auto raw = developRaw(decodeRaw(QString(COMPOSITOR_FIXTURES) + "/linear.dng"));
+        QVERIFY(wideImage(raw));
+        QImage photo(400, 16, QImage::Format_RGBA64);
+        for (int y = 0; y < photo.height(); ++y)
+            for (int x = 0; x < photo.width(); ++x)
+                reinterpret_cast<QRgba64 *>(photo.scanLine(y))[x] = rgba64(10001 + x, 10001 + x, 10001 + x, 65535);
+        RawFrame frame{photo, "Synthetic"};
+        auto developed = developRaw(frame);
+        QSet<int> tones;
+        for (int x = 0; x < 400; ++x)
+            tones.insert(pixel64(developed, x, 0).red());
+        QVERIFY(tones.size() > 256);
+        window.document()->markSaved(window.document()->revision());
+    }
+    void sixteenBitCameraRawControls() {
+        QImage image(64, 40, pixelFormat(16));
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                reinterpret_cast<QRgba64 *>(image.scanLine(y))[x] =
+                    rgba64(10001 + x * 211, 15002 + y * 307, 22003 + x * 73, 40001);
+        const auto identity = cameraRaw(image, {});
+        QCOMPARE(identity, image);
+        const auto cases = QJsonDocument::fromJson(R"([
+            {"exposure":0.5,"contrast":25,"highlights":-20,"shadows":20},
+            {"temperature":35,"tint":-10,"vibrance":15},
+            {"curve":{"rgb":[{"x":0,"y":0},{"x":0.5,"y":0.6},{"x":1,"y":1}]}},
+            {"mixer":{"saturation":[20,10,-15,30,5,-10,5,20]}},
+            {"mixer":{"points":[{"hue":210,"saturation":0.5,"luminance":0.5,"hueShift":20,"saturationShift":30,"luminanceShift":10,"hueRange":180,"saturationRange":1,"luminanceRange":1}]}},
+            {"grading":{"midtones":{"hue":40,"saturation":35,"luminance":10}}},
+            {"texture":35,"clarity":25,"dehaze":10,"glow":20,"grainAmount":5},
+            {"vignetteAmount":-40},
+            {"detail":{"sharpenAmount":60,"noiseLuminance":20,"noiseColor":20}},
+            {"optics":{"distortion":25,"chromaticAberration":25,"purpleAmount":20,"vignette":25}},
+            {"geometry":{"rotate":3,"vertical":10,"constrainCrop":true}},
+            {"calibration":{"redHue":30,"shadowTint":10}}
+        ])")
+                               .array();
+        QCOMPARE(cases.size(), 12);
+        for (const auto &entry : cases) {
+            const auto settings = entry.toObject();
+            const auto out = cameraRaw(image, settings);
+            QVERIFY2(wideImage(out), qPrintable(QString::fromUtf8(QJsonDocument(settings).toJson())));
+            bool fine = false;
+            for (int y = 8; y < 32; ++y)
+                for (int x = 8; x < 56; ++x) {
+                    const auto p = pixel64(out, x, y);
+                    fine |= p.red() % 257 || p.green() % 257 || p.blue() % 257;
+                    QVERIFY(p.red() <= p.alpha() && p.green() <= p.alpha() && p.blue() <= p.alpha());
+                }
+            QVERIFY(fine);
+        }
+        QVERIFY(wideImage(cameraRaw(image, {{"sharpenMask", true}})));
+        QVERIFY(wideImage(cameraRaw(image, {}, 1, 1)));
+    }
+    void sixteenBitCreateAndConvertUi() {
+        MainWindow window;
+        window.show();
+        bool chosen = false;
+        QTimer pick;
+        connect(&pick, &QTimer::timeout, this, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog)
+                return;
+            auto *depth = dialog->findChild<QComboBox *>("canvasBitDepth");
+            if (!depth)
+                return;
+            depth->setCurrentIndex(depth->findData(16));
+            chosen = true;
+            dialog->accept();
+        });
+        pick.start(20);
+        window.findChild<QAction *>("newAction")->trigger();
+        pick.stop();
+        QVERIFY(chosen);
+        QCOMPARE(window.document()->state().bitDepth, 16);
+        QVERIFY(window.findChild<QAction *>("depth16Action")->isChecked());
+        bool canceled = false;
+        QTimer cancel;
+        connect(&cancel, &QTimer::timeout, this, [&] {
+            if (auto *message = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                canceled = true;
+                message->button(QMessageBox::Cancel)->click();
+            }
+        });
+        cancel.start(20);
+        window.findChild<QAction *>("depth8Action")->trigger();
+        cancel.stop();
+        QVERIFY(canceled);
+        QCOMPARE(window.document()->state().bitDepth, 16);
+        QVERIFY(window.findChild<QAction *>("depth16Action")->isChecked());
+        bool accepted = false;
+        QTimer confirm;
+        connect(&confirm, &QTimer::timeout, this, [&] {
+            if (auto *message = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                accepted = true;
+                message->button(QMessageBox::Ok)->click();
+            }
+        });
+        confirm.start(20);
+        window.findChild<QAction *>("depth8Action")->trigger();
+        confirm.stop();
+        QVERIFY(accepted);
+        QCOMPARE(window.document()->state().bitDepth, 8);
+        window.document()->undo();
+        QCOMPARE(window.document()->state().bitDepth, 16);
+        QTemporaryDir dir;
+        writeProject(dir.filePath("Blank16.comp"), window.document()->state());
+        QCOMPARE(readProject(dir.filePath("Blank16.comp")).state.bitDepth, 16);
+        window.document()->markSaved(window.document()->revision());
+    }
+    void sixteenBitTiffAndSelectionPrecision() {
+        const auto image = readImage(QString(COMPOSITOR_FIXTURES) + "/wide-rgb.tif");
+        QVERIFY(wideImage(image));
+        QCOMPARE(image.size(), QSize(17, 9));
+        QCOMPARE(pixel64(image, 1, 1).red(), quint16(10032));
+        QCOMPARE(pixel64(image, 1, 1).green(), quint16(20031));
+        QImage fine(2, 1, pixelFormat(16));
+        auto *pixels = reinterpret_cast<QRgba64 *>(fine.bits());
+        pixels[0] = rgba64(10001, 20002, 30003, 65535);
+        pixels[1] = rgba64(10002, 20002, 30003, 65535);
+        const auto selected = wandPath(fine, {0, 0}, 0, false);
+        QVERIFY(selected.contains(QPointF(.5, .5)));
+        QVERIFY(!selected.contains(QPointF(1.5, .5)));
+        auto state = fixture({64, 40});
+        state.bitDepth = 16;
+        state.layers[0].image = QImage(state.size, pixelFormat(16));
+        state.layers[0].image.fill(QColor::fromRgba64(12345, 23456, 34567, 65535));
+        Document doc;
+        doc.reset(state, true);
+        doc.maskAction("addMask");
+        doc.fill(QColor::fromRgba64(32001, 32001, 32001, 65535), false, true);
+        QCOMPARE(reinterpret_cast<const quint16 *>(doc.state().layers[0].mask.constScanLine(1))[1], quint16(32001));
+        doc.maskAction("applyMask");
+        QCOMPARE(pixel64(doc.state().layers[0].image, 1, 1).alpha(), quint16(32001));
+        doc.undo();
+        QVERIFY(!doc.state().layers[0].mask.isNull());
+        doc.resizeCanvas({128, 80}, true, false);
+        QVERIFY(wideImage(doc.state().layers[0].image));
+        doc.undo();
+        QCOMPARE(doc.state().layers[0].image, state.layers[0].image);
+    }
+    void sixteenBitMasksAndSelections() {
+        auto s = fixture({32, 24});
+        s.bitDepth = 16;
+        s.layers[0].image = QImage(s.size, pixelFormat(16));
+        s.layers[0].image.fill(QColor::fromRgba64(12345, 23456, 34567, 65535));
+        s.layers[0].mask = QImage(s.size, QImage::Format_Grayscale16);
+        for (int y = 0; y < s.size.height(); ++y)
+            for (int x = 0; x < s.size.width(); ++x)
+                reinterpret_cast<quint16 *>(s.layers[0].mask.scanLine(y))[x] = quint16(30001 + x);
+        s.layers[0].maskPlacement = s.layers[0].placement;
+        auto out = render(s);
+        QVERIFY(wideImage(out));
+        QCOMPARE(pixel64(out, 1, 1).alpha(), quint16(30002));
+        QTemporaryDir dir;
+        writeProject(dir.filePath("Mask.comp"), s);
+        QCOMPARE(readProject(dir.filePath("Mask.comp")).state.layers[0].mask, s.layers[0].mask);
+        Document d;
+        d.reset(s, true);
+        d.setSelectionMask(s.layers[0].mask);
+        d.fill(QColor::fromRgba64(45678, 12345, 23456, 65535));
+        QVERIFY(wideImage(d.state().layers[0].image));
+        QVERIFY(pixel64(d.state().layers[0].image, 1, 1).red() % 257 != 0);
+        d.undo();
+        QCOMPARE(d.state().layers[0].image, s.layers[0].image);
+        d.selectAll();
+        d.featherSelection(2);
+        QCOMPARE(d.state().selectionMask.format(), QImage::Format_Grayscale16);
+    }
     void upstream149CameraRawReferenceValues() {
         struct Case {
             QColor input, expected;
@@ -147,7 +516,7 @@ class Tests : public QObject {
             for (int x = 0; x < 400; ++x)
                 row[x] = QRgba64::fromRgba64(linear, linear, linear, 65535);
         }
-        const auto first = developRaw(frame, 0, 6500, 0, 1), second = developRaw(frame, 0, 6500, 0, 1);
+        const auto first = developRaw(frame, 0, 6500, 0, 1, 0, 8), second = developRaw(frame, 0, 6500, 0, 1, 0, 8);
         QCOMPARE(first, second);
         for (int y = 0; y < 64; ++y) {
             double sum = 0;
@@ -426,7 +795,7 @@ class Tests : public QObject {
         QVERIFY(rejects("unsupportedFeature", [&] { readProject(effectPath); }));
         const QString future = directory.path() + "/future.comp";
         writeProject(future, s);
-        rewrite(future, [](QJsonObject &j) { j["version"] = 12; });
+        rewrite(future, [](QJsonObject &j) { j["version"] = 13; });
         QVERIFY(rejects("unsupportedVersion", [&] { readProject(future); }));
     }
     void rejectsCycles() {
@@ -1582,6 +1951,7 @@ int main(int argc, char **argv) {
     Q_INIT_RESOURCE(icons);
     Q_INIT_RESOURCE(controls);
     QApplication app(argc, argv);
+    QImageReader::setAllocationLimit(1024);
     QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
     QCoreApplication::setOrganizationName("CompositorTests");
     QCoreApplication::setApplicationName("Tests");

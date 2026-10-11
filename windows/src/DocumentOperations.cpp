@@ -1,3 +1,5 @@
+#include "WideKernels.h"
+#include "Pixels.h"
 #include "Document.h"
 #include "Renderer.h"
 #include "Filters.h"
@@ -81,7 +83,7 @@ static void makeRaster(Layer &l, const State &s, bool mask) {
         const QColor base =
             mask ? (image.isNull() ? QColor(Qt::white) : image.pixelColor(0, 0)) : QColor(Qt::transparent);
         QSize size = mask && !l.image.isNull() ? l.image.size() : s.size;
-        image = QImage(size, QImage::Format_ARGB32_Premultiplied);
+        image = QImage(size, pixelFormat(s.bitDepth));
         if (image.isNull())
             throw Error("tooLarge");
         image.fill(base);
@@ -91,7 +93,7 @@ static void makeRaster(Layer &l, const State &s, bool mask) {
         } else if (!l.maskLinked)
             l.maskPlacement = l.placement;
     }
-    image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    image = image.convertToFormat(pixelFormat(s.bitDepth));
     if (mask)
         l.originalMaskPng.clear();
     else {
@@ -119,8 +121,10 @@ void Document::fill(QColor color, bool erase, bool mask) {
             color = Qt::black;
         }
         if (mask)
-            color = QColor::fromRgb(erase ? qRgb(0, 0, 0)
-                                          : qRgb(qGray(color.rgb()), qGray(color.rgb()), qGray(color.rgb())));
+            color = erase ? QColor(Qt::black)
+                    : s.bitDepth == 16
+                        ? grayColor16(color)
+                        : QColor::fromRgb(qRgb(qGray(color.rgb()), qGray(color.rgb()), qGray(color.rgb())));
         p.fillRect(QRectF(QPointF(), s.size), color);
         p.end();
         if (!s.selectionMask.isNull())
@@ -195,7 +199,7 @@ void Document::maskAction(const QString &action) {
     edit([&](State &s) {
         auto &l = s.layers[i];
         if (action == "addMask" || action == "hideMask") {
-            l.mask = QImage(s.size, QImage::Format_Grayscale8);
+            l.mask = QImage(s.size, maskFormat(s.bitDepth));
             if (l.mask.isNull())
                 throw Error("tooLarge");
             l.mask.fill(action == "hideMask" || s.selectionActive ? Qt::black : Qt::white);
@@ -221,7 +225,7 @@ void Document::maskAction(const QString &action) {
                 l.maskPlacement = l.placement;
                 l.maskLinked = false;
             } else {
-                QImage mapped(l.image.isNull() ? s.size : l.image.size(), QImage::Format_Grayscale8);
+                QImage mapped(l.image.isNull() ? s.size : l.image.size(), maskFormat(s.bitDepth));
                 mapped.fill(Qt::black);
                 QPainter p(&mapped);
                 p.setTransform(l.placement.matrix(mapped.size()).inverted());
@@ -233,7 +237,7 @@ void Document::maskAction(const QString &action) {
             }
         } else if (action == "applyMask" && !l.image.isNull()) {
             QImage alpha = renderMask(l, s.size, s.size);
-            QImage mapped(l.image.size(), QImage::Format_ARGB32_Premultiplied);
+            QImage mapped(l.image.size(), pixelFormat(s.bitDepth));
             mapped.fill(Qt::transparent);
             {
                 QPainter p(&mapped);
@@ -401,7 +405,7 @@ void Document::resizeCanvas(QSize size, bool rescale, bool centered) {
             }
         s.selection = mapping.map(s.selection);
         if (!s.selectionMask.isNull()) {
-            QImage mapped(size, QImage::Format_Grayscale8);
+            QImage mapped(size, maskFormat(s.bitDepth));
             mapped.fill(Qt::black);
             QPainter p(&mapped);
             p.setRenderHint(QPainter::SmoothPixmapTransform);
@@ -487,9 +491,8 @@ void Document::trim() {
     auto image = render(state_);
     int minX = image.width(), minY = image.height(), maxX = -1, maxY = -1;
     for (int y = 0; y < image.height(); ++y) {
-        const auto *row = reinterpret_cast<const QRgb *>(image.constScanLine(y));
         for (int x = 0; x < image.width(); ++x)
-            if (qAlpha(row[x])) {
+            if (image.pixelColor(x, y).alphaF() > 0) {
                 minX = std::min(minX, x);
                 maxX = std::max(maxX, x);
                 minY = std::min(minY, y);
@@ -511,20 +514,24 @@ void Document::contentFill() {
         return;
     edit([&](State &s) {
         auto &l = s.layers[i];
-        auto rgba = l.image.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+        auto rgba = l.image.convertToFormat(s.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
+                                                             : QImage::Format_RGBA8888_Premultiplied);
         QImage coverage(rgba.size(), QImage::Format_Grayscale8);
         coverage.fill(Qt::black);
         QPainter p(&coverage);
         p.setTransform(l.placement.matrix(rgba.size()).inverted());
         p.fillPath(s.selection, Qt::white);
         p.end();
-        int result = content_fill(rgba.bits(), rgba.bytesPerLine(), coverage.constBits(), coverage.bytesPerLine(),
-                                  rgba.width(), rgba.height());
+        int result = s.bitDepth == 16 ? wide::content_fill(reinterpret_cast<quint16 *>(rgba.bits()),
+                                                           rgba.bytesPerLine() / 2, coverage.constBits(),
+                                                           coverage.bytesPerLine(), rgba.width(), rgba.height())
+                                      : content_fill(rgba.bits(), rgba.bytesPerLine(), coverage.constBits(),
+                                                     coverage.bytesPerLine(), rgba.width(), rgba.height());
         if (result < 0)
             throw Error("tooLarge");
         if (result == 0)
             throw Error("noDonor");
-        auto resultImage = rgba.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        auto resultImage = rgba.convertToFormat(pixelFormat(s.bitDepth));
         if (!s.selectionMask.isNull())
             constrainSelection(s, l.placement, l.image, resultImage);
         l.image = resultImage;
@@ -540,27 +547,14 @@ void Document::featherSelection(double radius) {
     placement.size = state_.size;
     auto alpha = selectionCoverage(state_, state_.size, placement);
     auto blurred = blurImage(alpha, radius);
-    QImage gray(state_.size, QImage::Format_Grayscale8);
-    for (int y = 0; y < gray.height(); ++y) {
-        const auto *src = reinterpret_cast<const QRgb *>(blurred.constScanLine(y));
-        auto *dst = gray.scanLine(y);
-        for (int x = 0; x < gray.width(); ++x)
-            dst[x] = qAlpha(src[x]);
-    }
-    state_.selectionMask = gray;
+    state_.selectionMask = grayFromAlpha(blurred, state_.bitDepth);
     emit selectionChanged();
 }
 void Document::setSelectionMask(const QImage &mask) {
     if (mask.size() != state_.size)
         throw Error("invalidSize");
-    state_.selectionMask = mask.convertToFormat(QImage::Format_Grayscale8);
-    QImage alpha(mask.size(), QImage::Format_ARGB32_Premultiplied);
-    for (int y = 0; y < alpha.height(); ++y) {
-        const auto *src = state_.selectionMask.constScanLine(y);
-        auto *dst = reinterpret_cast<QRgb *>(alpha.scanLine(y));
-        for (int x = 0; x < alpha.width(); ++x)
-            dst[x] = qRgba(src[x], src[x], src[x], src[x]);
-    }
+    state_.selectionMask = maskImage(mask, state_.bitDepth);
+    auto alpha = alphaFromGray(state_.selectionMask, state_.bitDepth);
     state_.selection = alphaPath(alpha);
     state_.selectionActive = true;
     emit selectionChanged();

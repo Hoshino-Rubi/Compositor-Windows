@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "MainWindow.h"
 #include "Export.h"
 #include "Renderer.h"
@@ -270,6 +271,11 @@ void MainWindow::buildWelcome() {
     labels_.append({note, "transparentCanvas"});
     note->setStyleSheet("color:#9b9b9b;");
     form->addWidget(note);
+    auto *depth = new QComboBox;
+    depth->setObjectName("welcomeBitDepth");
+    depth->addItem(t("depth8"), 8);
+    depth->addItem(t("depth16"), 16);
+    form->addWidget(depth);
     auto *row = new QHBoxLayout;
     auto button = [&](QString key, std::function<void()> callback) {
         auto *b = new QPushButton;
@@ -285,6 +291,7 @@ void MainWindow::buildWelcome() {
         State s;
         s.id = newId();
         s.size = {width->value(), height->value()};
+        s.bitDepth = depth->currentData().toInt();
         Layer l;
         l.id = newId();
         l.name = t("layerName").replace("{n}", "1");
@@ -369,7 +376,10 @@ void MainWindow::newDialog() {
     height.setObjectName("canvasHeight");
     width.setValue(1600);
     height.setValue(1000);
-    QComboBox units, dpi;
+    QComboBox units, dpi, depth;
+    depth.setObjectName("canvasBitDepth");
+    depth.addItem(t("depth8"), 8);
+    depth.addItem(t("depth16"), 16);
     units.setObjectName("canvasUnits");
     dpi.setObjectName("canvasDpi");
     units.addItems({t("units.pixels"), t("units.inches"), t("units.cm"), t("units.mm")});
@@ -405,6 +415,7 @@ void MainWindow::newDialog() {
     form->addRow(t("height"), &height);
     form->addRow(t("units"), &units);
     form->addRow(t("resolution"), &dpi);
+    form->addRow(t("bitDepth"), &depth);
     form->addRow(t("background"), &background);
     outer->addLayout(form);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -425,12 +436,13 @@ void MainWindow::newDialog() {
     s.id = newId();
     s.size = pixels();
     s.resolution = dpi.currentData().toDouble();
+    s.bitDepth = depth.currentData().toInt();
     if (background.currentData().toInt() != 0) {
         Layer l;
         l.id = newId();
         l.name = t("backgroundLayer");
         l.placement.size = s.size;
-        l.image = QImage(s.size, QImage::Format_ARGB32_Premultiplied);
+        l.image = QImage(s.size, pixelFormat(s.bitDepth));
         if (l.image.isNull())
             throw Error("tooLarge");
         l.image.fill(background.currentData().toInt() == 1 ? Qt::white : Qt::black);
@@ -608,6 +620,9 @@ void MainWindow::exportImage() {
     form->addRow(&aspect);
     form->addRow(t("quality"), &quality);
     layout->addLayout(form);
+    auto *precisionNote = new QLabel(t("exportPrecisionNote"));
+    precisionNote->setWordWrap(true);
+    layout->addWidget(precisionNote);
     auto *preview = new QLabel;
     preview->setMinimumSize(460, 250);
     preview->setAlignment(Qt::AlignCenter);

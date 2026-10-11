@@ -83,3 +83,58 @@ for compression in [2,3]:
  raw=bytes([160])*48+bytes([30])*48+bytes([20])*48
  if compression==3:raw=b''.join(bytes([v])+b'\0'*7 for v in [160]*6+[30]*6+[20]*6)
  (out/f'flattened-{compression}.psd').write_bytes(b'8BPS'+u16(1)+b'\0'*6+u16(3)+u32(6)+u32(8)+u16(8)+u16(3)+u32(0)*3+u16(compression)+zlib.compress(raw))
+
+# RGB16 fixtures use per-row 16-bit delta prediction and the global Lr16 block.
+def psd16_plane(values,w,h,compression,psb):
+ data=b''.join(u16(v) for v in values)
+ if compression==0:return u16(0)+data
+ if compression==1:
+  rows=[]
+  for y in range(h):
+   raw=data[y*w*2:(y+1)*w*2]
+   rows.append(b''.join(bytes([len(raw[x:x+128])-1])+raw[x:x+128] for x in range(0,len(raw),128)))
+  return u16(1)+b''.join((u32 if psb else u16)(len(row)) for row in rows)+b''.join(rows)
+ if compression==3:
+  data=b''.join(u16((values[y*w+x]-(values[y*w+x-1] if x else 0))&65535) for y in range(h) for x in range(w))
+ return u16(compression)+zlib.compress(data)
+
+def psd16(psb,compression,flat=False):
+ w,h=17,9; length=u64 if psb else u32
+ values=[[10001+p*31 for p in range(w*h)],[20002+p*29 for p in range(w*h)],[30003+p*23 for p in range(w*h)],[65535]*(w*h)]
+ parts=[psd16_plane(v,w,h,compression,psb) for v in values]
+ if compression==0:composite=u16(0)+b''.join(p[2:] for p in parts)
+ elif compression==1:
+  n=h*(4 if psb else 2);composite=u16(1)+b''.join(p[2:2+n] for p in parts)+b''.join(p[2+n:] for p in parts)
+ else:composite=u16(compression)+zlib.compress(b''.join(zlib.decompress(p[2:]) for p in parts))
+ if flat:section=b''
+ else:
+  records=[];payloads=[]
+  for name,rect,base,masked in [('Top',(2,3,7,10),[12345,23456,34567,40001],True),('Background',(0,0,h,w),[10001,20002,30003,65535],False)]:
+   top,left,bottom,right=rect;ww,hh=right-left,bottom-top
+   colors=[[base[c]+(p*7 if c<3 else 0) for p in range(ww*hh)] for c in range(4)]
+   if masked:colors.append([31001+p for p in range(ww*hh)])
+   blobs=[psd16_plane(c,ww,hh,compression,psb) for c in colors]
+   channels=b''.join(struct.pack('>h',i if i<3 else -1 if i==3 else -2)+length(len(b)) for i,b in enumerate(blobs))
+   bounds=b''.join(i32(v) for v in rect)
+   mask=bounds+bytes([255,0])+b'\0\0' if masked else b''
+   label=name.encode();pascal=bytes([len(label)])+label;pascal+=b'\0'*((-len(pascal))%4)
+   ext=u32(len(mask))+mask+u32(0)+pascal
+   records.append(bounds+u16(len(blobs))+channels+b'8BIMnorm'+bytes([255,0,0,0])+u32(len(ext))+ext)
+   payloads.extend(blobs)
+  info=struct.pack('>h',-2)+b''.join(records)+b''.join(payloads)
+  section=length(0)+u32(0)+b'8BIMLr16'+length(len(info))+info+b'\0'*((-len(info))%4)
+ return b'8BPS'+u16(2 if psb else 1)+b'\0'*6+u16(4)+u32(h)+u32(w)+u16(16)+u16(3)+u32(0)+u32(0)+length(len(section))+section+composite
+for psb in [False,True]:
+ for compression in range(4):
+  for flat in [False,True]:
+   name=f'wide-{ "flat" if flat else "layers"}-{compression}.{ "psb" if psb else "psd"}'
+   (out/name).write_bytes(psd16(psb,compression,flat))
+
+# Uncompressed RGB16 TIFF with exact low-order bits, independent of Qt's encoder.
+def rgb16_tiff():
+ w,h=17,9;count=11;extra=8+2+count*12+4;pixels=extra+6
+ tags=[(256,4,1,w),(257,4,1,h),(258,3,3,extra),(259,3,1,1),(262,3,1,2),(273,4,1,pixels),(277,3,1,3),(278,4,1,h),(279,4,1,w*h*6),(284,3,1,1),(339,3,1,1)]
+ entries=b''.join(struct.pack('<HHI',tag,kind,n)+(struct.pack('<H',value)+b'\0\0' if kind==3 and n==1 else struct.pack('<I',value)) for tag,kind,n,value in tags)
+ data=b''.join(struct.pack('<HHH',10001+x*31,20002+y*29,30003+x*23) for y in range(h) for x in range(w))
+ return b'II*\0'+struct.pack('<I',8)+struct.pack('<H',count)+entries+b'\0'*4+struct.pack('<HHH',16,16,16)+data
+(out/'wide-rgb.tif').write_bytes(rgb16_tiff())

@@ -1,4 +1,4 @@
-# Compositor project format, versions 1–11
+# Compositor project format, versions 1–12
 
 A `.comp` file is a macOS document package containing `manifest.json` and an `images/` directory of `<layer UUID>.png` assets.
 
@@ -50,3 +50,11 @@ Pixel layer records may include optional `text` metadata: content, PostScript fo
 ### Layer effects
 
 An optional `effects` record contains independent `stroke`, `shadow`, `colorOverlay`, `innerShadow`, `outerGlow` and `innerGlow` records. Stroke carries a size (0–500 layer pixels), a color, an opacity and an `inside` flag choosing which side of the edge it sits on; drop shadow and inner shadow each carry an angle, a distance, a blur, a color and an opacity; color overlay carries a color and an opacity; outer glow and inner glow each carry a size (0–500 layer pixels), a color and an opacity. Each supports optional `enabled` visibility (missing means visible); hidden effects keep all parameters and remain listed under their layer. Effects, including their visibility, are saved and participate in document undo. They stay with their layer through every edit, pixel edits included; Image Size scales their sizes, distances and blurs with the image. Canvas previews run on a serial background worker with a shared pixel budget; exports render the full-resolution effects. A record omitting an effect means that layer does not have it, so older readers see the effects they understand and ignore the rest.
+
+## Version 12: native Windows 16-bit RGB documents
+
+Windows 0.3.3 adds version 12 for documents with `bitDepth: 16`. The Windows `ProjectManifest::current` is 12; 8-bit documents continue to be written as version 11 without a `bitDepth` field. Versions 1–11 remain readable and retain their existing meaning. The preserved upstream Swift implementation still supports versions 1–11 and rejects version 12; its version constant is intentionally not advanced to claim unsupported high-depth rendering.
+
+Version 12 retains the same `.comp` directory layout, sRGB working space, layer structure, transforms and editable metadata. Color assets are integer 16-bit PNGs; masks are 16-bit grayscale PNGs. Previously saved 8-bit assets may remain byte-for-byte intact and are promoted on load. Untouched original PNG bytes and non-rendering metadata are preserved. Layer editing, compositing, undo and PNG export retain 16-bit precision. Selection and undo history remain session-only.
+
+Windows readers require `bitDepth: 16` for version 12 and reject high-depth PNGs in versions 1–11. The encoded-asset limit is 1 GiB for version 12, with the existing Windows canvas/source pixel budgets still enforced. This extension does not add CMYK, floating-point or 32-bit editing. JPEG and raster PDF exports are 8-bit derivatives. To exchange a document with older readers, explicitly convert it to 8 bits/channel and save it as version 11; this reduction loses tonal precision and is undoable in the current session.

@@ -1,7 +1,9 @@
+#include "Pixels.h"
 #include "Importers.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QPainter>
+#include <QColorTransform>
 #include <QRegularExpression>
 #include <QtEndian>
 #include <zlib.h>
@@ -125,38 +127,52 @@ QJsonValue descriptorValue(Reader &r, QByteArray type, int depth) {
     }
     throw Error("psdConversion", "Unsupported descriptor");
 }
-QByteArray plane(Reader &r, int w, int h, bool psb) {
+void undoPrediction(QByteArray &data, int w, int h, int depth) {
+    for (int y = 0; y < h; ++y) {
+        char *row = data.data() + qint64(y) * w * (depth / 8);
+        if (depth == 16) {
+            quint16 previous = qFromBigEndian<quint16>(row);
+            for (int x = 1; x < w; ++x) {
+                previous = quint16(previous + qFromBigEndian<quint16>(row + x * 2));
+                qToBigEndian(previous, row + x * 2);
+            }
+        } else {
+            for (int x = 1; x < w; ++x)
+                row[x] = char(quint8(row[x]) + quint8(row[x - 1]));
+        }
+    }
+}
+QByteArray plane(Reader &r, int w, int h, bool psb, int depth) {
     if (w <= 0 || h <= 0)
         return {};
-    const qint64 pixels = qint64(w) * h;
+    const qint64 pixels = qint64(w) * h, rowBytes = qint64(w) * (depth / 8), bytes = rowBytes * h;
     if (w > 30000 || h > 30000 || pixels > MaxSourcePixels)
         throw Error("tooLarge");
     const int compression = r.u16();
     if (compression == 0)
-        return r.bytes(pixels);
-    QByteArray result(pixels, 0);
+        return r.bytes(bytes);
+    QByteArray result(bytes, 0);
     if (compression == 1) {
         QVector<quint32> counts;
-        counts.reserve(h);
         for (int y = 0; y < h; ++y)
             counts.append(psb ? r.u32() : r.u16());
         for (int y = 0; y < h; ++y) {
             auto row = r.section(counts[y]);
             int x = 0;
-            while (x < w) {
+            while (x < rowBytes) {
                 int n = qint8(row.u8());
                 if (n >= 0) {
-                    int count = n + 1;
-                    if (x + count > w)
+                    const int count = n + 1;
+                    if (x + count > rowBytes)
                         throw Error("psdCorrupt");
-                    auto bytes = row.bytes(count);
-                    memcpy(result.data() + qint64(y) * w + x, bytes.constData(), count);
+                    const auto literal = row.bytes(count);
+                    memcpy(result.data() + y * rowBytes + x, literal.constData(), count);
                     x += count;
                 } else if (n != -128) {
-                    int count = 1 - n;
-                    if (x + count > w)
+                    const int count = 1 - n;
+                    if (x + count > rowBytes)
                         throw Error("psdCorrupt");
-                    memset(result.data() + qint64(y) * w + x, row.u8(), count);
+                    memset(result.data() + y * rowBytes + x, row.u8(), count);
                     x += count;
                 }
             }
@@ -164,20 +180,20 @@ QByteArray plane(Reader &r, int w, int h, bool psb) {
         return result;
     }
     if (compression == 2 || compression == 3) {
-        uLongf length = uLongf(pixels);
+        uLongf length = uLongf(bytes);
         const auto payload = r.bytes(r.data.size() - r.pos);
         if (uncompress(reinterpret_cast<Bytef *>(result.data()), &length,
                        reinterpret_cast<const Bytef *>(payload.constData()), uLong(payload.size())) != Z_OK ||
-            length != pixels)
+            length != bytes)
             throw Error("psdCorrupt");
         if (compression == 3)
-            for (int y = 0; y < h; ++y)
-                for (int x = 1; x < w; ++x)
-                    result[qint64(y) * w + x] =
-                        char(quint8(result[qint64(y) * w + x]) + quint8(result[qint64(y) * w + x - 1]));
+            undoPrediction(result, w, h, depth);
         return result;
     }
     throw Error("psdCompression");
+}
+int sampleChannel(const QByteArray &data, qint64 pixel, int depth) {
+    return depth == 16 ? qFromBigEndian<quint16>(data.constData() + pixel * 2) : quint8(data[pixel]);
 }
 struct Record {
     Layer layer;
@@ -718,13 +734,15 @@ ImportResult readPhotoshop(const QString &path) {
     int compositeChannels = r.u16();
     int height = int(r.u32()), width = int(r.u32());
     int depth = r.u16(), mode = r.u16();
-    if (depth != 8 || mode != 3)
+    if ((depth != 8 && depth != 16) || mode != 3)
         throw Error("psdMode");
     State state;
     state.id = newId();
     state.size = {width, height};
+    state.bitDepth = depth;
     validateState(state);
     r.skip(r.u32());
+    QColorSpace sourceSpace(QColorSpace::SRgb);
     auto resources = r.section(r.u32());
     while (resources.data.size() - resources.pos >= 12) {
         if (resources.bytes(4) != "8BIM")
@@ -738,6 +756,12 @@ ImportResult readPhotoshop(const QString &path) {
         auto payload = resources.section(length);
         if (id == 1005 && length >= 4)
             state.resolution = std::clamp(payload.u32() / 65536., 1., 9600.);
+        if (id == 1039) {
+            const auto profile = QColorSpace::fromIccProfile(payload.data);
+            if (!profile.isValid() || profile.colorModel() != QColorSpace::ColorModel::Rgb)
+                throw Error("psdProfile");
+            sourceSpace = profile;
+        }
         if (length % 2)
             resources.skip(1);
     }
@@ -746,6 +770,26 @@ ImportResult readPhotoshop(const QString &path) {
     QStringList notices;
     if (section.data.size() >= (psb ? 8 : 4)) {
         auto layerInfo = section.section(psb ? section.u64() : section.u32());
+        // Photoshop stores high-depth layer records in a global Lr16 block.
+        if (depth == 16 && section.data.size() - section.pos >= 4) {
+            section.skip(section.u32()); // Global layer mask.
+            while (section.data.size() - section.pos >= 12) {
+                const auto signature = section.bytes(4), key = section.bytes(4);
+                if (signature != "8BIM" && signature != "8B64")
+                    throw Error("psdCorrupt");
+                const bool large = signature == "8B64" ||
+                                   (psb && QList<QByteArray>{"LMsk", "Lr16", "Lr32", "Layr", "Mt16", "Mt32", "Mtrn",
+                                                             "Alph", "FMsk", "lnk2", "FEid", "FXid", "PxSD"}
+                                               .contains(key));
+                const auto length = large ? section.u64() : section.u32();
+                auto block = section.section(length);
+                if (key == "Lr16")
+                    layerInfo = std::move(block);
+                const auto padding = (4 - length % 4) % 4;
+                if (padding && section.data.size() - section.pos >= qsizetype(padding))
+                    section.skip(padding);
+            }
+        }
         if (layerInfo.data.size() >= 2) {
             int count = abs(int(layerInfo.i16()));
             if (count > MaxLayers * 2)
@@ -836,20 +880,25 @@ ImportResult readPhotoshop(const QString &path) {
                         if (maskBudget > MaxSourcePixels)
                             throw Error("tooLarge");
                     }
-                    planes[channel.first] = plane(data, size.width(), size.height(), psb);
+                    planes[channel.first] = plane(data, size.width(), size.height(), psb, depth);
                 }
                 if (rec.section != 1 && rec.section != 2 && rec.section != 3 && !rec.bounds.isEmpty()) {
-                    QImage image(rec.bounds.size(), QImage::Format_ARGB32_Premultiplied);
+                    QImage image(rec.bounds.size(), pixelFormat(depth));
                     if (image.isNull())
                         throw Error("tooLarge");
                     for (int y = 0; y < image.height(); ++y) {
-                        auto *row = reinterpret_cast<QRgb *>(image.scanLine(y));
                         for (int x = 0; x < image.width(); ++x) {
-                            int p = y * image.width() + x;
+                            const qint64 p = qint64(y) * image.width() + x;
                             auto channel = [&](int id, int fallback) {
-                                return planes.contains(id) ? quint8(planes[id][p]) : fallback;
+                                return planes.contains(id) ? sampleChannel(planes[id], p, depth) : fallback;
                             };
-                            row[x] = qPremultiply(qRgba(channel(0, 0), channel(1, 0), channel(2, 0), channel(-1, 255)));
+                            if (depth == 16)
+                                reinterpret_cast<QRgba64 *>(image.scanLine(y))[x] =
+                                    rgba64(channel(0, 0), channel(1, 0), channel(2, 0), channel(-1, 65535))
+                                        .premultiplied();
+                            else
+                                reinterpret_cast<QRgb *>(image.scanLine(y))[x] =
+                                    qPremultiply(qRgba(channel(0, 0), channel(1, 0), channel(2, 0), channel(-1, 255)));
                         }
                     }
                     rec.layer.image = image;
@@ -859,12 +908,21 @@ ImportResult readPhotoshop(const QString &path) {
                 if (planes.contains(-2)) {
                     QSize grid = rec.layer.image.isNull() ? state.size : rec.layer.image.size();
                     QPoint origin = rec.layer.image.isNull() ? QPoint() : rec.bounds.topLeft();
-                    rec.layer.mask = QImage(grid, QImage::Format_Grayscale8);
+                    rec.layer.mask = QImage(grid, maskFormat(depth));
                     if (rec.layer.mask.isNull())
                         throw Error("tooLarge");
                     rec.layer.mask.fill(QColor(rec.maskDefault, rec.maskDefault, rec.maskDefault));
-                    QImage patch(reinterpret_cast<const uchar *>(planes[-2].constData()), rec.maskBounds.width(),
-                                 rec.maskBounds.height(), rec.maskBounds.width(), QImage::Format_Grayscale8);
+                    QImage patch(rec.maskBounds.size(), maskFormat(depth));
+                    if (patch.isNull())
+                        throw Error("tooLarge");
+                    for (int y = 0; y < patch.height(); ++y)
+                        for (int x = 0; x < patch.width(); ++x) {
+                            const int value = sampleChannel(planes[-2], qint64(y) * patch.width() + x, depth);
+                            if (depth == 16)
+                                reinterpret_cast<quint16 *>(patch.scanLine(y))[x] = quint16(value);
+                            else
+                                patch.scanLine(y)[x] = uchar(value);
+                        }
                     QPainter p(&rec.layer.mask);
                     p.drawImage(rec.maskBounds.topLeft() - origin, patch);
                     rec.layer.maskPlacement = rec.layer.placement;
@@ -893,13 +951,13 @@ ImportResult readPhotoshop(const QString &path) {
     }
     if (records.isEmpty()) {
         int compression = r.u16();
-        const qint64 pixels = qint64(width) * height;
+        const qint64 pixels = qint64(width) * height, planeBytes = pixels * (depth / 8);
         if (compositeChannels < 3 || compositeChannels > 56)
             throw Error("psdCorrupt");
         QVector<QByteArray> planes;
         if (compression == 0) {
             for (int c = 0; c < compositeChannels; ++c) {
-                auto bytes = r.bytes(pixels);
+                auto bytes = r.bytes(planeBytes);
                 if (c < 4)
                     planes.append(bytes);
             }
@@ -922,12 +980,12 @@ ImportResult readPhotoshop(const QString &path) {
                     payload += r.bytes(lengths[c * height + y]);
                 if (c < 4) {
                     Reader channel{QByteArray::fromHex("0001") + payload};
-                    planes.append(plane(channel, width, height, psb));
+                    planes.append(plane(channel, width, height, psb, depth));
                 }
             }
         } else if (compression == 2 || compression == 3) {
-            qint64 total = pixels * compositeChannels;
-            if (total > MaxSourcePixels * 4)
+            qint64 total = planeBytes * compositeChannels;
+            if (total > MaxSourcePixels * 8)
                 throw Error("tooLarge");
             QByteArray decoded(total, 0);
             uLongf length = uLongf(total);
@@ -937,12 +995,9 @@ ImportResult readPhotoshop(const QString &path) {
                 length != total)
                 throw Error("psdCorrupt");
             for (int c = 0; c < std::min(compositeChannels, 4); ++c) {
-                auto bytes = decoded.mid(c * pixels, pixels);
+                auto bytes = decoded.mid(c * planeBytes, planeBytes);
                 if (compression == 3)
-                    for (int y = 0; y < height; ++y)
-                        for (int x = 1; x < width; ++x)
-                            bytes[y * width + x] =
-                                char(quint8(bytes[y * width + x]) + quint8(bytes[y * width + x - 1]));
+                    undoPrediction(bytes, width, height, depth);
                 planes.append(bytes);
             }
         } else
@@ -950,16 +1005,23 @@ ImportResult readPhotoshop(const QString &path) {
         Layer l;
         l.id = newId();
         l.name = QFileInfo(path).completeBaseName();
-        l.image = QImage(state.size, QImage::Format_ARGB32_Premultiplied);
+        l.image = QImage(state.size, pixelFormat(depth));
+        if (l.image.isNull())
+            throw Error("tooLarge");
         l.placement.size = state.size;
-        for (int y = 0; y < height; ++y) {
-            auto *row = reinterpret_cast<QRgb *>(l.image.scanLine(y));
+        for (int y = 0; y < height; ++y)
             for (int x = 0; x < width; ++x) {
-                int p = y * width + x;
-                row[x] = qPremultiply(qRgba(quint8(planes[0][p]), quint8(planes[1][p]), quint8(planes[2][p]),
-                                            planes.size() > 3 ? quint8(planes[3][p]) : 255));
+                const qint64 p = qint64(y) * width + x;
+                auto channel = [&](int c) {
+                    return c < planes.size() ? sampleChannel(planes[c], p, depth) : (depth == 16 ? 65535 : 255);
+                };
+                if (depth == 16)
+                    reinterpret_cast<QRgba64 *>(l.image.scanLine(y))[x] =
+                        rgba64(channel(0), channel(1), channel(2), channel(3)).premultiplied();
+                else
+                    reinterpret_cast<QRgb *>(l.image.scanLine(y))[x] =
+                        qPremultiply(qRgba(channel(0), channel(1), channel(2), channel(3)));
             }
-        }
         state.layers.append(l);
     } else {
         // PSD files normally store the topmost record first; recognize bottom-first section markers as well.
@@ -1007,6 +1069,41 @@ ImportResult readPhotoshop(const QString &path) {
     }
     if (!state.layers.isEmpty())
         state.active = state.layers.last().id;
+    if (sourceSpace != QColorSpace(QColorSpace::SRgb)) {
+        const auto transform = sourceSpace.transformationToColorSpace(QColorSpace::SRgb);
+        std::function<QJsonValue(QJsonValue)> mapColors = [&](QJsonValue value) -> QJsonValue {
+            if (value.isArray()) {
+                QJsonArray out;
+                for (const auto &v : value.toArray())
+                    out.append(mapColors(v));
+                return out;
+            }
+            if (!value.isObject())
+                return value;
+            auto object = value.toObject();
+            if (object["red"].isDouble() && object["green"].isDouble() && object["blue"].isDouble()) {
+                const auto color = transform.map(
+                    QColor::fromRgbF(object["red"].toDouble(), object["green"].toDouble(), object["blue"].toDouble()));
+                object["red"] = color.redF();
+                object["green"] = color.greenF();
+                object["blue"] = color.blueF();
+            }
+            for (auto it = object.begin(); it != object.end(); ++it)
+                if (it->isArray() || it->isObject())
+                    it.value() = mapColors(it.value());
+            return object;
+        };
+        for (auto &layer : state.layers) {
+            if (!layer.image.isNull()) {
+                layer.image.setColorSpace(sourceSpace);
+                layer.image.convertToColorSpace(QColorSpace::SRgb, pixelFormat(depth));
+            }
+            for (const auto &key : QStringList{"text", "shape"})
+                if (layer.metadata.contains(key))
+                    layer.metadata[key] = mapColors(layer.metadata[key]);
+        }
+        notices.append("psdProfileConverted");
+    }
     notices.removeDuplicates();
     validateState(state);
     return {state, notices};

@@ -1,14 +1,23 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.3.2**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.3.3**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
 Download the portable application from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.3.2-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.3.3-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. English, Simplified Chinese and Traditional Chinese switch immediately.
+
+## Version 0.3.3
+
+- Native **16-bit/channel RGB editing**, alongside the existing 8-bit mode. Choose the depth when creating a canvas or use Image → 8/16 Bits/Channel. Importing a 16-bit image promotes the document; reducing to 8-bit requires confirmation and can be undone.
+- 16-bit PNG/TIFF and layered RGB PSD/PSB import, including raw, PackBits RLE, ZIP and ZIP prediction, `Lr16` records and 16-bit masks. Embedded RGB PSD profiles are converted to the sRGB working space without reducing depth. RAW development now retains 16-bit pixels.
+- High-depth compositing and blend modes, adjustments, Camera Raw, layer effects, brushes/eraser/clone/healing, gradients, text/shapes, liquify, transforms, selections/masks and undo. Tests exercise values between the 256 steps of an 8-bit image.
+- 16-bit PNG export and project save/reopen. JPEG and single-page raster PDF remain 8-bit outputs, stated in the export dialog.
+- **Project compatibility:** 8-bit documents still save as `.comp` v11. 16-bit documents use v12 with `bitDepth: 16`; older Windows builds and the original macOS application reject v12. Convert a copy to 8-bit for compatibility.
+- English, Simplified Chinese and Traditional Chinese depth controls and conversion messages.
 
 ## Version 0.3.2
 
@@ -50,9 +59,9 @@ Use Open Image (`Ctrl+O`) for a new image document, Open Project (`Ctrl+Shift+O`
 
 ## Compatibility
 
-Reads `.comp` versions 1–11 and writes version 11. Untouched PNG bytes and non-rendering metadata survive round trips. Font/color runs remain editable; text reflows with Windows fonts. Pixel editing rasterizes text/shapes. Selection and history are session-only.
+Reads `.comp` versions 1–12. Writes version 11 for 8-bit documents and version 12 for 16-bit documents. Untouched PNG bytes and non-rendering metadata survive round trips. Font/color runs remain editable; text reflows with Windows fonts. Pixel editing rasterizes text/shapes. Selection and history are session-only.
 
-PSD import matches the upstream 8-bit RGB scope. CMYK and 16/32-bit PSD are rejected. Complex Photoshop objects, text warps and effects use raster fallbacks or conversion notices; PSD export is not provided.
+PSD/PSB import supports 8-bit and 16-bit RGB, extending the upstream 8-bit scope. CMYK and 32-bit PSD remain unsupported. Editing uses integer sRGB, not a floating-point/HDR pipeline. Complex Photoshop objects, text warps and effects use raster fallbacks or conversion notices; PSD export is not provided.
 Camera Raw matches this application's controls, not Adobe's proprietary plugin or lens database. Windows object selection uses local U2Netp foreground inference and connected components, which can differ from macOS Vision.
 CPU rendering, fonts, geometry interpolation and effect edges can differ from Metal; pixel-identical output is not claimed.
 
@@ -71,8 +80,10 @@ pwsh -File ./windows/scripts/package.ps1 -QtDir C:/Qt/6.8.3/msvc2022_64 -SkipBui
 
 The upstream pixel sources are translated at CMake configure time from Apple blocks to synchronous MSVC parallel loops without editing their math. If upstream changes `CameraRawTables.bin`, run `python windows/scripts/repack-camera-raw.py`; CMake rejects a stale packed resource. The generated Qt resource preserves the exact upstream table bytes.
 
+The 16-bit implementations share the original algorithms through checked-in C++ specializations. Normal builds do not require Python. After changing the corresponding source algorithms, regenerate them with `python windows/scripts/generate-wide-pixels.py` and `python windows/scripts/generate-wide-processing.py`; CMake checks their source hashes and rejects stale output. These scripts are development tools and are not part of the portable application.
+
 Dependency revisions and download checksums are pinned in dependencies.lock.json and vcpkg.json. Setup needs network; application use is offline.
-The build runs Qt Test, covering import/development, pixel output, Camera Raw, gestures/undo, selection, groups, model inference, document reload, translations and the original editing regressions.
+The build runs Qt Test, covering native 16-bit precision, import/development, pixel output, Camera Raw, gestures/undo, selection, groups, model inference, document reload, translations and the original editing regressions.
 The synthetic fixtures can be reproduced with `python windows/tests/generate_fixtures.py` from the repository root. Python is not an application dependency.
 
 ```powershell

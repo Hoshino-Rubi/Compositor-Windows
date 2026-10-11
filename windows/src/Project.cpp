@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "Project.h"
 #include "Importers.h"
 #include "Filters.h"
@@ -117,6 +118,7 @@ QStringList blendModes() {
 }
 void validateState(const State &s) {
     require(validId(s.id));
+    require(s.bitDepth == 8 || s.bitDepth == 16);
     require(s.size.width() > 0 && s.size.height() > 0 && s.size.width() <= MaxSide && s.size.height() <= MaxSide &&
                 qint64(s.size.width()) * s.size.height() <= MaxCanvasPixels && s.layers.size() <= MaxLayers,
             "tooLarge");
@@ -189,7 +191,7 @@ static QByteArray safeRead(const QString &root, const QString &relative, qint64 
 }
 static QImage decodePng(const QByteArray &bytes, qint64 &budget, bool mask) {
     require(bytes.size() >= 33 && bytes.left(8) == QByteArray::fromHex("89504e470d0a1a0a") &&
-                bytes.mid(12, 4) == "IHDR" && quint8(bytes[24]) <= 8,
+                bytes.mid(12, 4) == "IHDR" && (quint8(bytes[24]) <= 8 || quint8(bytes[24]) == 16),
             "missingAsset");
     if (mask)
         require(quint8(bytes[25]) == 0, "missingAsset");
@@ -205,7 +207,7 @@ static QImage decodePng(const QByteArray &bytes, qint64 &budget, bool mask) {
     require(!image.isNull(), "missingAsset");
     if (!mask && image.colorSpace().isValid() && image.colorSpace() != QColorSpace::SRgb)
         image.convertToColorSpace(QColorSpace::SRgb);
-    return image.convertToFormat(mask ? QImage::Format_Grayscale8 : QImage::Format_ARGB32_Premultiplied);
+    return mask ? maskImage(image, wideImage(image) ? 16 : 8) : image.convertToFormat(pixelFormat(image));
 }
 LoadedProject readProject(const QString &directory) {
     const auto bytes = safeRead(directory, "manifest.json", 4 * 1024 * 1024);
@@ -216,7 +218,7 @@ LoadedProject readProject(const QString &directory) {
     require(m["format"] == "com.compositor.project" && m["colorSpace"] == "sRGB");
     const double v = m["version"].toDouble(-1);
     require(v == std::floor(v));
-    if (v < 1 || v > 11)
+    if (v < 1 || v > ProjectManifest::current)
         throw Error("unsupportedVersion", QString::number(v));
     require(m["layers"].isArray() && m["width"].isDouble() && m["height"].isDouble());
     State s;
@@ -224,6 +226,10 @@ LoadedProject readProject(const QString &directory) {
     s.size = {m["width"].toInt(), m["height"].toInt()};
     require(m["width"].toDouble() == s.size.width() && m["height"].toDouble() == s.size.height());
     s.resolution = m["resolution"].toDouble(72);
+    s.bitDepth = v == 12 ? m["bitDepth"].toInt(0) : 8;
+    require(s.bitDepth == 8 || s.bitDepth == 16);
+    require(v != 12 || s.bitDepth == 16);
+    require(v == 12 || !m.contains("bitDepth") || m["bitDepth"] == 8);
     s.metadata = m;
     if (!m["activeLayerID"].isNull() && !m["activeLayerID"].isUndefined())
         s.active = canonicalId(m["activeLayerID"]);
@@ -269,14 +275,16 @@ LoadedProject readProject(const QString &directory) {
             validateEffects(j["effects"].toObject());
         if (j.contains("imageFile") && !j["imageFile"].isNull()) {
             require(j["imageFile"].toString() == l.id + ".png");
-            l.originalPng = safeRead(directory, "images/" + l.id + ".png", 512ll * 1024 * 1024);
+            l.originalPng =
+                safeRead(directory, "images/" + l.id + ".png", (s.bitDepth == 16 ? 1024ll : 512ll) * 1024 * 1024);
             hash.addData(l.originalPng);
             l.image = decodePng(l.originalPng, pixels, false);
         }
         l.maskPlacement = l.placement;
         if (j.contains("maskFile") && !j["maskFile"].isNull()) {
             require(j["maskFile"].toString() == l.id + ".mask.png" && v >= (l.group ? 6 : 4));
-            l.originalMaskPng = safeRead(directory, "images/" + l.id + ".mask.png", 512ll * 1024 * 1024);
+            l.originalMaskPng =
+                safeRead(directory, "images/" + l.id + ".mask.png", (s.bitDepth == 16 ? 1024ll : 512ll) * 1024 * 1024);
             hash.addData(l.originalMaskPng);
             l.mask = decodePng(l.originalMaskPng, maskPixels, true);
             l.maskEnabled = j["maskEnabled"].toBool(true);
@@ -295,6 +303,9 @@ LoadedProject readProject(const QString &directory) {
             require(l.opacity == 1);
         s.layers.append(l);
     }
+    for (const auto &l : s.layers)
+        require(v == 12 || (!wideImage(l.image) && !wideImage(l.mask)));
+    normalizePrecision(s);
     validateState(s);
     return {s, hash.result()};
 }
@@ -322,7 +333,7 @@ QImage readImage(const QString &path) {
     if (isRawPath(path))
         return developRaw(decodeRaw(path));
     QFileInfo info(path);
-    require(info.size() <= 512ll * 1024 * 1024, "tooLarge");
+    require(info.size() <= 1024ll * 1024 * 1024, "tooLarge");
     QImageReader reader(path);
     QBuffer tinyWebp;
     // Qt 6.8's WebP handler peeks sizeof(WebPBitstreamFeatures) (40 bytes),
@@ -354,10 +365,13 @@ QImage readImage(const QString &path) {
             "tooLarge");
     QImage image = reader.read();
     require(!image.isNull(), "imageError");
+    require(image.pixelFormat().redSize() <= 16 &&
+                image.pixelFormat().typeInterpretation() != QPixelFormat::FloatingPoint,
+            "unsupportedImportDepth");
     if (image.colorSpace().isValid() && image.colorSpace() != QColorSpace::SRgb)
         image.convertToColorSpace(QColorSpace::SRgb);
     image.setColorSpace(QColorSpace::SRgb);
-    return image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    return image.convertToFormat(pixelFormat(image));
 }
 QByteArray writeProject(const QString &directory, const State &s, const QByteArray &expectedDigest) {
     validateState(s);
@@ -376,7 +390,11 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
     require(QDir().mkpath(stage + "/images"), "fileError");
     QJsonObject manifest = s.metadata;
     manifest["format"] = "com.compositor.project";
-    manifest["version"] = 11;
+    manifest["version"] = s.bitDepth == 16 ? ProjectManifest::current : ProjectManifest::eightBit;
+    if (s.bitDepth == 16)
+        manifest["bitDepth"] = 16;
+    else
+        manifest.remove("bitDepth");
     manifest["colorSpace"] = "sRGB";
     manifest["documentID"] = s.id;
     manifest["width"] = s.size.width();
@@ -418,9 +436,8 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
                 encoded.append(bytes);
             }
             if (!l.mask.isNull()) {
-                const auto bytes = l.originalMaskPng.isEmpty()
-                                       ? pngBytes(l.mask.convertToFormat(QImage::Format_Grayscale8), s.resolution)
-                                       : l.originalMaskPng;
+                const auto bytes = l.originalMaskPng.isEmpty() ? pngBytes(maskImage(l.mask, s.bitDepth), s.resolution)
+                                                               : l.originalMaskPng;
                 j["maskFile"] = l.id + ".mask.png";
                 j["maskEnabled"] = l.maskEnabled;
                 j["maskLinked"] = l.maskLinked;

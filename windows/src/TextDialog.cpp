@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "MainWindow.h"
 #include "Text.h"
 #include <QDialog>
@@ -133,7 +134,7 @@ void MainWindow::textDialog(QPointF point, QString id) {
         if (bounds.width() > MaxSide || bounds.height() > MaxSide ||
             qint64(bounds.width()) * bounds.height() + document_.state().sourcePixels() > MaxSourcePixels)
             throw Error("tooLarge");
-        QImage image(bounds, QImage::Format_ARGB32_Premultiplied);
+        QImage image(bounds, pixelFormat(document_.state().bitDepth));
         if (image.isNull())
             throw Error("tooLarge");
         image.fill(Qt::transparent);
@@ -153,7 +154,7 @@ void MainWindow::textDialog(QPointF point, QString id) {
         for (auto it = edited.begin(); it != edited.end(); ++it)
             style[it.key()] = it.value();
         style = textStyle(*text.document(), style);
-        image = renderText(style);
+        image = renderText(style, document_.state().bitDepth);
         bounds = image.size();
         document_.edit([&](State &s) {
             if (index >= 0) {

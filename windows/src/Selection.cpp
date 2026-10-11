@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "Selection.h"
 #include "Filters.h"
 #include <onnxruntime_cxx_api.h>
@@ -98,7 +99,7 @@ QImage subjectMask(const QImage &source, QPoint seed) {
     return mask.scaled(source.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 }
 QImage selectionCoverage(const State &state, QSize target, const Placement &placement) {
-    QImage result(target, QImage::Format_ARGB32_Premultiplied);
+    QImage result(target, pixelFormat(state.bitDepth));
     if (result.isNull())
         throw Error("tooLarge");
     result.fill(state.selectionActive ? Qt::transparent : Qt::white);
@@ -110,13 +111,7 @@ QImage selectionCoverage(const State &state, QSize target, const Placement &plac
     if (state.selectionMask.isNull())
         painter.fillPath(state.selection, Qt::white);
     else {
-        QImage alpha(state.selectionMask.size(), QImage::Format_ARGB32_Premultiplied);
-        for (int y = 0; y < alpha.height(); ++y) {
-            const auto *src = state.selectionMask.constScanLine(y);
-            auto *dst = reinterpret_cast<QRgb *>(alpha.scanLine(y));
-            for (int x = 0; x < alpha.width(); ++x)
-                dst[x] = qRgba(src[x], src[x], src[x], src[x]);
-        }
+        auto alpha = alphaFromGray(state.selectionMask, state.bitDepth);
         painter.drawImage(0, 0, alpha);
     }
     return result;
@@ -125,6 +120,22 @@ void constrainSelection(const State &state, const Placement &placement, const QI
     if (!state.selectionActive)
         return;
     const auto coverage = selectionCoverage(state, after.size(), placement);
+    if (state.bitDepth == 16) {
+        after = after.convertToFormat(pixelFormat(16));
+        const auto original = before.convertToFormat(pixelFormat(16));
+        for (int y = 0; y < after.height(); ++y) {
+            auto *dst = reinterpret_cast<QRgba64 *>(after.scanLine(y));
+            const auto *src = reinterpret_cast<const QRgba64 *>(original.constScanLine(y));
+            const auto *mask = reinterpret_cast<const QRgba64 *>(coverage.constScanLine(y));
+            for (int x = 0; x < after.width(); ++x) {
+                const quint64 a = mask[x].alpha(), b = 65535 - a;
+                auto mix = [&](int d, int s) { return int((d * a + s * b + 32767) / 65535); };
+                dst[x] = rgba64(mix(dst[x].red(), src[x].red()), mix(dst[x].green(), src[x].green()),
+                                mix(dst[x].blue(), src[x].blue()), mix(dst[x].alpha(), src[x].alpha()));
+            }
+        }
+        return;
+    }
     after = after.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     auto original = before.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     for (int y = 0; y < after.height(); ++y) {

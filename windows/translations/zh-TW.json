@@ -142,7 +142,7 @@
   "rasterFallback": "匯入的文字和形狀使用已儲存的 PNG 外觀。",
   "shortcuts": "鍵盤快速鍵",
   "shortcutBody": "Ctrl+N 新增 · Ctrl+O 開啟 · Ctrl+S 儲存 · Ctrl+Shift+S 另存新檔 · Ctrl+I 匯入 · Ctrl+Shift+E 匯出\nCtrl+Z 復原 · Ctrl+Shift+Z / Ctrl+Y 重做 · Ctrl+J 複製 · Delete 刪除圖層\nV 移動 · B 筆刷 · E 橡皮擦 · U 矩形 · O 橢圓 · T 文字 · I 滴管 · H 抓手 · C 裁切\n空白鍵 拖曳平移 · Ctrl+0 符合畫布 · Ctrl+1 實際像素 · [ / ] 筆刷大小\n方向鍵 移動 1 像素 · Shift+方向鍵 移動 10 像素\nM / L / W · G · S · J · R · Z\nCtrl+A / Ctrl+D / Ctrl+Shift+I\nCtrl+C / Ctrl+V / Ctrl+Shift+C\nAlt+Backspace / Ctrl+Backspace\nCtrl+G / Ctrl+Shift+G / Ctrl+E / Ctrl+W\nShift+F5",
-  "aboutBody": "Compositor Windows 0.3.2\n基於 Robbie Tilton 的 Compositor，使用原生 C++ / Qt 6。\nMIT 授權；功能相容範圍請見隨附說明。",
+  "aboutBody": "Compositor Windows 0.3.3\n基於 Robbie Tilton 的 Compositor，使用原生 C++ / Qt 6。\nMIT 授權；功能相容範圍請見隨附說明。",
   "ok": "確定",
   "busy": "正在完成目前操作…",
   "cropDone": "已裁切畫布",
@@ -331,7 +331,7 @@
   "rawError": "RAW 解碼失敗：{detail}",
   "psdCorrupt": "Photoshop 檔案不完整或損壞。",
   "psdVersion": "不支援的 Photoshop 檔案版本。",
-  "psdMode": "與原版一致，Photoshop 匯入要求 8 位元 RGB。",
+  "psdMode": "支援 8 位元或 16 位元 RGB Photoshop 檔案。暫不支援 CMYK 和 32 位元檔案。",
   "psdCompression": "不支援的 Photoshop 壓縮方式。",
   "psdReport": "Photoshop 轉換報告",
   "psdReportBody": "匯入分層文件前請查看轉換詳細資訊。",
@@ -526,5 +526,13 @@
   "scan.blackLevel": "黑位",
   "scan.monochrome": "黑白",
   "scan.original": "原始色彩",
-  "scan.twoColors": "前景與背景色"
+  "scan.twoColors": "前景與背景色",
+  "bitDepth": "色深",
+  "depth8": "8 位元／通道",
+  "depth16": "16 位元／通道",
+  "reduceDepth": "將此文件轉換為每通道 8 位元？這會損失部分色階精度。轉換後可以復原。",
+  "exportPrecisionNote": "PNG 保留文件色深；JPEG 和 PDF 匯出為 8 位元影像。",
+  "psdProfile": "Photoshop 檔案內嵌的色彩描述檔無效或暫不支援。",
+  "psdProfileConverted": "圖層色彩已從內嵌 RGB 描述檔轉換為 sRGB，未降低色深。",
+  "unsupportedImportDepth": "支援 8 位元和 16 位元整數影像。暫不支援浮點／HDR 影像。"
 }

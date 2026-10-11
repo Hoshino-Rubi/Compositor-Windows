@@ -13,7 +13,7 @@ struct RawFrame {
 };
 RawFrame decodeRaw(const QString &path);
 QImage developRaw(const RawFrame &frame, double exposure = 0, double temperature = 6500, double tint = 0,
-                  double boost = 1, int limit = 0);
+                  double boost = 1, int limit = 0, int bitDepth = 16);
 QImage readHeif(const QString &path);
 QImage readSvg(const QString &path);
 } // namespace comp

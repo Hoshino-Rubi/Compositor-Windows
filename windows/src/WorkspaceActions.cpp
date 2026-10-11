@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "MainWindow.h"
 #include "Renderer.h"
 #include "Icons.h"
@@ -107,6 +108,21 @@ void MainWindow::buildEditingActions() {
     add("applyMask", "", [this] { document_.maskAction("applyMask"); });
     add("deleteMask", "", [this] { document_.maskAction("deleteMask"); });
     add("clipMask", "", [this] { document_.maskAction("clipMask"); });
+    auto *depthGroup = new QActionGroup(this);
+    for (int depth : {8, 16}) {
+        const QString key = depth == 16 ? "depth16" : "depth8";
+        add(key, "", [this, depth] {
+            if (depth == 8 && document_.state().bitDepth == 16 &&
+                QMessageBox::question(this, t("bitDepth"), t("reduceDepth"), QMessageBox::Ok | QMessageBox::Cancel,
+                                      QMessageBox::Cancel) != QMessageBox::Ok) {
+                refreshSelection();
+                return;
+            }
+            document_.setBitDepth(depth);
+        });
+        actions_[key]->setCheckable(true);
+        depthGroup->addAction(actions_[key]);
+    }
     add("imageSize", "", [this] { sizeDialog(true); });
     add("canvasSize", "", [this] { sizeDialog(false); });
     add("trim", "", [this] { document_.trim(); });

@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "MainWindow.h"
 #include "Selection.h"
 #include "Renderer.h"
@@ -215,8 +216,8 @@ void MainWindow::transformDialog(bool distort) {
                                               {0, double(l.mask.height())}};
                         auto maskQuad = map.map(maskPlace.matrix(l.mask.size()).map(maskCorners));
                         auto rect = maskQuad.boundingRect().toAlignedRect();
-                        l.mask = perspectiveWarp(l.mask.convertToFormat(QImage::Format_ARGB32_Premultiplied), maskQuad)
-                                     .convertToFormat(QImage::Format_Grayscale8);
+                        l.mask = maskImage(perspectiveWarp(l.mask.convertToFormat(pixelFormat(s.bitDepth)), maskQuad),
+                                           s.bitDepth);
                         l.maskLinked = false;
                         l.maskPlacement = {};
                         l.maskPlacement.origin = rect.topLeft();
@@ -235,7 +236,8 @@ void MainWindow::transformDialog(bool distort) {
     });
 }
 void MainWindow::watchProjects() {
-    if (busy_ || checkingProjects_ || canvas_->editingText() || QApplication::activeModalWidget() || documents_.isEmpty())
+    if (busy_ || checkingProjects_ || canvas_->editingText() || QApplication::activeModalWidget() ||
+        documents_.isEmpty())
         return;
     watchPaths_.clear();
     for (const auto &tab : documents_)

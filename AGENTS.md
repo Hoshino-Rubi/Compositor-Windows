@@ -20,3 +20,5 @@ If you've been asked to make or change an image in a `.comp` project, you don't 
 - Read `windows/README.md` for compatibility and build instructions. Use PowerShell 7 with `windows/scripts/build.ps1` to build and run Qt Test.
 - Preserve the upstream `.comp` format and original PNG/metadata when pixels are untouched. Explicitly reject render features the Windows renderer cannot reproduce.
 - Add or change UI strings in all three `windows/translations/*.json` catalogs.
+
+- GitHub release titles and complete release notes use English first, with Simplified Chinese notes in a collapsible section below.

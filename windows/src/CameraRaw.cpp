@@ -1,3 +1,5 @@
+#include "WideProcessing.h"
+#include "Pixels.h"
 #include "CameraRaw.h"
 #include "CameraRawTables.h"
 #include <QPainter>
@@ -216,6 +218,8 @@ static QImage geometry(const QImage &source, QJsonObject settings) {
     return out;
 }
 QImage cameraRaw(const QImage &source, const QJsonObject &settings, double scale, int clipping) {
+    if (wideImage(source))
+        return cameraRaw16(source, settings, scale, clipping);
     const auto s = normalizedCameraRaw(settings);
     QImage result = source;
     if (!s["geometry"].toObject().isEmpty() && s["enableGeometry"].toBool(true))
@@ -349,7 +353,8 @@ QImage cameraRaw(const QImage &source, const QJsonObject &settings, double scale
     return result.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 }
 QJsonObject autoWhiteBalance(const QImage &input) {
-    auto image = input.scaled(300, 300, Qt::KeepAspectRatio).convertToFormat(QImage::Format_ARGB32);
+    auto image = input.scaled(300, 300, Qt::KeepAspectRatio)
+                     .convertToFormat(wideImage(input) ? QImage::Format_RGBA64 : QImage::Format_ARGB32);
     double sum[3] = {}, n = 0;
     auto linear = [](double v) { return v <= .04045 ? v / 12.92 : pow((v + .055) / 1.055, 2.4); };
     for (int y = 0; y < image.height(); ++y)

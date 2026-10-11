@@ -142,7 +142,7 @@
   "rasterFallback": "导入的文字和形状使用已保存的 PNG 外观。",
   "shortcuts": "键盘快捷键",
   "shortcutBody": "Ctrl+N 新建 · Ctrl+O 打开 · Ctrl+S 保存 · Ctrl+Shift+S 另存为 · Ctrl+I 导入 · Ctrl+Shift+E 导出\nCtrl+Z 撤销 · Ctrl+Shift+Z / Ctrl+Y 重做 · Ctrl+J 复制 · Delete 删除图层\nV 移动 · B 画笔 · E 橡皮擦 · U 矩形 · O 椭圆 · T 文字 · I 吸管 · H 抓手 · C 裁剪\n空格 拖动平移 · Ctrl+0 适合画布 · Ctrl+1 实际像素 · [ / ] 画笔大小\n方向键 移动 1 像素 · Shift+方向键 移动 10 像素\nM / L / W · G · S · J · R · Z\nCtrl+A / Ctrl+D / Ctrl+Shift+I\nCtrl+C / Ctrl+V / Ctrl+Shift+C\nAlt+Backspace / Ctrl+Backspace\nCtrl+G / Ctrl+Shift+G / Ctrl+E / Ctrl+W\nShift+F5",
-  "aboutBody": "Compositor Windows 0.3.2\n基于 Robbie Tilton 的 Compositor，使用原生 C++ / Qt 6。\nMIT 许可证；功能兼容范围见随附说明。",
+  "aboutBody": "Compositor Windows 0.3.3\n基于 Robbie Tilton 的 Compositor，使用原生 C++ / Qt 6。\nMIT 许可证；功能兼容范围见随附说明。",
   "ok": "确定",
   "busy": "正在完成当前操作…",
   "cropDone": "已裁剪画布",
@@ -331,7 +331,7 @@
   "rawError": "RAW 解码失败：{detail}",
   "psdCorrupt": "Photoshop 文件不完整或损坏。",
   "psdVersion": "不支持的 Photoshop 文件版本。",
-  "psdMode": "与原版一致，Photoshop 导入要求 8 位 RGB。",
+  "psdMode": "支持 8 位或 16 位 RGB Photoshop 文件。暂不支持 CMYK 和 32 位文件。",
   "psdCompression": "不支持的 Photoshop 压缩方式。",
   "psdReport": "Photoshop 转换报告",
   "psdReportBody": "导入分层文档前请查看转换详情。",
@@ -526,5 +526,13 @@
   "scan.blackLevel": "黑位",
   "scan.monochrome": "黑白",
   "scan.original": "原始色彩",
-  "scan.twoColors": "前景与背景色"
+  "scan.twoColors": "前景与背景色",
+  "bitDepth": "色深",
+  "depth8": "8 位／通道",
+  "depth16": "16 位／通道",
+  "reduceDepth": "将此文档转换为每通道 8 位？这会损失部分色阶精度。转换后可以撤销。",
+  "exportPrecisionNote": "PNG 保留文档色深；JPEG 和 PDF 导出为 8 位图像。",
+  "psdProfile": "Photoshop 文件内嵌的颜色配置文件无效或暂不支持。",
+  "psdProfileConverted": "图层颜色已从内嵌 RGB 配置转换为 sRGB，未降低色深。",
+  "unsupportedImportDepth": "支持 8 位和 16 位整数图像。暂不支持浮点／HDR 图像。"
 }

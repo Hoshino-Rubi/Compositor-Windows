@@ -142,7 +142,7 @@
   "rasterFallback": "Imported text and shapes use their saved PNG appearance.",
   "shortcuts": "Keyboard shortcuts",
   "shortcutBody": "Ctrl+N New · Ctrl+O Open · Ctrl+S Save · Ctrl+Shift+S Save as · Ctrl+I Import · Ctrl+Shift+E Export\nCtrl+Z Undo · Ctrl+Shift+Z / Ctrl+Y Redo · Ctrl+J Duplicate · Delete Delete layer\nV Move · B Brush · E Eraser · U Rectangle · O Ellipse · T Text · I Eyedropper · H Hand · C Crop\nSpace Drag to pan · Ctrl+0 Fit · Ctrl+1 Actual pixels · [ / ] Brush size\nArrow keys Move 1 px · Shift+Arrow Move 10 px\nM / L / W · G · S · J · R · Z\nCtrl+A / Ctrl+D / Ctrl+Shift+I\nCtrl+C / Ctrl+V / Ctrl+Shift+C\nAlt+Backspace / Ctrl+Backspace\nCtrl+G / Ctrl+Shift+G / Ctrl+E / Ctrl+W\nShift+F5",
-  "aboutBody": "Compositor for Windows 0.3.2\nNative C++ / Qt 6 port of Robbie Tilton’s Compositor.\nMIT licensed. See README for feature compatibility.",
+  "aboutBody": "Compositor for Windows 0.3.3\nNative C++ / Qt 6 port of Robbie Tilton’s Compositor.\nMIT licensed. See README for feature compatibility.",
   "ok": "OK",
   "busy": "Finishing the current operation…",
   "cropDone": "Canvas cropped",
@@ -331,7 +331,7 @@
   "rawError": "RAW decoding failed: {detail}",
   "psdCorrupt": "The Photoshop file is incomplete or damaged.",
   "psdVersion": "Unsupported Photoshop file version.",
-  "psdMode": "Photoshop import requires 8-bit RGB, as in the upstream application.",
+  "psdMode": "Only 8-bit or 16-bit RGB Photoshop files are supported. CMYK and 32-bit files are not supported.",
   "psdCompression": "Unsupported Photoshop compression.",
   "psdReport": "Photoshop conversion",
   "psdReportBody": "Review conversion details before importing the layered document.",
@@ -526,5 +526,13 @@
   "scan.blackLevel": "Black level",
   "scan.monochrome": "Black and white",
   "scan.original": "Original colors",
-  "scan.twoColors": "Foreground and background colors"
+  "scan.twoColors": "Foreground and background colors",
+  "bitDepth": "Bit depth",
+  "depth8": "8 Bits/Channel",
+  "depth16": "16 Bits/Channel",
+  "reduceDepth": "Convert this document to 8 bits per channel? Some tonal precision will be lost. You can undo this conversion.",
+  "exportPrecisionNote": "PNG preserves the document bit depth. JPEG and PDF are exported as 8-bit images.",
+  "psdProfile": "The embedded Photoshop color profile is invalid or unsupported.",
+  "psdProfileConverted": "Layer colors were converted from the embedded RGB profile to sRGB without reducing bit depth.",
+  "unsupportedImportDepth": "Only 8-bit and 16-bit integer images are supported. Floating-point/HDR images are not supported."
 }

@@ -1,3 +1,5 @@
+#include "WideKernels.h"
+#include "Pixels.h"
 #include "CameraRawTables.h"
 #include <QFile>
 #include <QResource>
@@ -113,7 +115,10 @@ QVector<CameraRawStage> stages(const QJsonObject &s, const QImage &image) {
         out.append(whiteBalance(v(color, "temperature"), v(color, "tint")));
     double brightness[]{.5, .5, .5};
     if (v(light, "contrast") || v(light, "highlights") || v(light, "shadows"))
-        camera_raw_statistics(image.constBits(), image.width(), image.height(), image.bytesPerLine(), brightness);
+        if (wideImage(image))
+            wide::camera_raw_statistics(reinterpret_cast<const quint16 *>(image.constBits()), image.width(), image.height(), image.bytesPerLine() / 2, brightness);
+        else
+            camera_raw_statistics(image.constBits(), image.width(), image.height(), image.bytesPerLine(), brightness);
     if (v(light, "contrast"))
         out.append(adaptive(138, v(light, "contrast"), brightness[0] * 255));
     if (v(light, "highlights"))

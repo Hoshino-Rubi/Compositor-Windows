@@ -1,8 +1,10 @@
+#include "Pixels.h"
 #include "Document.h"
 #include <QSet>
 namespace comp {
 Document::Document(QObject *parent) : QObject(parent) {}
 void Document::reset(State state, bool saved) {
+    normalizePrecision(state);
     validateState(state);
     state_ = std::move(state);
     undo_.clear();
@@ -27,6 +29,7 @@ void Document::edit(const std::function<void(State &)> &change) {
         return;
     State candidate = state_;
     change(candidate);
+    normalizePrecision(candidate);
     validateState(candidate);
     undo_.append({state_, revision_});
     state_ = std::move(candidate);
@@ -46,6 +49,7 @@ void Document::commit() {
     if (!before_)
         return;
     try {
+        normalizePrecision(state_);
         validateState(state_);
     } catch (...) {
         cancel();
@@ -105,6 +109,23 @@ void Document::trimHistory() {
     };
     while (undo_.size() > 1 && memory() > 256ll * 1024 * 1024)
         undo_.removeFirst();
+}
+void Document::setBitDepth(int depth) {
+    if ((depth != 8 && depth != 16) || state_.bitDepth == depth)
+        return;
+    edit([&](State &s) {
+        s.bitDepth = depth;
+        for (auto &l : s.layers) {
+            if (!l.image.isNull())
+                l.image = l.image.convertToFormat(pixelFormat(depth));
+            if (!l.mask.isNull())
+                l.mask = maskImage(l.mask, depth);
+            l.originalPng.clear();
+            l.originalMaskPng.clear();
+        }
+        if (!s.selectionMask.isNull())
+            s.selectionMask = maskImage(s.selectionMask, depth);
+    });
 }
 void Document::addLayer(const QString &name, const QImage &image, bool group) {
     edit([&](State &s) {

@@ -1,3 +1,5 @@
+#include "WideProcessing.h"
+#include "Pixels.h"
 #include "Effects.h"
 #include "Filters.h"
 #include <QPainter>
@@ -53,6 +55,8 @@ static QImage shifted(const QImage &source, QPointF offset) {
     return image;
 }
 QImage applyEffects(const QImage &source, const QJsonObject &effects, double scale) {
+    if (wideImage(source))
+        return applyEffects16(source, effects, scale);
     if (effects.isEmpty())
         return source;
     QImage result(source.size(), QImage::Format_ARGB32_Premultiplied);

@@ -10,7 +10,7 @@ Because it’s open source, you can download the Xcode project and add, remove, 
 
 **Windows download:** [Latest Windows release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) · [中文说明](windows/README.zh-CN.md) · [Build instructions](windows/README.md#build)
 
-A C++20 / Qt 6 Windows port is available in [windows/](windows/README.md), with English, Simplified Chinese, and Traditional Chinese interfaces. Version 0.3.2 fixes Open Image (`Ctrl+O`), opening images in new tabs while retaining Open Project (`Ctrl+Shift+O`) and Import Images (`Ctrl+I`). It includes the upstream 1.4.9 merge, updated Camera Raw tables, Scanlines, command search, canvas rotation and sized PNG/JPEG/PDF export. See [中文说明](windows/README.zh-CN.md) for running, building and compatibility details.
+A C++20 / Qt 6 Windows port is available in [windows/](windows/README.md), with English, Simplified Chinese, and Traditional Chinese interfaces. Version 0.3.3 adds native 16-bit RGB editing, layered 16-bit PSD/PSB import, high-depth RAW/PNG/TIFF workflows and 16-bit PNG/project output. The existing 8-bit workflow remains available; 16-bit projects use the new v12 format, which older builds and the original macOS application cannot open. See [中文说明](windows/README.zh-CN.md) for running, building and compatibility details.
 
 ## Installation
 

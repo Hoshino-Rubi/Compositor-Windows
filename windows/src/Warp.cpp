@@ -1,3 +1,5 @@
+#include "WideProcessing.h"
+#include "Pixels.h"
 #include "Warp.h"
 #include <QPainter>
 #include <cmath>
@@ -17,6 +19,8 @@ static QRgb sample(const QImage &image, double x, double y) {
 }
 void warpDab(QImage &image, QPointF from, QPointF to, double radius, double hardness, double strength, bool smudge,
              const QPainterPath &selection) {
+    if (wideImage(image))
+        return warpDab16(image, from, to, radius, hardness, strength, smudge, selection);
     if (image.isNull() || radius < 1 || from == to)
         return;
     image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
@@ -54,6 +58,8 @@ void warpDab(QImage &image, QPointF from, QPointF to, double radius, double hard
     }
 }
 QImage perspectiveWarp(const QImage &image, const QPolygonF &destination) {
+    if (wideImage(image))
+        return perspectiveWarp16(image, destination);
     QPolygonF source{QPointF(0, 0), QPointF(image.width(), 0), QPointF(image.width(), image.height()),
                      QPointF(0, image.height())};
     QTransform transform;

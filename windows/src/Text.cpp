@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "Text.h"
 #include <QFont>
 #include <QPainter>
@@ -81,7 +82,7 @@ QJsonObject textStyle(const QTextDocument &document, QJsonObject base) {
         base["fontRuns"] = fonts;
     return base;
 }
-QImage renderText(const QJsonObject &style) {
+QImage renderText(const QJsonObject &style, int bitDepth) {
     QTextDocument document;
     loadText(document, style);
     QSize size = document.size().toSize();
@@ -92,7 +93,7 @@ QImage renderText(const QJsonObject &style) {
     size.setHeight(std::max(24, size.height()));
     if (size.width() > MaxSide || size.height() > MaxSide || qint64(size.width()) * size.height() > MaxSourcePixels)
         throw Error("tooLarge");
-    QImage image(size, QImage::Format_ARGB32_Premultiplied);
+    QImage image(size, pixelFormat(bitDepth));
     if (image.isNull())
         throw Error("tooLarge");
     image.fill(Qt::transparent);

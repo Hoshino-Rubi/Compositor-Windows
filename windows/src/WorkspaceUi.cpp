@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "MainWindow.h"
 #include "Icons.h"
 #include <QApplication>
@@ -104,8 +105,8 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     menu("file", {"new", "open", "openProject", "import", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
     menu("edit", {"undo", "redo", "", "cut", "copy", "copyMerged", "paste", "", "fillForeground", "fillBackground",
                   "clearPixels", "contentFill", "", "shortcuts"});
-    menu("image",
-         {"imageSize", "canvasSize", "trim", "", "flipCanvasX", "flipCanvasY", "rotateCanvasCW", "rotateCanvasCCW"});
+    menu("image", {"depth8", "depth16", "", "imageSize", "canvasSize", "trim", "", "flipCanvasX", "flipCanvasY",
+                   "rotateCanvasCW", "rotateCanvasCCW"});
     menu("layer", {"addLayer",   "addGroup",   "groupSelection",  "ungroup",     "",           "duplicate", "merge",
                    "rename",     "editText",   "layerEffects",    "delete",      "",           "moveUp",    "moveDown",
                    "flipX",      "flipY",      "transformLayers", "freeDistort", "",           "addMask",   "hideMask",
@@ -643,6 +644,10 @@ void MainWindow::retranslate() {
                                      : it.key() == "layerEffects" ? "effects"
                                                                   : it.key()));
     }
+    if (auto *depth = findChild<QComboBox *>("welcomeBitDepth")) {
+        depth->setItemText(0, t("depth8"));
+        depth->setItemText(1, t("depth16"));
+    }
     for (int i = 0; i < ToolKeys.size(); ++i) {
         auto *a = tools_[i];
         a->setText(t(ToolKeys[i]));
@@ -862,6 +867,10 @@ void MainWindow::refreshSelection() {
     const bool active = i >= 0, doc = document_.hasDocument(),
                pixels = active && !s.layers[i].group && !s.layers[i].metadata["adjustment"].isObject();
     const bool hasMask = active && !s.layers[i].mask.isNull();
+    actions_["depth8"]->setEnabled(!busy_ && doc);
+    actions_["depth16"]->setEnabled(!busy_ && doc);
+    actions_["depth8"]->setChecked(s.bitDepth == 8);
+    actions_["depth16"]->setChecked(s.bitDepth == 16);
     actions_["undo"]->setEnabled(!busy_ && document_.canUndo());
     actions_["redo"]->setEnabled(!busy_ && document_.canRedo());
     for (const auto &key : QStringList{"save",          "saveAs",           "export",         "addLayer",
@@ -933,8 +942,9 @@ void MainWindow::refreshSelection() {
             if (!pair.first->hasFocus())
                 pair.first->setValue(pair.second);
     }
-    dimensions_->setText(
-        doc ? QString::number(s.size.width()) + " × " + QString::number(s.size.height()) + " px   ·   sRGB" : "");
+    dimensions_->setText(doc ? QString::number(s.size.width()) + " × " + QString::number(s.size.height()) +
+                                   " px   ·   sRGB   ·   " + t(s.bitDepth == 16 ? "depth16" : "depth8")
+                             : "");
     status_->setText(busy_ ? t("busy") : doc ? t(document_.dirty() ? "unsaved" : "saved") : t("ready"));
     tabs_->setEnabled(!busy_);
     updateTitle();

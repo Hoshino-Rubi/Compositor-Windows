@@ -6,15 +6,17 @@
 #include <QFileInfo>
 #include <QTimer>
 #include <QImageWriter>
+#include <QImageReader>
 #include <cstdio>
 int main(int argc, char **argv) {
     Q_INIT_RESOURCE(translations);
     Q_INIT_RESOURCE(icons);
     Q_INIT_RESOURCE(controls);
     QApplication app(argc, argv);
+    QImageReader::setAllocationLimit(1024);
     QCoreApplication::setOrganizationName("Compositor");
     QCoreApplication::setApplicationName("Compositor");
-    QCoreApplication::setApplicationVersion("0.3.2");
+    QCoreApplication::setApplicationVersion("0.3.3");
     QApplication::setStyle("Fusion");
     QCommandLineParser parser;
     parser.setApplicationDescription("Compositor native Windows image editor");

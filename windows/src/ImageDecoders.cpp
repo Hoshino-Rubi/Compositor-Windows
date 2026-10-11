@@ -1,3 +1,4 @@
+#include "Pixels.h"
 #include "Importers.h"
 #include <QFile>
 #include <QFileInfo>
@@ -66,13 +67,13 @@ RawFrame decodeRaw(const QString &path) {
     }
     return {image, QString::fromLatin1(raw.imgdata.idata.make) + " " + QString::fromLatin1(raw.imgdata.idata.model)};
 }
-QImage developRaw(const RawFrame &frame, double exposure, double temperature, double tint, double boost, int limit) {
+QImage developRaw(const RawFrame &frame, double exposure, double temperature, double tint, double boost, int limit,
+                  int bitDepth) {
     QImage source = frame.linear;
     if (limit > 0 && (source.width() > limit || source.height() > limit))
         source = source.scaled(limit, limit, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     QImage wide(source.size(), QImage::Format_RGBA64);
-    QImage result(source.size(), QImage::Format_RGBA8888_Premultiplied);
-    if (result.isNull() || wide.isNull())
+    if (wide.isNull())
         throw Error("tooLarge");
     const double warmth = std::clamp(log(std::clamp(temperature, 2000., 50000.) / 6500.), -1.5, 1.5);
     const double gain = std::pow(2., std::clamp(exposure, -10., 10.));
@@ -92,6 +93,14 @@ QImage developRaw(const RawFrame &frame, double exposure, double temperature, do
             dst[x] = QRgba64::fromRgba64(encode(src[x].red() / 65535., 0), encode(src[x].green() / 65535., 1),
                                          encode(src[x].blue() / 65535., 2), 65535);
     }
+    if (bitDepth == 16) {
+        auto native = wide.convertToFormat(QImage::Format_RGBA64_Premultiplied);
+        native.setColorSpace(QColorSpace::SRgb);
+        return native;
+    }
+    QImage result(source.size(), QImage::Format_RGBA8888_Premultiplied);
+    if (result.isNull())
+        throw Error("tooLarge");
     dither_quantize16(reinterpret_cast<const uint16_t *>(wide.constBits()), result.bits(), result.width(),
                       result.height(), result.bytesPerLine());
     result = result.convertToFormat(QImage::Format_ARGB32_Premultiplied);
@@ -113,15 +122,29 @@ QImage readHeif(const QString &path) {
     std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> owner(handle, heif_image_handle_release);
     checkSize({heif_image_handle_get_width(handle), heif_image_handle_get_height(handle)});
     heif_image *decoded = nullptr;
-    check(heif_decode_image(handle, &decoded, heif_colorspace_RGB, heif_chroma_interleaved_RGBA, nullptr));
+    const bool high = heif_image_handle_get_luma_bits_per_pixel(handle) > 8;
+    check(heif_decode_image(handle, &decoded, heif_colorspace_RGB,
+                            high ? heif_chroma_interleaved_RRGGBBAA_LE : heif_chroma_interleaved_RGBA, nullptr));
     std::unique_ptr<heif_image, decltype(&heif_image_release)> decodedOwner(decoded, heif_image_release);
     int stride = 0;
     const auto *pixels = heif_image_get_plane_readonly(decoded, heif_channel_interleaved, &stride);
     if (!pixels)
         throw Error("imageError");
     QImage image(pixels, heif_image_get_primary_width(decoded), heif_image_get_primary_height(decoded), stride,
-                 QImage::Format_RGBA8888);
-    auto result = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                 high ? QImage::Format_RGBA64 : QImage::Format_RGBA8888);
+    if (high) {
+        const int bits = heif_image_get_bits_per_pixel_range(decoded, heif_channel_interleaved);
+        if (bits < 9 || bits > 16)
+            throw Error("imageError");
+        image = image.copy();
+        const quint32 maximum = (1u << bits) - 1;
+        for (int y = 0; y < image.height(); ++y) {
+            auto *row = reinterpret_cast<quint16 *>(image.scanLine(y));
+            for (int x = 0; x < image.width() * 4; ++x)
+                row[x] = quint16((quint32(row[x]) * 65535u + maximum / 2) / maximum);
+        }
+    }
+    auto result = image.convertToFormat(pixelFormat(high ? 16 : 8));
     const auto profileSize = heif_image_handle_get_raw_color_profile_size(handle);
     if (profileSize > 0 && profileSize < 4 * 1024 * 1024) {
         QByteArray profile(qsizetype(profileSize), 0);

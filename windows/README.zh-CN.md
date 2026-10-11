@@ -1,13 +1,22 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.3.2**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.3.3**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
 从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) 下载便携包。
 
-解压 `Compositor-0.3.2-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.3.3-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 右上角即时切换 English、简体中文、繁體中文，语言选择会保存。
+
+## 0.3.3 更新
+
+- 原生 **16 位／通道 RGB 编辑**，同时保留 8 位模式。新建画布时可选色深，也可在“图像”菜单切换；导入 16 位图像会将文档提升为 16 位。降为 8 位需确认，并可撤销。
+- 支持 16 位 PNG/TIFF 与 RGB PSD/PSB 分层导入，覆盖 Raw、PackBits RLE、ZIP、ZIP Prediction、`Lr16` 图层记录及 16 位蒙版。PSD 内嵌 RGB 配置按原色深转换至 sRGB；RAW 显影保留 16 位像素。
+- 图层合成与混合、调整、Camera Raw、效果、画笔／橡皮／克隆／修复、渐变、文字／形状、液化、变换、选区／蒙版及撤销接入高精度处理。测试检查 8 位的 256 级之间的实际色阶值。
+- PNG 导出与项目保存重开保留 16 位；JPEG 和单页栅格 PDF 仍输出 8 位，导出窗口会说明。
+- **项目兼容性：8 位文档继续保存为 `.comp` v11；16 位文档保存为带 `bitDepth: 16` 的 v12。旧 Windows 版本和原版 macOS 应用会拒绝打开 v12。** 需要兼容旧版时，可将副本转换为 8 位后保存。
+- 三语色深控件、状态显示与转换提示同步更新。
 
 ## 0.3.2 更新
 
@@ -69,9 +78,9 @@ Windows 原生端同步适配：
 
 ## 兼容范围
 
-继续读取上游 `.comp` version 1–11，写入 version 11。未触碰的 PNG 字节及未知非渲染元数据保留。文字保留 fontRuns/colorRuns；Windows 缺少的字体可能替代，重新编辑会按 Windows 字体排版。像素滤镜/绘画/自由扭曲会栅格化文字和形状。选区与历史为会话状态。
+读取 `.comp` version 1–12；8 位文档写入 version 11，16 位文档写入 version 12。未触碰的 PNG 字节及未知非渲染元数据保留。文字保留 fontRuns/colorRuns；Windows 缺少的字体可能替代，重新编辑会按 Windows 字体排版。像素滤镜/绘画/自由扭曲会栅格化文字和形状。选区与历史为会话状态。
 
-PSD 的范围与原版导入器一致为 8 位 RGB；不支持 CMYK、16/32 位 PSD。Photoshop 智能对象、复杂路径/文字变形与部分效果保留栅格后备或给出转换报告，不承诺 Photoshop 所有结构都可继续编辑。导入不是 PSD 导出。
+PSD/PSB 支持 8 位及 16 位 RGB，超出原版的 8 位范围；暂不支持 CMYK 和 32 位 PSD。编辑使用整数 sRGB，不是浮点／HDR 管线。Photoshop 智能对象、复杂路径/文字变形与部分效果保留栅格后备或给出转换报告，不承诺 Photoshop 所有结构都可继续编辑。导入不是 PSD 导出。
 Camera Raw 对应本项目原版的功能，不是 Adobe 插件；镜头配置使用原版通用校正内核，不带 Adobe 相机/镜头数据库。
 对象识别使用 Windows 本地模型，效果可能与 macOS Vision 不同；它对模型识别出的前景做连通区域选择，不能保证识别图中任意对象。
 CPU 合成、字体、几何插值、模糊与发光边缘可能与 Metal 输出不同，不宣称逐像素一致。
@@ -89,6 +98,8 @@ pwsh -File ./windows/scripts/package.ps1 -QtDir C:/Qt/6.8.3/msvc2022_64 -SkipBui
 ```
 
 构建时由 CMake 将上游 Apple blocks 调度转换为 MSVC 并行循环，保留像素算法。上游 `CameraRawTables.bin` 更新后执行 `python windows/scripts/repack-camera-raw.py`；CMake 会检查原始文件哈希，拒绝使用过期资源。重打包只更换压缩格式，颜色表字节保持一致。
+
+16 位 C++ 处理代码随源码提供，正常编译和程序运行不依赖 Python。修改对应算法后，开发者需运行 `python windows/scripts/generate-wide-pixels.py` 和 `python windows/scripts/generate-wide-processing.py` 重新生成；CMake 校验源码哈希，拒绝使用过期输出。这些生成脚本不会随便携应用发布。
 
 首次准备依赖需要联网，后续运行不需要。vcpkg 提交、ONNX Runtime 1.22.1 和模型哈希固定在 dependencies.lock.json。构建运行 Qt Test；测试包括实际 PSD/PSB/DNG 解码、分层/文本/矢量、Camera Raw、液化手势及撤销、软选区、组效果与变换、主体模型、导入流程、外部重载、国际化与原有编辑回归。
 fixtures 是自行生成的小型测试图；可从仓库根目录用 Python 执行 `windows/tests/generate_fixtures.py` 再生成。Python 不是应用运行依赖。

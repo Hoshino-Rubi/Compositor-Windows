@@ -1,3 +1,5 @@
+#include "WideProcessing.h"
+#include "Pixels.h"
 #include "Filters.h"
 #include "CameraRaw.h"
 #include <QPainter>
@@ -11,6 +13,8 @@ extern "C" {
 
 namespace comp {
 QImage blurImage(const QImage &source, double radius) {
+    if (wideImage(source))
+        return blurImage16(source, radius);
     if (source.isNull() || radius <= 0)
         return source;
     // Three sliding box passes approximate a Gaussian, with work independent of radius.
@@ -166,6 +170,8 @@ void validateAdjustment(const QJsonObject &settings) {
             number(gradient[end].toObject(), key, 0, 1);
 }
 QImage filtered(const QImage &source, const QJsonObject &settings) {
+    if (wideImage(source))
+        return filtered16(source, settings);
     const QString kind = settings["kind"].toString();
     if (kind == "Camera Raw")
         return cameraRaw(source, settings);
@@ -448,6 +454,8 @@ QImage filtered(const QImage &source, const QJsonObject &settings) {
     return result.convertToFormat(QImage::Format_ARGB32_Premultiplied);
 }
 QPainterPath alphaPath(const QImage &image) {
+    if (wideImage(image))
+        return alphaPath16(image);
     QPainterPath path;
     path.setFillRule(Qt::WindingFill);
     const auto rgba = image.convertToFormat(QImage::Format_ARGB32);
@@ -467,6 +475,8 @@ QPainterPath alphaPath(const QImage &image) {
     return path.simplified();
 }
 QPainterPath wandPath(const QImage &image, QPoint point, int tolerance, bool contiguous) {
+    if (wideImage(image))
+        return wandPath16(image, point, tolerance, contiguous);
     if (!image.rect().contains(point))
         return {};
     const auto rgba = image.convertToFormat(QImage::Format_ARGB32);

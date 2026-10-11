@@ -1,3 +1,5 @@
+#include "WideKernels.h"
+#include "Pixels.h"
 #include "Canvas.h"
 #include "Renderer.h"
 #include "Filters.h"
@@ -484,7 +486,7 @@ void Canvas::paintStroke(QPointF from, QPointF to) {
         const QSize size = maskTarget_ && !l.image.isNull() ? l.image.size() : s.size;
         if (!maskTarget_ && s.sourcePixels() + qint64(size.width()) * size.height() > MaxSourcePixels)
             throw Error("tooLarge");
-        *target = QImage(size, maskTarget_ ? QImage::Format_Grayscale8 : QImage::Format_ARGB32_Premultiplied);
+        *target = QImage(size, maskTarget_ ? maskFormat(s.bitDepth) : pixelFormat(s.bitDepth));
         if (target->isNull())
             throw Error("tooLarge");
         target->fill(maskTarget_ ? Qt::white : Qt::transparent);
@@ -503,7 +505,7 @@ void Canvas::paintStroke(QPointF from, QPointF to) {
         if (maskPixels - 1 + qint64(size.width()) * size.height() > MaxSourcePixels)
             throw Error("tooLarge");
         const QColor coverage = target->pixelColor(0, 0);
-        QImage expanded(size, QImage::Format_Grayscale8);
+        QImage expanded(size, maskFormat(s.bitDepth));
         if (expanded.isNull())
             throw Error("tooLarge");
         expanded.fill(coverage);
@@ -522,8 +524,8 @@ void Canvas::paintStroke(QPointF from, QPointF to) {
     }
     if (maskTarget_) {
         l.originalMaskPng.clear();
-        if (target->format() != QImage::Format_ARGB32_Premultiplied)
-            *target = target->convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        if (target->format() != pixelFormat(s.bitDepth))
+            *target = target->convertToFormat(pixelFormat(s.bitDepth));
     } else {
         l.originalPng.clear();
         l.metadata.remove("text");
@@ -558,10 +560,12 @@ void Canvas::paintStroke(QPointF from, QPointF to) {
     painter.setTransform(placement.matrix(target->size()).inverted());
     QColor ink = color_;
     ink.setAlphaF(flow_);
-    if (maskTarget_)
-        ink = QColor(tool_ == Tool::Eraser ? 0 : qGray(color_.rgb()), tool_ == Tool::Eraser ? 0 : qGray(color_.rgb()),
-                     tool_ == Tool::Eraser ? 0 : qGray(color_.rgb()), qRound(flow_ * 255));
-    else if (tool_ == Tool::Eraser)
+    if (maskTarget_) {
+        ink = tool_ == Tool::Eraser ? QColor(Qt::black)
+              : s.bitDepth == 16    ? grayColor16(color_)
+                                    : QColor(qGray(color_.rgb()), qGray(color_.rgb()), qGray(color_.rgb()));
+        ink.setAlphaF(flow_);
+    } else if (tool_ == Tool::Eraser)
         painter.setCompositionMode(QPainter::CompositionMode_DestinationOut);
     if (s.selectionActive && s.selectionMask.isNull())
         painter.setClipPath(s.selection);
@@ -770,7 +774,7 @@ void Canvas::finishShape() {
     if (rect.width() > MaxSide || rect.height() > MaxSide ||
         qint64(rect.width()) * rect.height() + document_->state().sourcePixels() > MaxSourcePixels)
         throw Error("tooLarge");
-    QImage image(rect.size(), QImage::Format_ARGB32_Premultiplied);
+    QImage image(rect.size(), pixelFormat(document_->state().bitDepth));
     if (image.isNull())
         throw Error("tooLarge");
     image.fill(Qt::transparent);
@@ -809,7 +813,8 @@ void Canvas::finishHealing() {
     if (i < 0)
         return;
     auto &l = s.layers[i];
-    auto image = l.image.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+    auto image = l.image.convertToFormat(s.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
+                                                          : QImage::Format_RGBA8888_Premultiplied);
     QImage mask(image.size(), QImage::Format_Grayscale8);
     mask.fill(Qt::black);
     QPainter p(&mask);
@@ -821,10 +826,15 @@ void Canvas::finishHealing() {
     QByteArray coverage(image.width() * image.height(), 0);
     for (int y = 0; y < image.height(); ++y)
         memcpy(coverage.data() + y * image.width(), mask.constScanLine(y), image.width());
-    if (spot_heal(image.bits(), reinterpret_cast<const uint8_t *>(coverage.constData()), image.width(), image.height(),
-                  image.bytesPerLine(), float(flow_), 0, 0) < 0)
+    const auto *coverageBytes = reinterpret_cast<const uint8_t *>(coverage.constData());
+    const int healResult =
+        s.bitDepth == 16 ? wide::spot_heal(reinterpret_cast<quint16 *>(image.bits()), coverageBytes, image.width(),
+                                           image.height(), image.bytesPerLine() / 2, float(flow_), 0, 0)
+                         : spot_heal(image.bits(), coverageBytes, image.width(), image.height(), image.bytesPerLine(),
+                                     float(flow_), 0, 0);
+    if (healResult < 0)
         throw Error("tooLarge");
-    auto healed = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    auto healed = image.convertToFormat(pixelFormat(s.bitDepth));
     if (!s.selectionMask.isNull())
         constrainSelection(s, l.placement, l.image, healed);
     l.image = healed;
@@ -843,7 +853,7 @@ void Canvas::finishGradient() {
         auto &l = s.layers[i];
         QImage &target = maskTarget_ ? l.mask : l.image;
         if (target.isNull()) {
-            target = QImage(s.size, QImage::Format_ARGB32_Premultiplied);
+            target = QImage(s.size, pixelFormat(s.bitDepth));
             if (target.isNull())
                 throw Error("tooLarge");
             target.fill(maskTarget_ ? Qt::white : Qt::transparent);
@@ -856,15 +866,18 @@ void Canvas::finishGradient() {
                 l.maskPlacement.size = s.size;
             }
         }
-        target = target.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        target = target.convertToFormat(pixelFormat(s.bitDepth));
         QColor first = color_, second = background_;
         if (transparentGradient_) {
             second = first;
             second.setAlpha(0);
         }
         if (maskTarget_) {
-            first = QColor(qGray(first.rgb()), qGray(first.rgb()), qGray(first.rgb()));
-            second = QColor(qGray(second.rgb()), qGray(second.rgb()), qGray(second.rgb()), second.alpha());
+            first = s.bitDepth == 16 ? grayColor16(first)
+                                     : QColor(qGray(first.rgb()), qGray(first.rgb()), qGray(first.rgb()));
+            second = s.bitDepth == 16
+                         ? grayColor16(second)
+                         : QColor(qGray(second.rgb()), qGray(second.rgb()), qGray(second.rgb()), second.alpha());
         }
         const QImage before = target;
         QPainter p(&target);
@@ -1137,7 +1150,7 @@ void Canvas::finishInlineText(bool apply) {
                     return;
                 auto &l = s.layers[i];
                 auto style = textStyle(*editor->document(), l.metadata["text"].toObject());
-                auto image = renderText(style);
+                auto image = renderText(style, document_->state().bitDepth);
                 const QSize old = l.image.size();
                 l.placement.size = {image.width() * l.placement.size.width() / std::max(1, old.width()),
                                     image.height() * l.placement.size.height() / std::max(1, old.height())};

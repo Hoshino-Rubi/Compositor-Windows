@@ -1,3 +1,5 @@
+#include "WideProcessing.h"
+#include "Pixels.h"
 #include "Renderer.h"
 #include "Filters.h"
 #include "Effects.h"
@@ -181,6 +183,8 @@ QRgb blendPixel(QRgb backdrop, QRgb source, const QString &mode) {
     return blendPixelCode(backdrop, source, blendModes().indexOf(mode));
 }
 QImage renderMask(const Layer &l, QSize canvas, QSize target) {
+    if (wideImage(l.mask) || wideImage(l.image))
+        return renderMask16(l, canvas, target);
     auto result = surface(target);
     if (l.mask.isNull() || !l.maskEnabled) {
         result.fill(Qt::white);
@@ -204,6 +208,8 @@ QImage renderMask(const Layer &l, QSize canvas, QSize target) {
     return result;
 }
 QImage layerSurface(const State &s, int index, QSize target) {
+    if (s.bitDepth == 16)
+        return layerSurface16(s, index, target);
     auto result = ownSurface(s, index, target);
     // Clipping ignores source visibility and source RGB; every upstream link contributes alpha.
     QString source = s.layers[index].maskSource;
@@ -217,6 +223,8 @@ QImage layerSurface(const State &s, int index, QSize target) {
     return result;
 }
 QImage render(const State &s, QSize target) {
+    if (s.bitDepth == 16)
+        return render16(s, target.isValid() ? target : s.size);
     if (!target.isValid())
         target = s.size;
     // Effects on a folder isolate its descendants before applying the folder's mask and opacity.
