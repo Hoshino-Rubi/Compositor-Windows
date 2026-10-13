@@ -3,6 +3,7 @@
 #include "Canvas.h"
 #include "Renderer.h"
 #include "Filters.h"
+#include "GpuWarp.h"
 #include "Warp.h"
 #include "Selection.h"
 #include "Text.h"
@@ -630,12 +631,14 @@ void Canvas::paintStroke(QPointF from, QPointF to) {
             s.selectionActive && s.selectionMask.isNull() ? inverse.map(s.selection) : QPainterPath();
         if (s.selectionActive && s.selectionMask.isNull() && selection.isEmpty())
             return;
-        QPointF previous = a;
+        QVector<QPointF> points;
+        points.reserve(steps + 1);
+        points.append(a);
         for (int k = 1; k <= steps; ++k) {
             auto point = a + (b - a) * (double(k) / steps);
-            warpDab(*target, previous, point, brushSize_ * scale / 2, hardness_, flow_, retouchMode_ == 1, selection);
-            previous = point;
+            points.append(point);
         }
+        warpStrokeAccelerated(*target, points, brushSize_ * scale / 2, hardness_, flow_, retouchMode_ == 1, selection);
         if (!s.selectionMask.isNull())
             constrainSelection(s, placement, before, *target);
         document_->preview();

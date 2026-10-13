@@ -4,6 +4,8 @@ namespace comp {
 struct GpuPreviewMetrics {
     quint64 textureAllocations = 0, sourceUploads = 0, uploadedBytes = 0;
     quint64 preparedLayers = 0, dispatches = 0, readbacks = 0, cacheHits = 0, evictions = 0;
+    quint64 processingTextureAllocations = 0, processingUploads = 0, processingUploadedBytes = 0;
+    quint64 processingReadbackBytes = 0, processingCacheHits = 0;
     // Pixel counters exclude rounded-up dispatch padding; readback bytes exclude row pitch.
     quint64 compositedPixels = 0, packedPixels = 0, packDispatches = 0, readbackBytes = 0;
     quint64 blurDispatches = 0, blurredPixels = 0, adjustmentDispatches = 0;

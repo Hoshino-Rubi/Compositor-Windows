@@ -340,6 +340,257 @@ class Tests : public QObject {
             document.redo();QCOMPARE(document.state().layers[0].image,expected);
         }
     }
+    void gpuProcessingTransferCacheReusesFilterResources() {
+        const auto previousCache = qgetenv("COMPOSITOR_GPU_CACHE_MB");
+        const auto previousDisable = qgetenv("COMPOSITOR_DISABLE_GPU");
+        const auto restore = qScopeGuard([&] {
+            if (previousCache.isNull()) qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+            else qputenv("COMPOSITOR_GPU_CACHE_MB", previousCache);
+            if (previousDisable.isNull()) qunsetenv("COMPOSITOR_DISABLE_GPU");
+            else qputenv("COMPOSITOR_DISABLE_GPU", previousDisable);
+            clearGpuPreviewCache();
+        });
+        qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+        qunsetenv("COMPOSITOR_DISABLE_GPU");
+        clearGpuPreviewCache();
+        auto source = blurFixture({73, 59}, 8).layers[0].image;
+        const QJsonObject firstSettings{{"kind", "Vignette"}, {"vignetteAmount", 61}};
+        resetGpuPreviewMetrics();
+        const auto first = filterGpuImage(source, firstSettings);
+        if (first.isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"), qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        const auto firstSnapshot = first.copy();
+        const auto firstExpected = filtered(source, firstSettings);
+        QVERIFY(sampleDifference(first, firstExpected) <= 257);
+        const auto cold = gpuPreviewMetrics();
+        QVERIFY(cold.processingTextureAllocations > 0);
+        QVERIFY(cold.processingUploads > 0);
+        QVERIFY(cold.processingUploadedBytes > 0);
+        QVERIFY(cold.processingReadbackBytes > 0);
+        QVERIFY(cold.processingDispatches > 0);
+        QVERIFY(first.colorSpace() == source.colorSpace());
+        QCOMPARE(first.dotsPerMeterX(), source.dotsPerMeterX());
+        QCOMPARE(first.dotsPerMeterY(), source.dotsPerMeterY());
+
+        auto changed = source.copy();
+        {
+            QPainter paint(&changed);
+            paint.setCompositionMode(QPainter::CompositionMode_Source);
+            paint.fillRect(QRect(5, 7, 29, 17), QColor(18, 231, 81, 171));
+        }
+        const QJsonObject changedSettings{{"kind", "Vignette"}, {"vignetteAmount", 9}};
+        resetGpuPreviewMetrics();
+        const auto second = filterGpuImage(changed, changedSettings);
+        QVERIFY2(!second.isNull(), qPrintable(gpuPreviewStatus()));
+        const auto warm = gpuPreviewMetrics();
+        QCOMPARE(warm.processingTextureAllocations, quint64(0));
+        QVERIFY(warm.processingUploads > 0);
+        QVERIFY(warm.processingUploadedBytes > 0);
+        QVERIFY(warm.processingReadbackBytes > 0);
+        QVERIFY(warm.processingCacheHits > 0);
+        QVERIFY(warm.processingDispatches > 0);
+        QVERIFY(sampleDifference(second, filtered(changed, changedSettings)) <= 257);
+        QVERIFY(sampleDifference(second, firstSnapshot) > 0);
+        QCOMPARE(first, firstSnapshot);
+    }
+    void gpuProcessingTransferCacheReusesEffectResources() {
+        const auto previousCache = qgetenv("COMPOSITOR_GPU_CACHE_MB");
+        const auto previousDisable = qgetenv("COMPOSITOR_DISABLE_GPU");
+        const auto restore = qScopeGuard([&] {
+            if (previousCache.isNull()) qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+            else qputenv("COMPOSITOR_GPU_CACHE_MB", previousCache);
+            if (previousDisable.isNull()) qunsetenv("COMPOSITOR_DISABLE_GPU");
+            else qputenv("COMPOSITOR_DISABLE_GPU", previousDisable);
+            clearGpuPreviewCache();
+        });
+        qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+        qunsetenv("COMPOSITOR_DISABLE_GPU");
+        clearGpuPreviewCache();
+        auto source = blurFixture({61, 47}, 8).layers[0].image;
+        const QJsonObject firstSettings{{"colorOverlay", QJsonObject{{"red", .73}, {"green", .18},
+                                                                        {"blue", .42}, {"opacity", .67}}}};
+        resetGpuPreviewMetrics();
+        const auto first = effectsGpuImage(source, firstSettings);
+        if (first.isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"), qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        const auto firstSnapshot = first.copy();
+        QVERIFY(sampleDifference(first, applyEffects(source, firstSettings, 1)) <= 514);
+        const auto cold = gpuPreviewMetrics();
+        QVERIFY(cold.processingTextureAllocations > 0);
+        QVERIFY(cold.processingUploads > 0);
+        QVERIFY(cold.processingUploadedBytes > 0);
+        QVERIFY(cold.processingReadbackBytes > 0);
+        QVERIFY(cold.processingDispatches > 0);
+
+        auto changed = source.copy();
+        {
+            QPainter paint(&changed);
+            paint.setCompositionMode(QPainter::CompositionMode_Source);
+            paint.fillRect(QRect(8, 9, 23, 19), QColor(221, 37, 94, 199));
+        }
+        const QJsonObject changedSettings{{"colorOverlay", QJsonObject{{"red", .12}, {"green", .81},
+                                                                          {"blue", .26}, {"opacity", .31}}}};
+        resetGpuPreviewMetrics();
+        const auto second = effectsGpuImage(changed, changedSettings);
+        QVERIFY2(!second.isNull(), qPrintable(gpuPreviewStatus()));
+        const auto warm = gpuPreviewMetrics();
+        QCOMPARE(warm.processingTextureAllocations, quint64(0));
+        QVERIFY(warm.processingUploads > 0);
+        QVERIFY(warm.processingUploadedBytes > 0);
+        QVERIFY(warm.processingReadbackBytes > 0);
+        QVERIFY(warm.processingCacheHits > 0);
+        QVERIFY(warm.processingDispatches > 0);
+        QVERIFY(sampleDifference(second, applyEffects(changed, changedSettings, 1)) <= 514);
+        QVERIFY(sampleDifference(second, firstSnapshot) > 0);
+        QCOMPARE(first, firstSnapshot);
+    }
+    void gpuProcessingTransferCacheInvalidatesSizeAndDepthAndPreservesMetadata() {
+        const auto previousCache = qgetenv("COMPOSITOR_GPU_CACHE_MB");
+        const auto previousDisable = qgetenv("COMPOSITOR_DISABLE_GPU");
+        const auto restore = qScopeGuard([&] {
+            if (previousCache.isNull()) qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+            else qputenv("COMPOSITOR_GPU_CACHE_MB", previousCache);
+            if (previousDisable.isNull()) qunsetenv("COMPOSITOR_DISABLE_GPU");
+            else qputenv("COMPOSITOR_DISABLE_GPU", previousDisable);
+            clearGpuPreviewCache();
+        });
+        qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+        qunsetenv("COMPOSITOR_DISABLE_GPU");
+        clearGpuPreviewCache();
+        auto source8 = blurFixture({41, 33}, 8).layers[0].image;
+        source8.setColorSpace(QColorSpace::SRgb);
+        source8.setDotsPerMeterX(1234);
+        source8.setDotsPerMeterY(2345);
+        const QJsonObject settings{{"kind", "Vignette"}, {"vignetteAmount", 47}};
+        resetGpuPreviewMetrics();
+        const auto first = filterGpuImage(source8, settings);
+        if (first.isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"), qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+        const auto firstSnapshot = first.copy();
+        QVERIFY(sampleDifference(first, filtered(source8, settings)) <= 257);
+        QVERIFY(first.colorSpace() == source8.colorSpace());
+        QCOMPARE(first.dotsPerMeterX(), source8.dotsPerMeterX());
+        QCOMPARE(first.dotsPerMeterY(), source8.dotsPerMeterY());
+
+        auto resized8 = blurFixture({47, 37}, 8).layers[0].image;
+        resized8.setColorSpace(QColorSpace::SRgb);
+        resized8.setDotsPerMeterX(3456);
+        resized8.setDotsPerMeterY(4567);
+        resetGpuPreviewMetrics();
+        const auto resized = filterGpuImage(resized8, settings);
+        QVERIFY2(!resized.isNull(), qPrintable(gpuPreviewStatus()));
+        auto resizedMetrics = gpuPreviewMetrics();
+        QVERIFY(resizedMetrics.processingTextureAllocations > 0);
+        QVERIFY(resizedMetrics.processingUploads > 0);
+        QVERIFY(resizedMetrics.processingReadbackBytes > 0);
+        QVERIFY(sampleDifference(resized, filtered(resized8, settings)) <= 257);
+        QVERIFY(resized.colorSpace() == resized8.colorSpace());
+        QCOMPARE(resized.dotsPerMeterX(), resized8.dotsPerMeterX());
+        QCOMPARE(resized.dotsPerMeterY(), resized8.dotsPerMeterY());
+        QCOMPARE(first, firstSnapshot);
+
+        auto source16 = blurFixture({47, 37}, 16).layers[0].image;
+        source16.setColorSpace(QColorSpace::SRgb);
+        source16.setDotsPerMeterX(6789);
+        source16.setDotsPerMeterY(7890);
+        resetGpuPreviewMetrics();
+        const auto second = filterGpuImage(source16, settings);
+        QVERIFY2(!second.isNull(), qPrintable(gpuPreviewStatus()));
+        const auto depthMetrics = gpuPreviewMetrics();
+        QVERIFY(depthMetrics.processingTextureAllocations > 0);
+        QVERIFY(depthMetrics.processingUploads > 0);
+        QVERIFY(depthMetrics.processingUploadedBytes > 0);
+        QVERIFY(depthMetrics.processingReadbackBytes > 0);
+        QVERIFY(sampleDifference(second, filtered(source16, settings)) <= 4);
+        QVERIFY(second.colorSpace() == source16.colorSpace());
+        QCOMPARE(second.dotsPerMeterX(), source16.dotsPerMeterX());
+        QCOMPARE(second.dotsPerMeterY(), source16.dotsPerMeterY());
+        QCOMPARE(first, firstSnapshot);
+
+        clearGpuPreviewCache();
+        resetGpuPreviewMetrics();
+        const auto afterClear = filterGpuImage(source16, settings);
+        QVERIFY2(!afterClear.isNull(), qPrintable(gpuPreviewStatus()));
+        QVERIFY(gpuPreviewMetrics().processingTextureAllocations > 0);
+        QCOMPARE(afterClear, second);
+    }
+    void gpuProcessingTransferCacheFallbacksDoNotCountCpuRoutes() {
+        const auto previousCache = qgetenv("COMPOSITOR_GPU_CACHE_MB");
+        const auto previousDisable = qgetenv("COMPOSITOR_DISABLE_GPU");
+        const auto restore = qScopeGuard([&] {
+            if (previousCache.isNull()) qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+            else qputenv("COMPOSITOR_GPU_CACHE_MB", previousCache);
+            if (previousDisable.isNull()) qunsetenv("COMPOSITOR_DISABLE_GPU");
+            else qputenv("COMPOSITOR_DISABLE_GPU", previousDisable);
+            clearGpuPreviewCache();
+        });
+        qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+        qunsetenv("COMPOSITOR_DISABLE_GPU");
+        clearGpuPreviewCache();
+        const auto source = blurFixture({73, 59}, 8).layers[0].image;
+        const QJsonObject gpuSettings{{"kind", "Vignette"}, {"vignetteAmount", 57}};
+        resetGpuPreviewMetrics();
+        const auto warm = filterGpuImage(source, gpuSettings);
+        if (warm.isNull()) {
+            QVERIFY2(!qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"), qPrintable(gpuPreviewStatus()));
+            QSKIP(qPrintable(gpuPreviewStatus()));
+        }
+
+        qputenv("COMPOSITOR_GPU_CACHE_MB", "1");
+        clearGpuPreviewCache();
+        resetGpuPreviewMetrics();
+        QVERIFY(filterGpuImage(source, gpuSettings).isNull());
+        QCOMPARE(filteredAccelerated(source, gpuSettings), filtered(source, gpuSettings));
+        auto lowBudget = gpuPreviewMetrics();
+        QCOMPARE(lowBudget.processingTextureAllocations, quint64(0));
+        QCOMPARE(lowBudget.processingUploads, quint64(0));
+        QCOMPARE(lowBudget.processingUploadedBytes, quint64(0));
+        QCOMPARE(lowBudget.processingReadbackBytes, quint64(0));
+        QCOMPARE(lowBudget.processingCacheHits, quint64(0));
+        QCOMPARE(lowBudget.processingDispatches, quint64(0));
+
+        qunsetenv("COMPOSITOR_GPU_CACHE_MB");
+        qputenv("COMPOSITOR_DISABLE_GPU", "1");
+        clearGpuPreviewCache();
+        resetGpuPreviewMetrics();
+        QVERIFY(filterGpuImage(source, gpuSettings).isNull());
+        QCOMPARE(filteredAccelerated(source, gpuSettings), filtered(source, gpuSettings));
+        auto disabled = gpuPreviewMetrics();
+        QCOMPARE(disabled.processingTextureAllocations, quint64(0));
+        QCOMPARE(disabled.processingUploads, quint64(0));
+        QCOMPARE(disabled.processingUploadedBytes, quint64(0));
+        QCOMPARE(disabled.processingReadbackBytes, quint64(0));
+        QCOMPARE(disabled.processingCacheHits, quint64(0));
+        QCOMPARE(disabled.processingDispatches, quint64(0));
+
+        qunsetenv("COMPOSITOR_DISABLE_GPU");
+        clearGpuPreviewCache();
+        const QVector<QJsonObject> sequential{
+            QJsonObject{{"kind", "Dither"}, {"style", 0}, {"pixelSize", 3}, {"colors", 1}},
+            QJsonObject{{"kind", "Dither"}, {"style", 1}, {"pixelSize", 2}, {"colors", 2}},
+            QJsonObject{{"kind", "Camera Raw"}, {"detail", QJsonObject{{"noiseLuminance", 41},
+                                                                            {"noiseColor", 23},
+                                                                            {"sharpenAmount", 37}}}}};
+        for (const auto &settings : sequential) {
+            resetGpuPreviewMetrics();
+            QVERIFY(filterGpuImage(source, settings).isNull());
+            const auto expected = settings["kind"] == "Camera Raw" ? cameraRaw(source, settings) : filtered(source, settings);
+            QCOMPARE(filteredAccelerated(source, settings), expected);
+            const auto m = gpuPreviewMetrics();
+            QCOMPARE(m.processingTextureAllocations, quint64(0));
+            QCOMPARE(m.processingUploads, quint64(0));
+            QCOMPARE(m.processingUploadedBytes, quint64(0));
+            QCOMPARE(m.processingReadbackBytes, quint64(0));
+            QCOMPARE(m.processingCacheHits, quint64(0));
+            QCOMPARE(m.processingDispatches, quint64(0));
+        }
+    }
     void gpuProcessingPerformanceReport() {
         if(!qEnvironmentVariableIntValue("COMPOSITOR_GPU_BENCHMARK"))QSKIP("Set COMPOSITOR_GPU_BENCHMARK=1 to measure processing.");
         for(int depth:{8,16})for(QSize size:{QSize(512,384),QSize(1024,768)}) {

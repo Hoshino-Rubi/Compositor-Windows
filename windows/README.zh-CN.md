@@ -1,13 +1,21 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a5p1（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a6（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a5p1) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a6) 下载便携包。
 
-解压 `Compositor-0.4.1a5p1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a6-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a6 — GPU 液化／涂抹与传输资源复用（预发布）
+
+- 为较大的液化／涂抹笔刷段加入 Direct3D 11 并行像素计算，支持 8／16 位。一个鼠标移动段的多个笔触按原顺序计算，只上传带采样边界的局部区域，处理后一次回读。
+- 保留路径选区、柔边选区蒙版、图层／蒙版目标与撤销／重做。小范围操作、设备不可用或资源不足使用原 CPU 实现；没有将顺序亮度降噪／误差扩散重新强制改为 GPU。
+- 滤镜、图层效果与液化／涂抹处理复用输入、打包输出和回读纹理；相同尺寸／位深的重复请求仍上传新像素并计算，不缓存过期结果。资源计入缓存预算并随清理释放。
+
+**范围：**迁移的是 Windows 现有液化／涂抹像素算法，不是 macOS 的整笔画常驻纹理／累计位移场。Qt 显示仍需同步回读，画笔／橡皮／克隆／修复、透视变形、部分蒙版准备和导出尚未迁移。其余 a5/a5p1 限制继续适用；项目格式、依赖和八种界面语言不变。**仅预发布，稳定版 Latest 保持 0.4.0。**验证与实测见[发布说明](releases/0.4.1a6.md)。
 
 ## 0.4.1a5p1 — 顺序滤镜性能修复（预发布）
 

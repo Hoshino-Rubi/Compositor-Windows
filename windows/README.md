@@ -1,14 +1,22 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a5p1 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a6 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a5p1). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a6). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a5p1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a6-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a6 — GPU liquify/smudge and transfer reuse (pre-release)
+
+- Adds Direct3D 11 pixel processing for larger Liquify/Smudge brush segments in 8/16-bit documents. Dabs within one pointer-move segment remain ordered; only a bounded local region with sampling margins is uploaded, followed by one readback.
+- Preserves path selections, feathered selection masks, layer/mask targets and undo/redo. Small operations, unavailable hardware or insufficient resources use the reference CPU implementation. Sequential luminance denoising/error diffusion retain their a5p1 CPU routing.
+- Reuses input, packed-output and staging textures across same-size/depth filter, effects and warp requests. New pixels are uploaded and processed each time; stale results are not reused. Transfer resources count toward the cache budget and are released by cache clearing.
+
+**Scope:** this ports the existing Windows Liquify/Smudge pixel algorithm, not macOS's whole-stroke resident textures/accumulated displacement field. Qt display still requires synchronous readback; paint/eraser/clone/healing, perspective transforms, some mask preparation and export remain CPU-backed. Other a5/a5p1 limitations remain; project format, runtime dependencies and the eight interface languages are unchanged. **Pre-release only; stable Latest stays 0.4.0.** See [release notes](releases/0.4.1a6.md) for verification and measurements.
 
 ## Version 0.4.1a5p1 — Sequential filter performance fix (pre-release)
 

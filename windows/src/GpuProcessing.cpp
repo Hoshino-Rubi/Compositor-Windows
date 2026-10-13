@@ -6,6 +6,7 @@
 #include "GpuDitherShader.h"
 #include "GpuProcessingShader.h"
 #include "GpuRawShader.h"
+#include "GpuWarpShader.h"
 #include "Pixels.h"
 #include <bit>
 #include <cmath>
@@ -88,7 +89,7 @@ GpuSurfacePtr GpuProcessor::pass(const char *entry, const std::vector<GpuSurface
         ComPtr<ID3DBlob> code, errors;
         const QByteArray codeSource =
             (precisePredicates_ ? QByteArray("#define PRECISE_PREDICATES 1\n") : QByteArray()) + gpuProcessingShader +
-            gpuRawShader + gpuDitherShader;
+            gpuRawShader + gpuDitherShader + gpuWarpShader;
         auto hr =
             D3DCompile(codeSource.constData(), size_t(codeSource.size()), "CompositorProcessing", nullptr, nullptr,
                        entry, "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_IEEE_STRICTNESS, 0, &code, &errors);

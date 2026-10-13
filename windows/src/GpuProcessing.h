@@ -28,6 +28,9 @@ class GpuProcessor {
     GpuSurfacePtr effects(ID3D11ShaderResourceView *input, QSize size, int depth, const QJsonObject &settings,
                           double scale);
     GpuSurfacePtr coverage(const GpuSurfacePtr &input, ID3D11ShaderResourceView *mask, int depth, double opacity);
+    GpuSurfacePtr warp(ID3D11ShaderResourceView *input, QSize size, int depth, const QVector<QPointF> &points,
+                       double radius, double hardness, double strength, bool smudge,
+                       ID3D11ShaderResourceView *selection = nullptr);
     void setScratchBudget(quint64 bytes) { scratchBudget_ = std::min<quint64>(256 * 1024 * 1024, bytes); }
     quint64 dispatches = 0;
     QString error;

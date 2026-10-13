@@ -5,6 +5,7 @@
 #include "GpuToneShader.h"
 #include "GpuAdjustmentBlend.h"
 #include "GpuProcessing.h"
+#include "GpuWarp.h"
 #include "Filters.h"
 #include "CameraRaw.h"
 #include "Effects.h"
@@ -193,7 +194,8 @@ struct Texture {
     ComPtr<ID3D11ShaderResourceView> view;
     ComPtr<ID3D11UnorderedAccessView> output;
 };
-bool createTexture(Device &d, QSize size, DXGI_FORMAT format, Texture &out, const QImage *image = nullptr) {
+bool createTexture(Device &d, QSize size, DXGI_FORMAT format, Texture &out, const QImage *image = nullptr,
+                   bool processing = false) {
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = UINT(size.width()); desc.Height = UINT(size.height());
     desc.MipLevels = desc.ArraySize = 1; desc.Format = format; desc.SampleDesc.Count = 1;
@@ -201,11 +203,20 @@ bool createTexture(Device &d, QSize size, DXGI_FORMAT format, Texture &out, cons
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (image ? 0 : D3D11_BIND_UNORDERED_ACCESS);
     D3D11_SUBRESOURCE_DATA data{};
     if (image) { data.pSysMem = image->constBits(); data.SysMemPitch = UINT(image->bytesPerLine()); }
-    ++metrics.textureAllocations;
+    if (processing) ++metrics.processingTextureAllocations;
+    else ++metrics.textureAllocations;
     return SUCCEEDED(d.device->CreateTexture2D(&desc, image ? &data : nullptr, &out.texture)) &&
            SUCCEEDED(d.device->CreateShaderResourceView(out.texture.Get(), nullptr, &out.view)) &&
            (image || SUCCEEDED(d.device->CreateUnorderedAccessView(out.texture.Get(), nullptr, &out.output)));
 }
+
+struct ProcessingCache {
+    QSize size;
+    int depth = 8;
+    Texture input, packed;
+    ComPtr<ID3D11Texture2D> staging;
+    quint64 bytes = 0;
+};
 
 struct SourceCache {
     Texture source, toneTable, effectCoverage;
@@ -229,9 +240,13 @@ struct FrameCache {
 // Cache the CPU staging mirrors and final readback as well as GPU allocations.
 // The estimate excludes driver bookkeeping; the DXGI budget check leaves headroom.
 std::list<FrameCache> frames;
+// Standalone filters/effects share one transfer set per size/depth.  The input is
+// uploaded on every call; only the resource descriptors are retained.
+std::list<ProcessingCache> processingCaches;
 quint64 residentBytes() {
     quint64 result = 0;
     for (const auto &frame : frames) result += frame.bytes;
+    for (const auto &cache : processingCaches) result += cache.bytes;
     return result;
 }
 quint64 cacheBudget(Device &d) {
@@ -252,11 +267,17 @@ quint64 cacheBudget(Device &d) {
     if (configured) result = std::min(result, quint64(std::clamp(megabytes, 1, 512)) * megabyte);
     return result;
 }
-void trimCache(quint64 allowed, const FrameCache *keep = nullptr) {
+void trimCache(quint64 allowed, const FrameCache *keep = nullptr, const ProcessingCache *keepProcessing = nullptr) {
     for (auto it = frames.begin(); residentBytes() > allowed && it != frames.end();) {
         if (&*it == keep) { ++it; continue; }
         it = frames.erase(it);
         ++metrics.evictions;
+    }
+    // Processing transfer resources use the same budget but do not contribute
+    // to the preview-cache eviction counter (which historically counts frames).
+    for (auto it = processingCaches.begin(); residentBytes() > allowed && it != processingCaches.end();) {
+        if (&*it == keepProcessing) { ++it; continue; }
+        it = processingCaches.erase(it);
     }
 }
 QByteArray sourceSignature(const State &state, int index, const QVector<int> &ancestors) {
@@ -359,47 +380,125 @@ QImage adjustmentCoverage(const State &state, const VisibleLayer &entry, QSize t
 } // namespace
 #endif
 namespace {
-QImage processGpuImage(const QImage &source, const QJsonObject &settings, double scale, int clipping, bool effects) {
+struct WarpRequest {
+    const QVector<QPointF> *points = nullptr;
+    double radius = 0;
+    double hardness = 1;
+    double strength = 1;
+    bool smudge = false;
+    const QImage *selection = nullptr;
+};
+
+QImage processGpuImage(const QImage &source, const QJsonObject &settings, double scale, int clipping, bool effects,
+                       const WarpRequest *warp = nullptr) {
 #ifdef Q_OS_WIN
-    if (source.isNull() || qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU")) return {};
+    if (qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU")) {
+        clearGpuPreviewCache();
+        return {};
+    }
+    const bool isWarp = warp != nullptr;
+    if (source.isNull() || (!isWarp && !effects && GpuProcessor::prefersCpu(settings, clipping))) return {};
+    if (isWarp && (warp->points == nullptr || warp->points->isEmpty() ||
+                   (warp->selection && !warp->selection->isNull() && warp->selection->size() != source.size())))
+        return {};
     // Route before device initialization, cache eviction, uploads or shader compilation.
-    if (!effects && GpuProcessor::prefersCpu(settings, clipping)) return {};
     const quint64 area=quint64(source.width())*source.height();
     if(area>8*1024*1024) return {};
-    std::lock_guard lock(gpuMutex);auto &d=gpu();if(!d.ready())return {};
+    std::lock_guard lock(gpuMutex);auto &d=gpu();
+    if(!d.ready()) { frames.clear(); processingCaches.clear(); return {}; }
+    trimCache(cacheBudget(d));
     // Leave space for processing scratch surfaces in addition to retained previews.
-    const quint64 scratch=area*(settings["kind"]=="Camera Raw"?192:96)+3*1024*1024;
-    const quint64 budget=cacheBudget(d),required=scratch+area*32+1024*1024;
-    if(required>budget)return {};trimCache(budget-required);d.processor->setScratchBudget(scratch);
+    const quint64 scratch=area*(!isWarp && settings["kind"]=="Camera Raw"?192:96)+3*1024*1024;
     const int depth=wideImage(source)?16:8;
     const auto pixels=source.convertToFormat(depth==16?QImage::Format_RGBA64_Premultiplied:QImage::Format_RGBA8888_Premultiplied);
-    Texture input,packed;
-    if(!createTexture(d,pixels.size(),depth==16?DXGI_FORMAT_R16G16B16A16_UNORM:DXGI_FORMAT_R8G8B8A8_UNORM,input,&pixels))return {};
+    if (pixels.isNull()) return {};
+    QImage selectionPixels;
+    if (isWarp && warp->selection && !warp->selection->isNull()) {
+        selectionPixels = warp->selection->convertToFormat(QImage::Format_RGBA8888);
+        if (selectionPixels.isNull()) return {};
+    }
+    const quint64 sampleBytes = depth == 16 ? 8 : 4;
+    const quint64 transferBytes = area * sampleBytes * 3;
+    auto cacheIt = std::find_if(processingCaches.begin(), processingCaches.end(), [&](const ProcessingCache &cache) {
+        return cache.size == pixels.size() && cache.depth == depth && cache.bytes == transferBytes &&
+               cache.input.texture && cache.packed.texture && cache.staging;
+    });
+    const bool cacheHit = cacheIt != processingCaches.end();
+    if (cacheHit) processingCaches.splice(processingCaches.end(), processingCaches, cacheIt);
+    const quint64 selectionBytes = selectionPixels.isNull() ? 0 : area * 4;
+    const quint64 budget=cacheBudget(d);
+    metrics.budgetBytes = budget;
+    const quint64 transientRequired=scratch+area*32+1024*1024+selectionBytes;
+    const quint64 retained = cacheHit ? 0 : transferBytes;
+    const quint64 required=transientRequired+retained;
+    // The cache entry is already resident on a hit, but it still consumes the
+    // same budget while the processor's scratch surfaces are live.
+    if(transientRequired+transferBytes>budget) {
+        trimCache(budget);
+        return {};
+    }
+    cacheIt = cacheHit ? std::prev(processingCaches.end()) : processingCaches.end();
+    if (cacheHit) trimCache(budget-required, nullptr, &*cacheIt);
+    else trimCache(budget-required);
+    if (!cacheHit) {
+        processingCaches.emplace_back();
+        cacheIt = std::prev(processingCaches.end());
+        cacheIt->size = pixels.size(); cacheIt->depth = depth; cacheIt->bytes = transferBytes;
+        const auto inputFormat = depth==16?DXGI_FORMAT_R16G16B16A16_UNORM:DXGI_FORMAT_R8G8B8A8_UNORM;
+        const auto packedFormat = depth==16?DXGI_FORMAT_R16G16B16A16_UINT:DXGI_FORMAT_R8G8B8A8_UINT;
+        if (!createTexture(d,pixels.size(),inputFormat,cacheIt->input,&pixels,true) ||
+            !createTexture(d,pixels.size(),packedFormat,cacheIt->packed,nullptr,true)) {
+            processingCaches.erase(cacheIt); return {};
+        }
+        D3D11_TEXTURE2D_DESC desc{}; cacheIt->packed.texture->GetDesc(&desc);
+        desc.Usage=D3D11_USAGE_STAGING; desc.BindFlags=0; desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+        if (FAILED(d.device->CreateTexture2D(&desc,nullptr,&cacheIt->staging))) {
+            processingCaches.erase(cacheIt); return {};
+        }
+        ++metrics.processingTextureAllocations;
+        ++metrics.processingUploads; metrics.processingUploadedBytes += area * sampleBytes;
+    } else {
+        auto &input = cacheIt->input;
+        d.context->UpdateSubresource(input.texture.Get(),0,nullptr,pixels.constBits(),UINT(pixels.bytesPerLine()),0);
+        ++metrics.processingUploads; metrics.processingUploadedBytes += area * sampleBytes;
+        ++metrics.processingCacheHits;
+    }
+    auto failed = [&]() -> QImage { processingCaches.erase(cacheIt); return {}; };
+    Texture selectionTexture;
+    if (!selectionPixels.isNull()) {
+        if (!createTexture(d,selectionPixels.size(),DXGI_FORMAT_R8G8B8A8_UNORM,selectionTexture,&selectionPixels,true))
+            return failed();
+        ++metrics.processingUploads; metrics.processingUploadedBytes += selectionBytes;
+    }
+    d.processor->setScratchBudget(scratch);
     const auto before=d.processor->dispatches;
-    auto result=effects?d.processor->effects(input.view.Get(),pixels.size(),depth,settings,scale)
-                       :d.processor->filter(input.view.Get(),pixels.size(),depth,settings,scale,clipping);
+    auto result = isWarp
+        ? d.processor->warp(cacheIt->input.view.Get(), pixels.size(), depth, *warp->points,
+                            warp->radius, warp->hardness, warp->strength, warp->smudge,
+                            selectionTexture.view.Get())
+        : effects ? d.processor->effects(cacheIt->input.view.Get(),pixels.size(),depth,settings,scale)
+                  : d.processor->filter(cacheIt->input.view.Get(),pixels.size(),depth,settings,scale,clipping);
     metrics.processingDispatches+=d.processor->dispatches-before;
-    if(!result){if(!d.processor->error.isEmpty())d.status=d.processor->error;return {};}
-    const auto format=depth==16?DXGI_FORMAT_R16G16B16A16_UINT:DXGI_FORMAT_R8G8B8A8_UINT;
-    if(!createTexture(d,pixels.size(),format,packed))return {};
-    D3D11_TEXTURE2D_DESC desc{};packed.texture->GetDesc(&desc);desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-    ComPtr<ID3D11Texture2D> staging;if(FAILED(d.device->CreateTexture2D(&desc,nullptr,&staging)))return {};
+    if(!result){if(!d.processor->error.isEmpty())d.status=d.processor->error;return failed();}
     Settings params{UINT(pixels.width()),UINT(pixels.height()),0,depth==16?65535.f:255.f,0,0,0};
     d.context->UpdateSubresource(d.settings.Get(),0,nullptr,&params,0,0);
     auto *constants=d.settings.Get();d.context->CSSetConstantBuffers(0,1,&constants);d.context->CSSetShader(d.packShader.Get(),nullptr,0);
-    auto *view=result->view.Get();auto *out=packed.output.Get();d.context->CSSetShaderResources(0,1,&view);d.context->CSSetUnorderedAccessViews(0,1,&out,nullptr);
+    auto *view=result->view.Get();auto *out=cacheIt->packed.output.Get();d.context->CSSetShaderResources(0,1,&view);d.context->CSSetUnorderedAccessViews(0,1,&out,nullptr);
     d.context->Dispatch((params.width+15)/16,(params.height+15)/16,1);
     ID3D11ShaderResourceView *none=nullptr;ID3D11UnorderedAccessView *noOutput=nullptr;
     d.context->CSSetShaderResources(0,1,&none);d.context->CSSetUnorderedAccessViews(0,1,&noOutput,nullptr);
-    d.context->CopyResource(staging.Get(),packed.texture.Get());D3D11_MAPPED_SUBRESOURCE mapped{};
-    if(FAILED(d.context->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped)))return {};
+    d.context->CopyResource(cacheIt->staging.Get(),cacheIt->packed.texture.Get());D3D11_MAPPED_SUBRESOURCE mapped{};
+    if(FAILED(d.context->Map(cacheIt->staging.Get(),0,D3D11_MAP_READ,0,&mapped)))return failed();
     QImage image(pixels.size(),pixelFormat(depth));
-    if(!image.isNull())for(int y=0;y<image.height();++y)std::memcpy(image.scanLine(y),static_cast<const char *>(mapped.pData)+y*mapped.RowPitch,size_t(image.width())*(depth==16?8:4));
-    d.context->Unmap(staging.Get(),0);++metrics.readbacks;
+    if(image.isNull()) { d.context->Unmap(cacheIt->staging.Get(),0); return failed(); }
+    for(int y=0;y<image.height();++y)std::memcpy(image.scanLine(y),static_cast<const char *>(mapped.pData)+y*mapped.RowPitch,size_t(image.width())*sampleBytes);
+    d.context->Unmap(cacheIt->staging.Get(),0);++metrics.readbacks;
+    metrics.processingReadbackBytes += area * sampleBytes;
+    if (!d.ready()) { frames.clear(); processingCaches.clear(); return {}; }
     image.setColorSpace(source.colorSpace());image.setDotsPerMeterX(source.dotsPerMeterX());image.setDotsPerMeterY(source.dotsPerMeterY());
     return image;
 #else
-    Q_UNUSED(source);Q_UNUSED(settings);Q_UNUSED(scale);Q_UNUSED(clipping);Q_UNUSED(effects);return {};
+    Q_UNUSED(source);Q_UNUSED(settings);Q_UNUSED(scale);Q_UNUSED(clipping);Q_UNUSED(effects);Q_UNUSED(warp);return {};
 #endif
 }
 }
@@ -408,6 +507,11 @@ QImage filterGpuImage(const QImage &source,const QJsonObject &settings,double sc
 }
 QImage effectsGpuImage(const QImage &source,const QJsonObject &settings,double scale) {
     return processGpuImage(source,settings,scale,0,true);
+}
+QImage warpGpuImage(const QImage &source, const QVector<QPointF> &points, double radius, double hardness,
+                    double strength, bool smudge, const QImage &selectionMask) {
+    const WarpRequest request{&points, radius, hardness, strength, smudge, &selectionMask};
+    return processGpuImage(source, {}, 1, 0, false, &request);
 }
 QImage effectsAccelerated(const QImage &source,const QJsonObject &settings,double scale) {
     if(settings.isEmpty())return source;
@@ -448,6 +552,7 @@ void clearGpuPreviewCache() {
 #ifdef Q_OS_WIN
     std::lock_guard lock(gpuMutex);
     frames.clear();
+    processingCaches.clear();
 #endif
 }
 QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin) {
@@ -479,7 +584,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     }
     std::lock_guard lock(gpuMutex);
     auto &d = gpu();
-    if (!d.ready()) { frames.clear(); return {}; }
+    if (!d.ready()) { frames.clear(); processingCaches.clear(); return {}; }
     QVector<VisibleLayer> visibleLayers;
     QSet<QString> visibleIds;
     bool hasBlur = false;
@@ -815,7 +920,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
                         static_cast<const char *>(mapped.pData) + y * mapped.RowPitch + dirty.left() * sampleBytes,
                         size_t(dirty.width()) * sampleBytes);
         d.context->Unmap(frame.staging.Get(), 0);
-        if (!d.ready()) { frames.clear(); return {}; }
+        if (!d.ready()) { frames.clear(); processingCaches.clear(); return {}; }
     } else {
         ++metrics.cacheHits;
     }
