@@ -1,3 +1,18 @@
+# Windows 0.4.1a8 pre-release verification
+
+Verified October 13, 2026 (Asia/Taipei), Windows x64 / MSVC 2022 / Qt 6.8.3. **Pre-release only; stable Latest stays `windows-v0.4.0`.** No upstream merge or runtime dependency change in this batch.
+
+- Native Release and independently extracted portable validation each passed **189**, skipped **1** optional external HEIC-alpha fixture, and failed **0**. Counts include initialization/cleanup. Suite breakdown: native 131+1 skip, warp 11, edit 15, perspective 8, display 5, surface 5, texture 8, export 6. Hardware-required GPU suites had no skips.
+- Reports: `windows/test-results/a8-{kind}-native-release.xml` and `a8-{kind}-portable-release.xml`; build/package logs `a8-build-release.log` and `a8-package-release.log`. Portable tests use minimal PATH and bundled DLLs. Test binaries/Qt6Test/offscreen plugin are added only to the verification extraction, not the ZIP.
+- New edit regressions cover odd-pitch/nonzero ROI uploads for BGRA8/RGBA8/RGBA16, immutable input/result metadata, shared coverage deduplication and QImage detach invalidation, integer-translation tip reuse, all healing modes, interior/edge/full masks, a single final Map, exact upload/readback payloads, unchanged pixels outside the affected rectangle, and low-budget fallback. Existing tolerances are unchanged (healing 8-bit max2/mean0.1; 16-bit max8/mean1).
+- Healing source/statistics decisions now remain in one device-resident structured buffer. Search/refinement no longer map winner buffers, and mean/detail no longer map reduction buffers. Valid patch-search routes have one final Map instead of five, smoothing one instead of three. `nativeReadbackOperations` explicitly records paint/healing Map waits, separate from the historical returned-image count; it is not a universal counter for all older modules.
+- In the 384×320 healing fixture, the 96×106 changed rectangle reads back 40,704 bytes at 8-bit / 81,408 at 16-bit rather than 491,520 / 983,040 full-image bytes (91.72% less image readback). Only the 122×132 coverage workspace is uploaded; the full source image remains necessary for the current patch search. Retained source/solver textures and final CPU copy are not eliminated.
+- Alternating A/B evidence: `a8-ab-{0..4}-{before,after}.xml`, `a8-ab-summary.json`. The before executable was retained before editing and uses a7's static implementation. Five independent process-level warm medians (three timed samples each), alternating order; preparation/transfers/readback included, shader warmup/UI presentation excluded. CPU receives the same inputs. Median-of-medians in ms (a7 GPU → a8 GPU; current CPU): core paint 8-bit 0.690→0.696 (CPU 0.308), 16-bit 0.969→0.838 (CPU 0.599); clone-brush wrapper 8-bit 3.296→1.952 (CPU 1.049), 16-bit 4.537→2.317 (CPU 1.206); healing 8-bit 16.485→17.648 (CPU 7.065), 16-bit 16.183→16.531 (CPU 7.187).
+- Thus the measured wrapper improves about 41%/49%, while core8 is essentially unchanged and healing has **no demonstrated total-time improvement** (slightly slower in the alternating medians). Experimental editing stays off by default; no universal speedup, whole-stroke residency, asynchronous editing or full GPU claim.
+- ZIP `Compositor-0.4.1a8-win-x64.zip`: **26,457,192 bytes**, SHA-256 `037106dca19ecfc0907d78b6e569c7f7d12c4e6b5781f5c247e9cf99f49ffa30`. The packaged application SHA-256 `ccfc1a6747ecb791f79d2d67199d1989af10598217b4e375442b7799b2928b53` matches the tested native executable. Bundled release notes match the checked-in source. Eight translation catalogs remain unchanged.
+
+---
+
 # Windows 0.4.1a7 pre-release verification
 
 Windows x64 / MSVC 2022 / Qt 6.8.3, October 13, 2026 (Asia/Taipei). Pre-release only; stable Latest remains `windows-v0.4.0`.

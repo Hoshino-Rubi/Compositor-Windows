@@ -57,7 +57,8 @@ struct GpuPaintOptions {
 };
 
 // Runs an ordered batch of dabs through the shared Direct3D backend.  The
-// target/source are uploaded once, all dabs are mixed in one compute dispatch,
+// Native target/source ROIs are uploaded directly; shared coverage is uploaded
+// once per distinct raster. All dabs are mixed in one compute dispatch,
 // and the affected rectangle is read back once.  A null image means that the
 // GPU route is unsupported or failed; callers must then replay their CPU
 // implementation unchanged.

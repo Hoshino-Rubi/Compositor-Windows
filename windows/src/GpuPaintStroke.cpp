@@ -244,14 +244,34 @@ bool paintStrokeAccelerated(QImage &target, QPointF from, QPointF to, double bru
     if (estimatedWork < GpuPaintPixelThreshold)
         return false;
 
+    struct CachedTip {
+        QPointF center;
+        QSize size;
+        QImage image;
+    };
+    QVector<CachedTip> tipCache;
+    // Integer translations of the same unclipped tip share its exact Qt
+    // raster. Do not approximate fractional phases or reuse selection clips.
+    const bool reusableTip = documentSelection.isEmpty() && documentToPixel.type() <= QTransform::TxTranslate;
+    auto renderTip = [&](QPointF point, QRect rect, auto draw) {
+        const QPointF center = documentToPixel.map(point) - QPointF(rect.topLeft());
+        if (reusableTip)
+            for (const auto &entry : tipCache)
+                if (entry.size == rect.size() && entry.center.x() == center.x() && entry.center.y() == center.y())
+                    return entry.image;
+        QImage image = renderCoverage(rect, documentToPixel, documentSelection, format, draw);
+        if (reusableTip && !image.isNull() && tipCache.size() < 16)
+            tipCache.append(CachedTip{center, rect.size(), image});
+        return image;
+    };
+
     if (cloneOrBlur) {
         const int steps = estimatedSteps;
         for (int step = 0; step <= steps; ++step) {
             const QPointF point = from + (to - from) * (double(step) / steps);
             const QPainterPath shape = tipPath(point, brushSize);
             if (!appendDab(dabs, roi, workPixels, shape, documentToPixel, sourceOffset, bounds, [&](QRect rect) {
-                               return renderCoverage(rect, documentToPixel, documentSelection, format,
-                                                      [&](QPainter &painter) {
+                               return renderTip(point, rect, [&](QPainter &painter) {
                                                           // Canvas's clone/blur path installs the tip with
                                                           // setClipPath(), then changes the world transform before
                                                           // drawing the source image.  Rasterize that same device
@@ -275,8 +295,7 @@ bool paintStrokeAccelerated(QImage &target, QPointF from, QPointF to, double bru
             const QPointF point = from + (to - from) * (double(step) / steps);
             const QPainterPath shape = tipPath(point, brushSize);
             if (!appendDab(dabs, roi, workPixels, shape, documentToPixel, {}, bounds, [&](QRect rect) {
-                               return renderCoverage(rect, documentToPixel, documentSelection, format,
-                                                      [&](QPainter &painter) {
+                               return renderTip(point, rect, [&](QPainter &painter) {
                                                           QRadialGradient gradient(point, brushSize / 2.);
                                                           gradient.setColorAt(0, QColor::fromRgbF(1, 1, 1, 1));
                                                           gradient.setColorAt(inner, QColor::fromRgbF(1, 1, 1, 1));

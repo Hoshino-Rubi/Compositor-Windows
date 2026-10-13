@@ -461,6 +461,129 @@ class GpuEditTests : public QObject {
     Q_OBJECT
 
   private slots:
+    void paintNativeLayoutsAndSharedCoverageTransfers() {
+        const QSize size(173, 137); // Odd widths and nonzero ROI test source row pitch.
+        const QSize tipSize(31, 27);
+        for (int depth : {8, 16}) {
+            const QImage original = paintFixture(size, depth);
+            const QImage saved = original.copy();
+            const QImage tip = coverageFixture(tipSize, depth, true);
+            QVector<GpuPaintDab> shared;
+            for (int i = 0; i < 7; ++i)
+                shared.append({QRect(QPoint(19 + i * 8, 33 + i * 2), tipSize), tip, QPointF(3.25, -2.75)});
+            QVector<GpuPaintDab> separate = shared;
+            for (auto &dab : separate) dab.coverage = dab.coverage.copy();
+            const QRect roi = dabsRoi(shared, size);
+            GpuPaintOptions options;
+            options.depth = depth;
+            options.color = QColor::fromRgbF(.81F, .29F, .13F, .74F);
+            options.flow = .71;
+            for (int layout = 0; layout < (depth == 8 ? 4 : 1); ++layout) {
+                QImage target = layout & 1 ? original.convertToFormat(QImage::Format_RGBA8888_Premultiplied) : original;
+                QImage source = layout & 2 ? original.convertToFormat(QImage::Format_RGBA8888_Premultiplied) : original;
+                for (auto operation : {GpuPaintOperation::Brush, GpuPaintOperation::Clone}) {
+                    options.operation = operation;
+                    resetGpuPreviewMetrics();
+                    const QImage deduplicated = paintGpuImage(target, source, shared, options);
+                    const auto compact = gpuPreviewMetrics();
+                    QVERIFY(!deduplicated.isNull());
+                    QCOMPARE(compact.nativeReadbackOperations, quint64(1));
+                    QCOMPARE(compact.processingReadbackBytes, quint64(roi.width()) * roi.height() * (depth == 16 ? 8 : 4));
+                    resetGpuPreviewMetrics();
+                    const QImage expanded = paintGpuImage(target, source, separate, options);
+                    const auto expandedMetrics = gpuPreviewMetrics();
+                    QCOMPARE(deduplicated, expanded);
+                    const quint64 savedBytes = quint64(tipSize.width()) * tipSize.height() * (depth == 16 ? 2 : 1) * 6;
+                    QCOMPARE(expandedMetrics.processingUploadedBytes - compact.processingUploadedBytes, savedBytes);
+                    const auto delta = difference(deduplicated, cpuPaint(target, source, shared, options), depth);
+                    QVERIFY2(delta.maximum <= (depth == 8 ? 2 : 32), qPrintable(QString::number(delta.maximum)));
+                    QVERIFY(outsideExact(deduplicated, target, roi, depth));
+                    QVERIFY(metadataEqual(deduplicated, target));
+                    QCOMPARE(deduplicated.format(), target.format());
+                }
+            }
+            QCOMPARE(original, saved);
+            // Editing an implicitly shared tip must not reuse its old atlas slot.
+            separate = shared;
+            separate[3].coverage.fill(0);
+            options.operation = GpuPaintOperation::Brush;
+            const QImage edited = paintGpuImage(original, {}, separate, options);
+            QVERIFY(!edited.isNull());
+            const auto delta = difference(edited, cpuPaint(original, {}, separate, options), depth);
+            QVERIFY(delta.maximum <= (depth == 8 ? 2 : 32));
+        }
+    }
+
+    void paintIntegerTranslatedTipsReuseExactCoverage() {
+        for (int depth : {8, 16}) {
+            QImage target = paintFixture({700, 340}, depth);
+            const QImage source = target.mirrored(true, false);
+            const QImage before = target;
+            resetGpuPreviewMetrics();
+            QVERIFY(paintStrokeAccelerated(target, {180, 170}, {372, 170}, 160, .99, .63,
+                                            Qt::black, false, false, {}, {}, source, {4.25, -3.25}, true));
+            const auto metrics = gpuPreviewMetrics();
+            const QImage expected = cpuCanvasCloneStroke(before, source, {180, 170}, {372, 170}, 160, .63,
+                                                          {}, {4.25, -3.25});
+            const auto delta = difference(target, expected, depth);
+            QVERIFY(delta.maximum <= (depth == 8 ? 2 : 8));
+            QCOMPARE(metrics.nativeReadbackOperations, quint64(1));
+            // Nine equal integer-phase tips upload only one 162x162 coverage.
+            // Includes both pixel ROIs and metadata; an unshared nine-tip atlas
+            // is larger than this bound even before source/target uploads.
+            const quint64 bpp = depth == 16 ? 8 : 4;
+            QVERIFY(metrics.processingUploadedBytes < quint64(355 * 165) * bpp * 2 + quint64(163 * 163) * (depth / 8) + 9 * 48);
+        }
+    }
+
+    void healKeepsIntermediateResultsOnGpuAndReadsOnlyActiveRoi() {
+        const QSize size(131, 107);
+        for (int depth : {8, 16}) {
+            const QImage source = healFixture(size, depth);
+            const QImage untouched = source.copy();
+            for (const QRect active : {QRect(47, 41, 17, 13), QRect(0, 0, 15, 11), QRect(112, 93, 19, 14),
+                                       QRect(QPoint(), size)}) {
+                QImage coverage(size, QImage::Format_Grayscale8);
+                coverage.fill(0);
+                for (int y = active.top(); y <= active.bottom(); ++y)
+                    for (int x = active.left(); x <= active.right(); ++x)
+                        coverage.scanLine(y)[x] = uchar(63 + (x * 11 + y * 7) % 193);
+                for (int mode : {0, 1, 2}) {
+                    QImage expected = source.copy();
+                    cpuHeal(expected, coverage, .67F, mode, 923, depth);
+                    resetGpuPreviewMetrics();
+                    const QImage actual = healGpuImage(source, coverage, .67F, mode, 923);
+                    QVERIFY(!actual.isNull());
+                    const auto metrics = gpuPreviewMetrics();
+                    QCOMPARE(metrics.nativeReadbackOperations, quint64(1));
+                    QCOMPARE(metrics.processingReadbackBytes,
+                             quint64(active.width()) * active.height() * (depth == 16 ? 8 : 4));
+                    const int ring = std::clamp(std::max(active.width(), active.height()) / 8, 2, 16);
+                    const QRect work = active.adjusted(-ring, -ring, ring, ring).intersected(source.rect());
+                    const quint64 metadataBytes = 128 * 16 + 48 + (mode == 1 ? 0 : 2 * 128 * 16);
+                    QCOMPARE(metrics.processingUploadedBytes,
+                             quint64(size.width()) * size.height() * (depth == 16 ? 8 : 4) +
+                                 quint64(work.width()) * work.height() + metadataBytes);
+                    const auto delta = difference(actual, expected, depth);
+                    QVERIFY2(delta.maximum <= (depth == 8 ? 2 : 8),
+                             qPrintable(QString("depth=%1 mode=%2 ROI=%3,%4 max=%5")
+                                            .arg(depth).arg(mode).arg(active.x()).arg(active.y()).arg(delta.maximum)));
+                    QVERIFY(delta.mean <= (depth == 8 ? .1 : 1.));
+                    QVERIFY(outsideExact(actual, source, active, depth));
+                    QVERIFY(metadataEqual(actual, source));
+                }
+            }
+            QCOMPARE(source, untouched);
+        }
+        // Exhausted native budget must fail without changing source pixels.
+        ScopedEnvironment budget("COMPOSITOR_GPU_CACHE_MB", "1");
+        clearGpuPreviewCache();
+        const QImage source = healFixture({384, 320}, 8);
+        resetGpuPreviewMetrics();
+        QVERIFY(healGpuImage(source, healCoverage(source.size(), 8, true), .7F, 0, 17).isNull());
+        QCOMPARE(gpuPreviewMetrics().nativeReadbackOperations, quint64(0));
+    }
+
     void gpuPaintSingleAndBatchAgainstQPainter() {
         const QSize size(127, 101);
         const QColor ink = QColor::fromRgbF(.83F, .19F, .07F, .71F);
@@ -933,6 +1056,9 @@ class GpuEditTests : public QObject {
             qInfo() << "GPU_EDIT_BENCHMARK_PAINT_CORE" << "depth" << depth << "size" << size << "dabs"
                     << dabs.size() << "coverage" << "included" << "gpuMedianNs" << median(gpuTimes)
                     << "cpuQPainterMedianNs" << median(cpuTimes) << "warmGpuNs" << "excluded"
+                    << "warmUploadBytes" << warmMetrics.processingUploadedBytes
+                    << "warmReadbackBytes" << warmMetrics.processingReadbackBytes
+                    << "warmReadbackOperations" << warmMetrics.nativeReadbackOperations
                     << "warmDispatches" << warmMetrics.processingDispatches << "processingDispatches" << dispatches
                     << "readbacks" << readbacks << "maxNativeDelta" << warmDelta.maximum << "meanNativeDelta"
                     << warmDelta.mean;
@@ -1085,7 +1211,9 @@ class GpuEditTests : public QObject {
                 QCOMPARE(cpu, expected);
             }
             qInfo() << "GPU_EDIT_BENCHMARK_HEAL" << "depth" << depth << "size" << size << "gpuMedianNs"
-                    << median(gpuTimes) << "cpuMedianNs" << median(cpuTimes) << "warmDispatches"
+                    << median(gpuTimes) << "cpuMedianNs" << median(cpuTimes) << "warmUploadBytes" << warmMetrics.processingUploadedBytes
+                    << "warmReadbackBytes" << warmMetrics.processingReadbackBytes
+                    << "warmReadbackOperations" << warmMetrics.nativeReadbackOperations << "warmDispatches"
                     << warmMetrics.processingDispatches << "processingDispatches" << dispatches << "readbacks"
                     << readbacks << "maxNativeDelta" << warmDelta.maximum << "meanNativeDelta" << warmDelta.mean;
         }

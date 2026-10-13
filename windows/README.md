@@ -1,14 +1,23 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a7 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a8 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a7). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a8). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a7-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a8-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a8 — Reduced GPU transfer and preparation overhead (pre-release)
+
+- Healing keeps candidate selection, refinement and reduced statistics on the GPU. Only the affected rectangle is read back once; coverage uploads exclude the rest of the canvas. The ordered solver keeps its resources bound between passes.
+- Paint/eraser/clone/blur upload native BGRA8/RGBA16 regions directly and read staging rows into the final image. Shared tip rasters are uploaded once per batch; exactly matching unselected, translation-only tip phases reuse Qt coverage without approximating fractional positions.
+- In alternating local comparisons, the measured clone-brush wrapper took about 41% less time in 8-bit and 49% less in 16-bit than a7. Healing readback volume dropped about 92% in its fixture, but its total time did not reliably improve. These GPU editing samples remain slower than CPU, so **experimental GPU editing stays off by default**.
+- Not whole-stroke GPU residency: one final synchronous readback and an immutable CPU result copy remain. No setting, translation, project-format or runtime-dependency changes.
+
+**Pre-release only; stable Latest stays 0.4.0.** See [release notes](releases/0.4.1a8.md) for measurements and limits. The following sections describe earlier batches.
 
 ## Version 0.4.1a7 — GPU editing, transforms, export and native presentation (pre-release)
 

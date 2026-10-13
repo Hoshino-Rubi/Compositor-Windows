@@ -34,7 +34,7 @@ cbuffer Settings : register(b0) {
     uint selectionHeight;
     // This slot historically carried the unused maskTarget shader flag.  Keep
     // its ABI position and use bit 0 for source filtering and bit 1 for Qt's
-    // integer setOpacity compatibility mode.
+    // integer setOpacity compatibility mode; bits 2/3 identify BGRA target/source.
     uint sourceFlags;
     float4 color;
 };
@@ -45,7 +45,9 @@ bool qtOpacityEnabled() { return (sourceFlags & 2u) != 0; }
 float4 sourceAt(int2 p) {
     if (p.x < 0 || p.y < 0 || p.x >= int(sourceWidth) || p.y >= int(sourceHeight))
         return float4(0, 0, 0, 0);
-    return float4(sourceImage.Load(int3(p, 0))) / maximum;
+    uint4 value = sourceImage.Load(int3(p, 0));
+    if ((sourceFlags & 8u) != 0) value = value.bgra;
+    return float4(value) / maximum;
 }
 
 // Coordinates denote source pixel coordinates.  The point sampler follows the
@@ -99,7 +101,9 @@ void main(uint3 id : SV_DispatchThreadID) {
         return;
 
     int2 pixel = int2(id.xy);
-    float4 dst = float4(targetImage.Load(int3(pixel, 0))) / maximum;
+    uint4 input = targetImage.Load(int3(pixel, 0));
+    if ((sourceFlags & 4u) != 0) input = input.bgra;
+    float4 dst = float4(input) / maximum;
     const float4 original = dst;
     for (uint i = 0; i < dabCount; ++i) {
         DabInfo dab = dabs[i];
@@ -143,7 +147,8 @@ void main(uint3 id : SV_DispatchThreadID) {
         const float selection = selectionImage.Load(int3(pixel, 0));
         dst = quantized(lerp(original, dst, saturate(selection)));
     }
-    outputImage[pixel] = uint4(floor(saturate(dst) * maximum + .5));
+    uint4 result = uint4(floor(saturate(dst) * maximum + .5));
+    outputImage[pixel] = (sourceFlags & 4u) != 0 ? result.bgra : result;
 }
 )hlsl";
 

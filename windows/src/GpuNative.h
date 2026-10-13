@@ -61,6 +61,7 @@ struct GpuNativeResult {
     quint64 dispatches = 0;
     quint64 uploadedBytes = 0;
     quint64 readbackBytes = 0;
+    quint64 readbackOperations = 0; // Explicit CPU Map waits, not returned image count.
 };
 
 #ifdef Q_OS_WIN

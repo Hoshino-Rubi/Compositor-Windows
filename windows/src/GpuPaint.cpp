@@ -1,6 +1,7 @@
 #include "GpuPaint.h"
 
 #include "GpuNative.h"
+#include <QHash>
 
 #ifdef Q_OS_WIN
 #include "GpuPaintShader.h"
@@ -63,7 +64,8 @@ struct PaintSettings {
     UINT selectionWidth = 1;
     UINT selectionHeight = 1;
     // Reuses the old maskTarget slot in the native cbuffer.  Bit 0 selects
-    // source filtering and bit 1 selects Qt integer-opacity compatibility.
+    // source filtering and bit 1 selects Qt integer-opacity compatibility;
+    // bits 2/3 permit direct BGRA target/source uploads.
     UINT sourceFlags = 0;
     float colorR = 0;
     float colorG = 0;
@@ -78,6 +80,7 @@ struct PreparedDab {
     QPointF sourceOffset;
     int atlasX = 0;
     int atlasY = 0;
+    int coverageOwner = -1;
 };
 
 bool finitePoint(const QPointF &point) {
@@ -85,7 +88,7 @@ bool finitePoint(const QPointF &point) {
 }
 
 bool createTexture(ID3D11Device *device, QSize size, DXGI_FORMAT format, Texture &out, const QImage *image,
-                   bool unordered) {
+                   bool unordered, QPoint origin = {}) {
     if (!device || !size.isValid() || size.width() > MaxTextureDimension || size.height() > MaxTextureDimension)
         return false;
     D3D11_TEXTURE2D_DESC desc{};
@@ -99,7 +102,7 @@ bool createTexture(ID3D11Device *device, QSize size, DXGI_FORMAT format, Texture
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (unordered ? D3D11_BIND_UNORDERED_ACCESS : 0);
     D3D11_SUBRESOURCE_DATA data{};
     if (image) {
-        data.pSysMem = image->constBits();
+        data.pSysMem = image->constScanLine(origin.y()) + qsizetype(origin.x()) * (image->depth() / 8);
         data.SysMemPitch = UINT(image->bytesPerLine());
     }
     if (FAILED(device->CreateTexture2D(&desc, image ? &data : nullptr, &out.texture)) ||
@@ -191,8 +194,10 @@ QImage canonicalCoverage(const QImage &image, int depth) {
     return image.convertToFormat(depth == 16 ? QImage::Format_Grayscale16 : QImage::Format_Grayscale8);
 }
 
-QImage canonicalSelection(const QImage &image, int depth) {
-    return image.convertToFormat(depth == 16 ? QImage::Format_Grayscale16 : QImage::Format_Grayscale8);
+bool nativePixelLayout(const QImage &image, int depth) {
+    return depth == 16 ? image.format() == QImage::Format_RGBA64_Premultiplied
+                       : image.format() == QImage::Format_RGBA8888_Premultiplied ||
+                             image.format() == QImage::Format_ARGB32_Premultiplied;
 }
 
 bool checkedArea(QSize size, quint64 &area) {
@@ -231,6 +236,7 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
     QRect targetRoi;
     QVector<PreparedDab> prepared;
     prepared.reserve(dabs.size());
+    QHash<qint64, QImage> convertedCoverage;
     const double coordinateLimit = double(std::numeric_limits<int>::max()) / 4.;
     for (const auto &dab : dabs) {
         if (!dab.coverage.isNull() && dab.targetRect.size() == dab.coverage.size() && dab.targetRect.width() > 0 &&
@@ -241,7 +247,13 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
                 continue;
             PreparedDab item;
             item.target = dab.targetRect;
-            item.coverage = canonicalCoverage(dab.coverage, depth);
+            auto cached = convertedCoverage.constFind(dab.coverage.cacheKey());
+            if (cached == convertedCoverage.cend()) {
+                item.coverage = canonicalCoverage(dab.coverage, depth);
+                convertedCoverage.insert(dab.coverage.cacheKey(), item.coverage);
+            } else {
+                item.coverage = cached.value();
+            }
             item.sourceOffset = dab.sourceOffset;
             if (item.coverage.isNull())
                 return failed;
@@ -282,8 +294,19 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
     // shelf layout keeps upload/readback count independent of dab count.
     const QImage::Format coverageFormat = depth == 16 ? QImage::Format_Grayscale16 : QImage::Format_Grayscale8;
     int maxWidth = 1;
-    for (const auto &dab : prepared)
-        maxWidth = std::max(maxWidth, dab.coverage.width());
+    QHash<qint64, int> coverageOwners;
+    std::vector<int> uniqueCoverage;
+    for (int i = 0; i < prepared.size(); ++i) {
+        auto &dab = prepared[i];
+        const auto found = coverageOwners.constFind(dab.coverage.cacheKey());
+        if (found != coverageOwners.cend()) {
+            dab.coverageOwner = found.value();
+        } else {
+            coverageOwners.insert(dab.coverage.cacheKey(), i);
+            uniqueCoverage.push_back(i);
+            maxWidth = std::max(maxWidth, dab.coverage.width());
+        }
+    }
     if (maxWidth > MaxTextureDimension)
         return failed;
     // Keep the atlas close to the actual coverage footprint.  A fixed 4096px
@@ -291,7 +314,8 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
     // even though their total coverage is tiny.
     const int atlasWidth = maxWidth;
     int atlasX = 0, atlasY = 0, rowHeight = 0;
-    for (auto &dab : prepared) {
+    for (const auto i : uniqueCoverage) {
+        auto &dab = prepared[i];
         if (atlasX + dab.coverage.width() > atlasWidth) {
             atlasX = 0;
             atlasY += rowHeight;
@@ -304,6 +328,11 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
         atlasX += dab.coverage.width();
         rowHeight = std::max(rowHeight, dab.coverage.height());
     }
+    for (auto &dab : prepared)
+        if (dab.coverageOwner >= 0) {
+            dab.atlasX = prepared[dab.coverageOwner].atlasX;
+            dab.atlasY = prepared[dab.coverageOwner].atlasY;
+        }
     const QSize atlasSize(atlasWidth, std::max(1, atlasY + rowHeight));
     quint64 atlasPixels = 0;
     if (!checkedArea(atlasSize, atlasPixels))
@@ -313,43 +342,48 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
         return failed;
     atlas.fill(0);
     const int coverageBytes = depth == 16 ? 2 : 1;
-    for (const auto &dab : prepared)
+    for (const auto i : uniqueCoverage) {
+        const auto &dab = prepared[i];
         for (int y = 0; y < dab.coverage.height(); ++y)
             std::memcpy(atlas.scanLine(dab.atlasY + y) + dab.atlasX * coverageBytes,
                         dab.coverage.constScanLine(y), size_t(dab.coverage.width()) * coverageBytes);
+    }
 
-    const QImage targetRoiSource = target.copy(targetRoi);
-    QImage targetRoiPixels = canonical(targetRoiSource, depth);
-    if (targetRoiPixels.isNull())
+    QImage targetPixels = target;
+    QRect targetUpload = targetRoi;
+    if (!nativePixelLayout(target, depth)) {
+        targetPixels = canonical(target.copy(targetRoi), depth);
+        targetUpload = targetPixels.rect();
+    }
+    if (targetPixels.isNull())
         return failed;
     QImage sourcePixels;
+    QRect sourceUpload;
     if (needsSource) {
-        const QImage sourcePatch = source.copy(sourceRoi);
-        sourcePixels = canonical(sourcePatch, depth);
+        sourcePixels = source;
+        sourceUpload = sourceRoi;
+        if (!nativePixelLayout(source, depth)) {
+            sourcePixels = canonical(source.copy(sourceRoi), depth);
+            sourceUpload = sourcePixels.rect();
+        }
         if (sourcePixels.isNull())
             return failed;
-    } else {
-        sourcePixels = QImage(QSize(1, 1), depth == 16 ? QImage::Format_RGBA64_Premultiplied
-                                                       : QImage::Format_RGBA8888_Premultiplied);
-        if (sourcePixels.isNull())
-            return failed;
-        sourcePixels.fill(Qt::transparent);
     }
 
     QImage selectionPixels;
+    QRect selectionUpload;
     const bool hasSelection = !options.selectionMask.isNull();
     if (hasSelection) {
         if (options.selectionMask.size() != target.size())
             return failed;
-        const QImage selection = canonicalSelection(options.selectionMask, depth);
-        if (selection.isNull())
-            return failed;
-        selectionPixels = selection.copy(targetRoi);
-    } else {
-        selectionPixels = QImage(QSize(1, 1), coverageFormat);
+        selectionPixels = options.selectionMask;
+        selectionUpload = targetRoi;
+        if (selectionPixels.format() != coverageFormat) {
+            selectionPixels = options.selectionMask.copy(targetRoi).convertToFormat(coverageFormat);
+            selectionUpload = selectionPixels.rect();
+        }
         if (selectionPixels.isNull())
             return failed;
-        selectionPixels.fill(255);
     }
 
     std::vector<DabInfo> metadata;
@@ -373,28 +407,30 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
         metadata.push_back(info);
     }
 
-    quint64 sourcePixelsCount = 0, targetBytes = 0, sourceBytes = 0;
-    if (!checkedArea(targetRoi.size(), sourcePixelsCount) ||
-        !checkedArea(sourcePixels.size(), sourcePixelsCount))
+    quint64 sourcePixelsCount = 0;
+    if (needsSource && !checkedArea(sourceUpload.size(), sourcePixelsCount))
         return failed;
-    targetBytes = quint64(targetRoiPixels.sizeInBytes());
-    sourceBytes = quint64(sourcePixels.sizeInBytes());
-    const quint64 atlasBytes = quint64(atlas.sizeInBytes());
-    const quint64 selectionBytes = quint64(selectionPixels.sizeInBytes());
+    const quint64 targetBytes = roiPixels * quint64(sampleBytes);
+    const quint64 sourceBytes = sourcePixelsCount * quint64(sampleBytes);
+    const quint64 atlasBytes = atlasPixels * quint64(coverageBytes);
+    const quint64 selectionBytes = hasSelection ? roiPixels * quint64(coverageBytes) : 0;
     const quint64 metadataBytes = quint64(metadata.size() * sizeof(DabInfo));
-    const quint64 outputBytes = roiPixels * quint64(sampleBytes);
+    const quint64 outputBytes = targetBytes;
     const quint64 required = targetBytes + sourceBytes + atlasBytes + selectionBytes + metadataBytes + outputBytes * 2;
-    if (budget && required > budget)
+    if (required > budget)
         return failed;
 
     const DXGI_FORMAT pixelTextureFormat = depth == 16 ? DXGI_FORMAT_R16G16B16A16_UINT : DXGI_FORMAT_R8G8B8A8_UINT;
     const DXGI_FORMAT coverageTextureFormat = depth == 16 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
     Texture targetTexture, sourceTexture, coverageTexture, selectionTexture, outputTexture;
-    if (!createTexture(device, targetRoiPixels.size(), pixelTextureFormat, targetTexture, &targetRoiPixels, false) ||
-        !createTexture(device, sourcePixels.size(), pixelTextureFormat, sourceTexture, &sourcePixels, false) ||
+    if (!createTexture(device, targetUpload.size(), pixelTextureFormat, targetTexture, &targetPixels, false,
+                       targetUpload.topLeft()) ||
+        (needsSource && !createTexture(device, sourceUpload.size(), pixelTextureFormat, sourceTexture, &sourcePixels,
+                                      false, sourceUpload.topLeft())) ||
         !createTexture(device, atlas.size(), coverageTextureFormat, coverageTexture, &atlas, false) ||
-        !createTexture(device, selectionPixels.size(), coverageTextureFormat, selectionTexture, &selectionPixels, false) ||
-        !createTexture(device, targetRoiPixels.size(), pixelTextureFormat, outputTexture, nullptr, true))
+        (hasSelection && !createTexture(device, selectionUpload.size(), coverageTextureFormat, selectionTexture,
+                                       &selectionPixels, false, selectionUpload.topLeft())) ||
+        !createTexture(device, targetRoi.size(), pixelTextureFormat, outputTexture, nullptr, true))
         return failed;
     ComPtr<ID3D11Texture2D> staging;
     if (!createStaging(device, outputTexture, staging))
@@ -414,16 +450,18 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
     settings.dabCount = UINT(metadata.size());
     settings.operation = UINT(operation);
     settings.maximum = depth == 16 ? 65535.f : 255.f;
-    settings.sourceWidth = UINT(sourcePixels.width());
-    settings.sourceHeight = UINT(sourcePixels.height());
+    settings.sourceWidth = UINT(sourceUpload.width());
+    settings.sourceHeight = UINT(sourceUpload.height());
     settings.hasSource = needsSource ? 1u : 0u;
     settings.hasSelection = hasSelection ? 1u : 0u;
-    settings.selectionWidth = UINT(selectionPixels.width());
-    settings.selectionHeight = UINT(selectionPixels.height());
+    settings.selectionWidth = UINT(selectionUpload.width());
+    settings.selectionHeight = UINT(selectionUpload.height());
     // Keep the cbuffer ABI stable: its former maskTarget slot is now the
-    // explicit smoothSource switch.  The CPU-side maskTarget flag controls
+    // source filtering, Qt opacity and native channel layout. The maskTarget flag controls
     // color preparation in the Canvas wrapper and needs no shader branch.
-    settings.sourceFlags = (options.smoothSource ? 1u : 0u) | (options.qtOpacity ? 2u : 0u);
+    settings.sourceFlags = (options.smoothSource ? 1u : 0u) | (options.qtOpacity ? 2u : 0u) |
+                           (targetPixels.format() == QImage::Format_ARGB32_Premultiplied ? 4u : 0u) |
+                           (sourcePixels.format() == QImage::Format_ARGB32_Premultiplied ? 8u : 0u);
     QColor color = options.color;
     if (!color.isValid())
         color = Qt::black;
@@ -448,46 +486,45 @@ GpuNativeResult paintNative(const QImage &target, const QImage &source, const QV
     context->CSSetShader(nullptr, nullptr, 0);
     context->CopyResource(staging.Get(), outputTexture.texture.Get());
 
+    // Keep only the unavoidable immutable-result copy. For native layouts,
+    // staging rows go straight into the final ROI: no patch image, channel
+    // conversion or second CPU patch copy.
+    QImage result = target.copy();
+    const bool directOutput = nativePixelLayout(target, depth);
+    QImage patch;
+    if (!directOutput)
+        patch = QImage(targetRoi.size(), targetPixels.format());
+    if (result.isNull() || (!directOutput && patch.isNull()))
+        return failed;
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped)))
         return failed;
-    QImage patch(targetRoi.size(), depth == 16 ? QImage::Format_RGBA64_Premultiplied
-                                               : QImage::Format_RGBA8888_Premultiplied);
-    if (patch.isNull()) {
-        context->Unmap(staging.Get(), 0);
-        return failed;
-    }
     const size_t rowBytes = size_t(targetRoi.width()) * size_t(sampleBytes);
-    bool validPitch = mapped.RowPitch >= rowBytes;
+    const bool validPitch = mapped.RowPitch >= rowBytes;
     if (validPitch)
-        for (int y = 0; y < patch.height(); ++y)
-            std::memcpy(patch.scanLine(y), static_cast<const char *>(mapped.pData) + size_t(y) * mapped.RowPitch,
-                        rowBytes);
+        for (int y = 0; y < targetRoi.height(); ++y) {
+            auto *destination = directOutput ? result.scanLine(targetRoi.y() + y) + size_t(targetRoi.x()) * sampleBytes
+                                             : patch.scanLine(y);
+            std::memcpy(destination, static_cast<const char *>(mapped.pData) + size_t(y) * mapped.RowPitch, rowBytes);
+        }
     context->Unmap(staging.Get(), 0);
     if (!validPitch)
         return failed;
-
-    QImage result = target;
-    result.detach();
-    QImage patchOutput = patch.convertToFormat(target.format());
-    if (patchOutput.isNull())
-        return failed;
-    const int targetBytesPerPixel = target.depth() / 8;
-    const size_t targetRowBytes = size_t(targetRoi.width()) * size_t(targetBytesPerPixel);
-    if (targetBytesPerPixel <= 0 || patchOutput.bytesPerLine() < qsizetype(targetRowBytes) ||
-        result.bytesPerLine() < qsizetype(targetRoi.right() * targetBytesPerPixel + targetBytesPerPixel))
-        return failed;
-    for (int y = 0; y < patchOutput.height(); ++y)
-        std::memcpy(result.scanLine(targetRoi.top() + y) + targetRoi.left() * targetBytesPerPixel,
-                    patchOutput.constScanLine(y), targetRowBytes);
-    result.setColorSpace(target.colorSpace());
-    result.setDotsPerMeterX(target.dotsPerMeterX());
-    result.setDotsPerMeterY(target.dotsPerMeterY());
+    if (!directOutput) {
+        patch = patch.convertToFormat(target.format());
+        const int bytesPerPixel = target.depth() / 8;
+        if (patch.isNull() || bytesPerPixel <= 0)
+            return failed;
+        for (int y = 0; y < patch.height(); ++y)
+            std::memcpy(result.scanLine(targetRoi.y() + y) + size_t(targetRoi.x()) * bytesPerPixel,
+                        patch.constScanLine(y), size_t(targetRoi.width()) * bytesPerPixel);
+    }
 
     failed.image = result;
     failed.dispatches = 1;
     failed.uploadedBytes = targetBytes + sourceBytes + atlasBytes + selectionBytes + metadataBytes;
     failed.readbackBytes = outputBytes;
+    failed.readbackOperations = 1;
     return failed;
 }
 

@@ -584,6 +584,7 @@ QImage runGpuNative(const GpuNativeCallback &callback) {
     if (result.uploadedBytes) ++metrics.processingUploads;
     metrics.processingUploadedBytes += result.uploadedBytes;
     if (result.readbackBytes) ++metrics.readbacks;
+    metrics.nativeReadbackOperations += result.readbackOperations;
     metrics.processingReadbackBytes += result.readbackBytes;
     metrics.readbackBytes += result.readbackBytes;
     metrics.externalBytes = externalTextureBytes();

@@ -1,13 +1,22 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a7（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a8（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a7) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a8) 下载便携包。
 
-解压 `Compositor-0.4.1a7-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a8-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a8 — 减少 GPU 传输与中间准备开销（预发布）
+
+- 图像修复的候选选择、细化与统计量留在 GPU，不再回读中间结果；最终只回读实际修改矩形一次，覆盖蒙版仅上传工作区域，顺序求解过程避免重复解绑／绑定资源。
+- 画笔／橡皮／克隆／模糊直接上传原生 BGRA8／RGBA16 局部像素，回读行直接写入最终图像，去掉多余裁剪、格式转换与补丁复制。同批相同覆盖图仅上传一次；无选区、仅平移且亚像素位置精确相同的笔尖复用 Qt 覆盖，不近似小数位置。
+- 本机新旧版本交替对比中，克隆笔刷入口的 8 位耗时下降约 41%，16 位约 49%。修复样本回读量减少约 92%，但总耗时未稳定改善。这些 GPU 编辑样本仍慢于 CPU，因此**实验性 GPU 编辑保持默认关闭**。
+- 不是整笔画 GPU 常驻：仍保留最终一次同步回读和不可变 CPU 结果副本。没有新增设置、翻译、项目格式或运行时依赖。
+
+**仅预发布，稳定版 Latest 保持 0.4.0。**详细计时与边界见[发布说明](releases/0.4.1a8.md)；以下为此前批次记录。
 
 ## 0.4.1a7 — GPU 编辑、变形、导出与原生显示（预发布）
 

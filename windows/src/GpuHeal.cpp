@@ -34,7 +34,9 @@ struct Params {
     float opacity = 1, maximum = 255;
     int32_t offsetX = 0, offsetY = 0;
     uint32_t haveSource = 0, candidateCount = 0, seed = 0, reduceCount = 0;
-    float mean[4]{}, detail[4]{};
+    int32_t coverageX = 0, coverageY = 0;
+    uint32_t reserved[2]{};
+    float unusedDetail[4]{};
 };
 static_assert(sizeof(Params) == 96);
 
@@ -136,14 +138,14 @@ bool makeStructured(ID3D11Device *device, UINT count, UINT stride, UINT bind, co
 bool compileAll(ID3D11Device *device, std::map<std::string, ComPtr<ID3D11ComputeShader>> &shaders) {
     static ID3D11Device *cachedDevice = nullptr;
     static std::map<std::string, ComPtr<ID3D11ComputeShader>> cached;
-    if (cachedDevice == device && cached.size() == 13) {
+    if (cachedDevice == device && cached.size() == 14) {
         shaders = cached;
         return true;
     }
     static const char *entries[] = {"healRole", "healScore", "healReduceScore", "healStats",
                                     "healReduce4", "healCoarsen", "healUpsample", "healInitValue",
                                     "healSeedValue", "healSolveBase", "healSolveTile", "healSolveWave",
-                                    "healApply"};
+                                    "healApply", "healFinalizeStats"};
     std::map<std::string, ComPtr<ID3D11ComputeShader>> fresh;
     for (const char *entry : entries) {
         ComPtr<ID3DBlob> code, errors;
@@ -192,8 +194,9 @@ void setViews(ID3D11DeviceContext *context, ID3D11ShaderResourceView *source,
               ID3D11UnorderedAccessView *best, ID3D11UnorderedAccessView *valueOut,
               ID3D11UnorderedAccessView *imageOut,
               ID3D11ShaderResourceView *coarseRole = nullptr,
-              ID3D11ShaderResourceView *coarseValue = nullptr) {
-    ID3D11ShaderResourceView *views[9]{source, coverage, role, candidates, reduce, nullptr, value,
+              ID3D11ShaderResourceView *coarseValue = nullptr,
+              ID3D11ShaderResourceView *pipelineState = nullptr) {
+    ID3D11ShaderResourceView *views[9]{source, coverage, role, candidates, reduce, pipelineState, value,
                                         coarseRole, coarseValue};
     context->CSSetShaderResources(0, 9, views);
     ID3D11UnorderedAccessView *uavs[8]{roleOut, scores, diff, detail, reduceOut, best, valueOut, imageOut};
@@ -208,27 +211,6 @@ bool dispatch(ID3D11DeviceContext *context, ID3D11ComputeShader *shader, int gx,
     context->CSSetShader(shader, nullptr, 0);
     context->Dispatch(UINT(gx), UINT(gy), 1);
     ++run.dispatches;
-    return true;
-}
-
-bool readBuffer4(ID3D11Device *device, ID3D11DeviceContext *context, const Buffer &source,
-                 std::array<float, 4> &out, NativeRun &run) {
-    D3D11_BUFFER_DESC desc{};
-    source.buffer->GetDesc(&desc);
-    desc.Usage = D3D11_USAGE_STAGING;
-    desc.BindFlags = 0;
-    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-    ComPtr<ID3D11Buffer> staging;
-    if (FAILED(device->CreateBuffer(&desc, nullptr, &staging)))
-        return false;
-    context->CopyResource(staging.Get(), source.buffer.Get());
-    D3D11_MAPPED_SUBRESOURCE map{};
-    if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map)))
-        return false;
-    std::memcpy(out.data(), map.pData, sizeof(float) * 4);
-    context->Unmap(staging.Get(), 0);
-    run.readback += sizeof(float) * 4;
     return true;
 }
 
@@ -298,17 +280,19 @@ bool scoreCandidates(ID3D11DeviceContext *context, const std::map<std::string, C
     std::array<Candidate, 128> paddedCandidates{};
     std::copy(candidates.begin(), candidates.end(), paddedCandidates.begin());
     context->UpdateSubresource(candidateBuffer.buffer.Get(), 0, nullptr, paddedCandidates.data(), 0, 0);
+    run.uploaded += sizeof(paddedCandidates);
     params.candidateCount = UINT(candidates.size());
     setConstants(context, constants, params);
     setViews(context, source, nullptr, role, candidateBuffer.srv.Get(), nullptr, nullptr,
-             nullptr, scoreBuffer.uav.Get(), nullptr, nullptr, nullptr, bestBuffer.uav.Get(), nullptr, nullptr);
+             nullptr, scoreBuffer.uav.Get(), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+             nullptr, nullptr, bestBuffer.srv.Get());
     if (!dispatch(context, shaders.at("healScore").Get(), 1, 1, run)) {
         clearBindings(context);
         return false;
     }
     clearBindings(context);
     setConstants(context, constants, params);
-    setViews(context, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+    setViews(context, nullptr, nullptr, nullptr, candidateBuffer.srv.Get(), nullptr, nullptr, nullptr,
              scoreBuffer.uav.Get(), nullptr, nullptr, nullptr, bestBuffer.uav.Get(), nullptr, nullptr);
     if (!dispatch(context, shaders.at("healReduceScore").Get(), 1, 1, run)) {
         clearBindings(context);
@@ -411,36 +395,36 @@ bool solvePyramid(ID3D11Device *device, ID3D11DeviceContext *context,
     }
     const int tilesX = (workWidth + 15) / 16, tilesY = (workHeight + 15) / 16;
     const int tileDiagonals = tilesX + tilesY - 1;
+    // Consecutive dispatches keep the same resources and shader. Rebinding
+    // nine SRVs/eight UAVs (and clearing them again) per diagonal adds CPU
+    // preparation without changing the ordered solver dependencies.
+    setViews(context, nullptr, nullptr, role.srv.Get(), nullptr, nullptr, nullptr,
+             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, value.uav.Get(), nullptr);
+    context->CSSetShader(shaders.at("healSolveTile").Get(), nullptr, 0);
+    context->CSSetConstantBuffers(0, 1, &constants);
     for (int it = 0; it < iterations; ++it) {
         for (int diagonal = 0; diagonal < tileDiagonals; ++diagonal) {
             const int tx0 = std::max(0, diagonal - (tilesY - 1));
             const int tx1 = std::min(tilesX - 1, diagonal);
             params.offsetX = tx0;
             params.offsetY = diagonal;
-            setConstants(context, constants, params);
-            setViews(context, nullptr, nullptr, role.srv.Get(), nullptr, nullptr, nullptr,
-                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, value.uav.Get(), nullptr);
-            if (!dispatch(context, shaders.at("healSolveTile").Get(), tx1 - tx0 + 1, 1, run)) {
-                clearBindings(context);
-                return false;
-            }
-            clearBindings(context);
+            context->UpdateSubresource(constants, 0, nullptr, &params, 0, 0);
+            context->Dispatch(UINT(tx1 - tx0 + 1), 1, 1);
+            ++run.dispatches;
         }
     }
+    clearBindings(context);
     return true;
 }
 
 bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImage &source,
-                 const QImage &coverage, float opacity, int mode, uint32_t seed, quint64 budget,
+                 const QImage &coverage, const QRect &active, float opacity, int mode, uint32_t seed, quint64 budget,
                  NativeRun &run) {
     if (!device || !context || source.isNull() || coverage.isNull() || source.size() != coverage.size())
         return false;
     const int width = source.width(), height = source.height();
     const quint64 pixels = quint64(width) * quint64(height);
     if (pixels == 0 || pixels > MaxPixels)
-        return false;
-    QRect active;
-    if (!bounds(coverage, active))
         return false;
     const int size = std::max(active.width(), active.height());
     const int ring = std::clamp(size / 8, 2, 16);
@@ -452,7 +436,8 @@ bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImag
     const int depth = source.format() == QImage::Format_RGBA64_Premultiplied ? 16 : 8;
     const DXGI_FORMAT sourceFormat = depth == 16 ? DXGI_FORMAT_R16G16B16A16_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
     const quint64 bpp = depth == 16 ? 8 : 4;
-    quint64 estimate = pixels * (bpp * 3 + 1 + 16) + work * 32 + 16 * 128 * 2;
+    const quint64 outputPixels = quint64(active.width()) * quint64(active.height());
+    quint64 estimate = pixels * (bpp + 1 + 16) + work * 33 + outputPixels * bpp * 2 + 16 * 128 * 2;
     if (estimate > budget)
         return false;
     if (quint64(wx + wy - 1) * quint64(wx > 32 && wy > 32 ? 40 : 300) > MaxWaveDispatches)
@@ -461,15 +446,15 @@ bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImag
     Texture sourceTex, coverageTex, roleTex, valueTex, outputTex;
     if (!makeTexture(device, width, height, sourceFormat, D3D11_BIND_SHADER_RESOURCE, source.constBits(),
                      UINT(source.bytesPerLine()), sourceTex) ||
-        !makeTexture(device, width, height, DXGI_FORMAT_R8_UNORM, D3D11_BIND_SHADER_RESOURCE,
-                     coverage.constBits(), UINT(coverage.bytesPerLine()), coverageTex) ||
+        !makeTexture(device, wx, wy, DXGI_FORMAT_R8_UNORM, D3D11_BIND_SHADER_RESOURCE,
+                     coverage.constScanLine(oy) + ox, UINT(coverage.bytesPerLine()), coverageTex) ||
         !makeTexture(device, width, height, DXGI_FORMAT_R8_UINT,
                      D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, nullptr, 0, roleTex) ||
         !makeTexture(device, width, height, DXGI_FORMAT_R32G32B32A32_FLOAT,
                      D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, nullptr, 0, valueTex) ||
-        !makeTexture(device, width, height, sourceFormat, D3D11_BIND_UNORDERED_ACCESS, nullptr, 0, outputTex))
+        !makeTexture(device, active.width(), active.height(), sourceFormat, D3D11_BIND_UNORDERED_ACCESS, nullptr, 0, outputTex))
         return false;
-    run.uploaded += source.sizeInBytes() + coverage.sizeInBytes();
+    run.uploaded += pixels * bpp + work;
 
     std::map<std::string, ComPtr<ID3D11ComputeShader>> shaders;
     if (!compileAll(device, shaders))
@@ -486,6 +471,7 @@ bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImag
     params.width = UINT(width); params.height = UINT(height);
     params.workWidth = UINT(wx); params.workHeight = UINT(wy);
     params.originX = ox; params.originY = oy; params.ring = ring; params.mode = mode;
+    params.coverageX = ox; params.coverageY = oy;
     params.opacity = opacity; params.maximum = depth == 16 ? 65535.f : 255.f; params.seed = seed;
 
     setConstants(context, constants.Get(), params);
@@ -499,12 +485,12 @@ bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImag
 
     std::array<Candidate, 128> candidateInit{};
     Buffer candidateBuffer, scoreBuffer, bestBuffer;
+    const std::array<float, 12> initialState{};
     if (!makeStructured(device, 128, sizeof(Candidate), D3D11_BIND_SHADER_RESOURCE, candidateInit.data(), candidateBuffer) ||
         !makeStructured(device, 128, sizeof(float), D3D11_BIND_UNORDERED_ACCESS, nullptr, scoreBuffer) ||
-        !makeStructured(device, 1, sizeof(float) * 4, D3D11_BIND_UNORDERED_ACCESS, nullptr, bestBuffer))
+        !makeStructured(device, 3, sizeof(float) * 4, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, initialState.data(), bestBuffer))
         return false;
-    int sourceX = 0, sourceY = 0;
-    bool haveSource = false;
+    run.uploaded += sizeof(candidateInit) + sizeof(initialState);
     if (mode != 1) {
         static const double factors[5] = {1.05, 1.35, 1.75, 2.25, 2.8};
         const int factorCount = mode == 2 ? 2 : 5;
@@ -519,70 +505,50 @@ bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImag
                 c.penalty = float(mode == 2 ? 1.0 + 0.6 * f : 1.0 + 0.1 * f);
                 candidates.push_back(c);
             }
-        int bestIndex = -1; float bestScore = 0;
         if (!scoreCandidates(context, shaders, constants.Get(), sourceTex.srv.Get(), roleTex.srv.Get(),
                              candidateBuffer, scoreBuffer, bestBuffer, candidates, params, run))
             return false;
-        std::array<float, 4> best{};
-        if (!readBuffer4(device, context, bestBuffer, best, run))
+        std::vector<Candidate> refine;
+        refine.reserve(49);
+        for (int y = -3; y <= 3; ++y)
+            for (int x = -3; x <= 3; ++x)
+                refine.push_back(Candidate{float(x), float(y), 1, 0});
+        params.haveSource = 1; // Refine around the device-resident winning offset.
+        if (!scoreCandidates(context, shaders, constants.Get(), sourceTex.srv.Get(), roleTex.srv.Get(),
+                             candidateBuffer, scoreBuffer, bestBuffer, refine, params, run))
             return false;
-        bestIndex = int(std::lround(best[0]));
-        bestScore = best[1];
-        if (bestIndex >= 0 && bestIndex < int(candidates.size()) && std::isfinite(bestScore) && bestScore < 1e29f) {
-            sourceX = int(std::lround(candidates[size_t(bestIndex)].x));
-            sourceY = int(std::lround(candidates[size_t(bestIndex)].y));
-            std::vector<Candidate> refine;
-            refine.reserve(49);
-            for (int y = -3; y <= 3; ++y)
-                for (int x = -3; x <= 3; ++x)
-                    refine.push_back(Candidate{float(sourceX + x), float(sourceY + y), 1, 0});
-            if (!scoreCandidates(context, shaders, constants.Get(), sourceTex.srv.Get(), roleTex.srv.Get(),
-                                 candidateBuffer, scoreBuffer, bestBuffer, refine, params, run))
-                return false;
-            if (!readBuffer4(device, context, bestBuffer, best, run))
-                return false;
-            const int refined = int(std::lround(best[0]));
-            if (refined >= 0 && refined < int(refine.size()) && std::isfinite(best[1]) && best[1] < 1e29f) {
-                sourceX = int(std::lround(refine[size_t(refined)].x));
-                sourceY = int(std::lround(refine[size_t(refined)].y));
-            }
-            haveSource = true;
-        }
     }
-    params.offsetX = sourceX; params.offsetY = sourceY; params.haveSource = haveSource ? 1u : 0u;
     Buffer statsDiff, statsDetail;
     if (!makeStructured(device, UINT(work), sizeof(float) * 4, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, nullptr, statsDiff) ||
         !makeStructured(device, UINT(work), sizeof(float) * 4, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, nullptr, statsDetail))
         return false;
     setConstants(context, constants.Get(), params);
     setViews(context, sourceTex.srv.Get(), nullptr, roleTex.srv.Get(), nullptr, nullptr, nullptr,
-             nullptr, nullptr, statsDiff.uav.Get(), statsDetail.uav.Get(), nullptr, nullptr, nullptr, nullptr);
+             nullptr, nullptr, statsDiff.uav.Get(), statsDetail.uav.Get(), nullptr, nullptr, nullptr, nullptr,
+             nullptr, nullptr, bestBuffer.srv.Get());
     if (!dispatch(context, shaders.at("healStats").Get(), (wx + 15) / 16, (wy + 15) / 16, run)) {
         clearBindings(context);
         return false;
     }
     clearBindings(context);
-    quint64 scratch = 0;
+    quint64 scratch = estimate;
     Buffer reducedDiff, reducedDetail;
     if (!reduce4(device, context, shaders, constants.Get(), statsDiff, UINT(work), reducedDiff, params, run, budget, scratch) ||
         !reduce4(device, context, shaders, constants.Get(), statsDetail, UINT(work), reducedDetail, params, run, budget, scratch))
         return false;
-    std::array<float, 4> diff{}, detail{};
-    if (!readBuffer4(device, context, reducedDiff, diff, run) ||
-        !readBuffer4(device, context, reducedDetail, detail, run))
+    setConstants(context, constants.Get(), params);
+    setViews(context, nullptr, nullptr, nullptr, reducedDetail.srv.Get(), reducedDiff.srv.Get(), nullptr,
+             nullptr, nullptr, nullptr, nullptr, nullptr, bestBuffer.uav.Get(), nullptr, nullptr);
+    if (!dispatch(context, shaders.at("healFinalizeStats").Get(), 1, 1, run)) {
+        clearBindings(context);
         return false;
-    const float count = detail[3];
-    if (!(count > 0.5f))
-        return false;
-    for (int c = 0; c < 4; ++c)
-        params.mean[c] = diff[size_t(c)] / count;
-    for (int c = 0; c < 3; ++c)
-        params.detail[c] = std::sqrt(std::max(0.f, detail[size_t(c)] / count)) * .9f;
-    params.detail[3] = 0;
+    }
+    clearBindings(context);
 
     setConstants(context, constants.Get(), params);
     setViews(context, sourceTex.srv.Get(), nullptr, roleTex.srv.Get(), nullptr, nullptr, nullptr,
-             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, valueTex.uav.Get(), nullptr);
+             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, valueTex.uav.Get(), nullptr,
+             nullptr, nullptr, bestBuffer.srv.Get());
     if (!dispatch(context, shaders.at("healInitValue").Get(), (wx + 15) / 16, (wy + 15) / 16, run)) {
         clearBindings(context);
         return false;
@@ -590,7 +556,8 @@ bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImag
     clearBindings(context);
     setConstants(context, constants.Get(), params);
     setViews(context, nullptr, nullptr, roleTex.srv.Get(), nullptr, nullptr, nullptr,
-             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, valueTex.uav.Get(), nullptr);
+             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, valueTex.uav.Get(), nullptr,
+             nullptr, nullptr, bestBuffer.srv.Get());
     if (!dispatch(context, shaders.at("healSeedValue").Get(), (wx + 15) / 16, (wy + 15) / 16, run)) {
         clearBindings(context);
         return false;
@@ -600,11 +567,13 @@ bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImag
     if (!solvePyramid(device, context, shaders, constants.Get(), roleTex, valueTex, wx, wy, ox, oy,
                       0, params, run, budget, scratch))
         return false;
-    params.offsetX = sourceX; params.offsetY = sourceY;
+    params.originX = active.x(); params.originY = active.y();
+    params.workWidth = UINT(active.width()); params.workHeight = UINT(active.height());
     setConstants(context, constants.Get(), params);
     setViews(context, sourceTex.srv.Get(), coverageTex.srv.Get(), roleTex.srv.Get(), nullptr, nullptr,
-             valueTex.srv.Get(), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, outputTex.uav.Get());
-    if (!dispatch(context, shaders.at("healApply").Get(), (width + 15) / 16, (height + 15) / 16, run)) {
+             valueTex.srv.Get(), nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, outputTex.uav.Get(),
+             nullptr, nullptr, bestBuffer.srv.Get());
+    if (!dispatch(context, shaders.at("healApply").Get(), (active.width() + 15) / 16, (active.height() + 15) / 16, run)) {
         clearBindings(context);
         return false;
     }
@@ -619,20 +588,26 @@ bool runPipeline(ID3D11Device *device, ID3D11DeviceContext *context, const QImag
     if (FAILED(device->CreateTexture2D(&outputDesc, nullptr, &staging)))
         return false;
     context->CopyResource(staging.Get(), outputTex.texture.Get());
+    // Detach before the only blocking Map, then copy straight into the final
+    // image. Untouched pixels retain the source bytes, with no full-frame GPU
+    // output, staging allocation or round trip.
+    QImage result = source.copy();
+    if (result.isNull())
+        return false;
     D3D11_MAPPED_SUBRESOURCE map{};
     if (FAILED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map)))
         return false;
-    QImage result(QSize(width, height), depth == 16 ? QImage::Format_RGBA64_Premultiplied
-                                                    : QImage::Format_RGBA8888_Premultiplied);
-    if (result.isNull()) {
+    const size_t rowBytes = size_t(active.width()) * size_t(bpp);
+    if (map.RowPitch < rowBytes) {
         context->Unmap(staging.Get(), 0);
         return false;
     }
-    const size_t rowBytes = size_t(width) * size_t(bpp);
-    for (int y = 0; y < height; ++y)
-        std::memcpy(result.scanLine(y), static_cast<const uchar *>(map.pData) + size_t(y) * map.RowPitch, rowBytes);
+    for (int y = 0; y < active.height(); ++y)
+        std::memcpy(result.scanLine(active.y() + y) + size_t(active.x()) * size_t(bpp),
+                    static_cast<const uchar *>(map.pData) + size_t(y) * map.RowPitch, rowBytes);
     context->Unmap(staging.Get(), 0);
-    run.readback += result.sizeInBytes();
+    run.readback += outputPixels * bpp;
+    run.result.readbackOperations = 1;
     run.result.image = result;
     run.result.dispatches = run.dispatches;
     run.result.uploadedBytes = run.uploaded;
@@ -648,17 +623,12 @@ QImage healGpuImage(const QImage &source, const QImage &coverage, float opacity,
         coverage.format() != QImage::Format_Grayscale8 || mode < 0 || mode > 2 ||
         !std::isfinite(opacity))
         return {};
-    bool anyCoverage = false;
-    for (int y = 0; y < coverage.height() && !anyCoverage; ++y) {
-        const uchar *row = coverage.constScanLine(y);
-        for (int x = 0; x < coverage.width(); ++x)
-            if (row[x]) { anyCoverage = true; break; }
-    }
-    if (!anyCoverage)
-        return source.copy();
+    QRect active;
+    if (!bounds(coverage, active))
+        return source;
     QImage result = runGpuNative([&](ID3D11Device *device, ID3D11DeviceContext *context, quint64 budget) {
         NativeRun run;
-        runPipeline(device, context, source, coverage, opacity, mode, seed, budget, run);
+        runPipeline(device, context, source, coverage, active, opacity, mode, seed, budget, run);
         return run.result;
     });
     if (result.isNull() || result.size() != source.size() || result.format() != source.format())
