@@ -544,6 +544,8 @@
   "rememberWindow": "記住視窗大小與位置",
   "autoReload": "自動重新載入被其他應用程式修改的專案",
   "autoReloadNote": "僅重新載入沒有未儲存變更的文件；有本機編輯時會保留你的修改。",
+  "gpuEditingExperimental": "使用 GPU 進行繪畫、橡皮擦、複製、模糊筆刷和修復（實驗性）",
+  "gpuEditingNote": "使用 GPU 進行繪畫、橡皮擦、複製、模糊筆刷、修復和透視。實驗性功能：速度可能比 CPU 慢；其他 GPU 功能不受影響。",
   "defaultBitDepth": "預設位元深度",
   "defaultResolution": "預設解析度",
   "newDocumentDefaultsNote": "位元深度和解析度用於新建畫布；顯示設定套用於工作區。",
@@ -605,5 +607,9 @@
   "refineEdges": "改善邊緣",
   "matteContrast": "遮色片對比",
   "shiftEdge": "移動邊緣",
-  "psdCropped": "為符合文件記憶體預算，已省略畫布外的圖層像素。"
+  "psdCropped": "為符合文件記憶體預算，已省略畫布外的圖層像素。",
+  "exportRenderer": "算繪器",
+  "exportRendererCpu": "CPU 參考算繪",
+  "exportRendererGpu": "GPU 加速",
+  "exportGpuNote": "GPU 輸出在重新取樣和效果上可能有細微差異。不支援的操作會退回 CPU。"
 }

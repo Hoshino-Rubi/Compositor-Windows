@@ -1,13 +1,22 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a6（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a7（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a6) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a7) 下载便携包。
 
-解压 `Compositor-0.4.1a6-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a7-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a7 — GPU 编辑、变形、导出与原生显示（预发布）
+
+- 新增普通画笔、橡皮、克隆、模糊笔刷、修复与透视变形的 Direct3D 11 处理路径，支持 8／16 位、选区及撤销。Qt 仍生成笔尖／选区覆盖，并用常量白色像素准备透视几何覆盖；启用“实验性 GPU 编辑”首选项后，GPU 负责图像采样、混合与求解。该首选项**默认关闭**，控制画笔、橡皮、克隆、模糊、修复和透视；当前预热实测比 CPU 参考路径更慢，因此只是评估开关，不代表提速保证。资源不足或不适合的请求保留 CPU 回退。
+- 原生 Windows 画布可直接呈现 GPU 合成纹理，不再为该显示路径同步回读文档像素；图层图像／蒙版变换及混合在 GPU 完成，界面标尺等叠加仍由 Qt 绘制。离屏环境或失败时使用原参考画布。
+- 原生显示和“导出为”渲染器选择不受该实验性编辑首选项控制。导出窗口新增渲染器选择：默认 CPU 参考结果，GPU 为明确选择。大图局部渲染支持分块；大型全局调整或非等比例变换等场景可能回退 CPU。PNG／JPEG／PDF 编码仍由 CPU 完成。
+- 顺序亮度降噪与 Atkinson／Floyd–Steinberg 保留经性能验证的 CPU 路由。没有变更项目格式、运行时依赖或现有八种语言。
+
+**仅预发布；Latest 保持 0.4.0。** GPU 不意味着所有工作在显卡执行、逐像素一致或所有场景更快；详细范围、验证及计时见[发布说明](releases/0.4.1a7.md)。
 
 ## 0.4.1a6 — GPU 液化／涂抹与传输资源复用（预发布）
 

@@ -5,6 +5,7 @@
 #include "GpuToneShader.h"
 #include "GpuAdjustmentBlend.h"
 #include "GpuProcessing.h"
+#include "GpuLayerSurface.h"
 #include "GpuWarp.h"
 #include "Filters.h"
 #include "CameraRaw.h"
@@ -16,9 +17,11 @@
 #include <mutex>
 #include <list>
 #include <map>
+#include <vector>
 #include <cstring>
 #include <QDataStream>
 #include <QIODevice>
+#include <QHash>
 #include <QSet>
 #ifdef Q_OS_WIN
 #ifndef NOMINMAX
@@ -220,8 +223,9 @@ struct ProcessingCache {
 
 struct SourceCache {
     Texture source, toneTable, effectCoverage;
+    std::shared_ptr<GpuNativeTexture> nativeSource;
     GpuSurfacePtr effected;
-    QByteArray effectSignature;
+    QByteArray effectSignature, nativeSignature;
     QByteArray signature, toneSignature;
     QImage pixels;
 };
@@ -230,16 +234,24 @@ struct FrameCache {
     QSize canvas, target;
     QPoint origin;
     int depth = 8;
+    bool textureMode = false;
     Texture buffers[2], packed, blur[2], toneAlpha;
     ComPtr<ID3D11Texture2D> staging;
     std::map<QString, SourceCache> layers;
     QByteArray signature, stackSignature;
+    QByteArray overrideSignature;
     QImage result;
+    std::shared_ptr<GpuNativeTexture> textureSnapshot;
+    int currentBuffer = 0;
     quint64 bytes = 0;
 };
 // Cache the CPU staging mirrors and final readback as well as GPU allocations.
 // The estimate excludes driver bookkeeping; the DXGI budget check leaves headroom.
 std::list<FrameCache> frames;
+// Weak records let snapshots retained by a presenter remain visible to budget
+// accounting after their frame cache entry is evicted, without keeping them
+// alive indefinitely in the preview cache itself.
+std::vector<std::weak_ptr<GpuNativeTexture>> textureSnapshots;
 // Standalone filters/effects share one transfer set per size/depth.  The input is
 // uploaded on every call; only the resource descriptors are retained.
 std::list<ProcessingCache> processingCaches;
@@ -247,6 +259,44 @@ quint64 residentBytes() {
     quint64 result = 0;
     for (const auto &frame : frames) result += frame.bytes;
     for (const auto &cache : processingCaches) result += cache.bytes;
+    for (auto it = textureSnapshots.begin(); it != textureSnapshots.end();) {
+        const auto snapshot = it->lock();
+        if (!snapshot) {
+            it = textureSnapshots.erase(it);
+            continue;
+        }
+        bool cached = false;
+        for (const auto &frame : frames) {
+            if (frame.textureSnapshot.get() == snapshot.get()) {
+                cached = true;
+                break;
+            }
+        }
+        if (!cached) result += snapshot->bytes;
+        ++it;
+    }
+    return result;
+}
+quint64 externalTextureBytes() {
+    quint64 result = 0;
+    for (auto it = textureSnapshots.begin(); it != textureSnapshots.end();) {
+        const auto snapshot = it->lock();
+        if (!snapshot) {
+            it = textureSnapshots.erase(it);
+            continue;
+        }
+        bool cached = false;
+        for (const auto &frame : frames) {
+            if (frame.textureSnapshot.get() == snapshot.get()) {
+                cached = true;
+                break;
+            }
+        }
+        // A cached snapshot has one owner in FrameCache.  Any additional owner
+        // is an external presenter; evicted snapshots have no cache owner.
+        if (!cached || snapshot.use_count() > 1) result += snapshot->bytes;
+        ++it;
+    }
     return result;
 }
 quint64 cacheBudget(Device &d) {
@@ -502,6 +552,53 @@ QImage processGpuImage(const QImage &source, const QJsonObject &settings, double
 #endif
 }
 }
+
+QImage runGpuNative(const GpuNativeCallback &callback) {
+#ifdef Q_OS_WIN
+    if (!callback) return {};
+    if (qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU")) {
+        clearGpuPreviewCache();
+        return {};
+    }
+    std::lock_guard lock(gpuMutex);
+    auto &d = gpu();
+    if (!d.ready()) {
+        frames.clear();
+        processingCaches.clear();
+        return {};
+    }
+    // cacheBudget() already caps usage to a fraction of the adapter budget;
+    // leave a small transient margin for callback-owned UAVs and descriptors.
+    // The callback receives only the free bytes after retained preview/cache
+    // resources (including externally retained texture snapshots), so it
+    // cannot accidentally allocate a second full cache budget.
+    constexpr quint64 transientMargin = 4 * 1024 * 1024;
+    const quint64 adapterBudget = cacheBudget(d);
+    const quint64 allowed = adapterBudget > transientMargin ? adapterBudget - transientMargin : adapterBudget;
+    trimCache(allowed);
+    const quint64 retained = residentBytes();
+    const quint64 budget = allowed > retained ? allowed - retained : 0;
+    metrics.budgetBytes = allowed;
+    const auto result = callback(d.device.Get(), d.context.Get(), budget);
+    metrics.processingDispatches += result.dispatches;
+    if (result.uploadedBytes) ++metrics.processingUploads;
+    metrics.processingUploadedBytes += result.uploadedBytes;
+    if (result.readbackBytes) ++metrics.readbacks;
+    metrics.processingReadbackBytes += result.readbackBytes;
+    metrics.readbackBytes += result.readbackBytes;
+    metrics.externalBytes = externalTextureBytes();
+    if (!d.ready()) {
+        frames.clear();
+        processingCaches.clear();
+        return {};
+    }
+    return result.image;
+#else
+    Q_UNUSED(callback);
+    return {};
+#endif
+}
+
 QImage filterGpuImage(const QImage &source,const QJsonObject &settings,double scale,int clipping) {
     return processGpuImage(source,settings,scale,clipping,false);
 }
@@ -537,6 +634,7 @@ GpuPreviewMetrics gpuPreviewMetrics() {
     auto result = metrics;
     result.residentBytes = residentBytes();
     result.cachedFrames = frames.size();
+    result.externalBytes = externalTextureBytes();
     return result;
 #else
     return {};
@@ -553,10 +651,33 @@ void clearGpuPreviewCache() {
     std::lock_guard lock(gpuMutex);
     frames.clear();
     processingCaches.clear();
+    metrics.externalBytes = externalTextureBytes();
 #endif
 }
-QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin) {
+QImage renderGpuPreviewImpl(const State &state, QSize target, QPoint viewportOrigin,
+                            std::shared_ptr<GpuPreviewTexture> *textureOut = nullptr,
+                            const QHash<QString, std::shared_ptr<GpuNativeTexture>> *sourceOverrides = nullptr) {
 #ifdef Q_OS_WIN
+    const bool textureOnly = textureOut != nullptr;
+    if (textureOut) *textureOut = {};
+    auto publishTexture = [&](const std::shared_ptr<GpuNativeTexture> &native) {
+        if (!textureOut || !native) return;
+        auto result = std::make_shared<GpuPreviewTexture>();
+        result->native = native;
+        result->size = target;
+        result->depth = state.bitDepth;
+        *textureOut = std::move(result);
+    };
+    QByteArray overrideSignature;
+    if (sourceOverrides && !sourceOverrides->isEmpty()) {
+        QStringList ids = sourceOverrides->keys();
+        std::sort(ids.begin(), ids.end());
+        QDataStream stream(&overrideSignature, QIODevice::WriteOnly);
+        for (const auto &id : ids) {
+            const auto native = sourceOverrides->value(id);
+            stream << id << qulonglong(reinterpret_cast<quintptr>(native.get()));
+        }
+    }
     if (qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU")) {
         clearGpuPreviewCache();
         return {};
@@ -568,10 +689,30 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         QSet<QString> ids; for(int child:state.descendants(folder.id))ids.insert(state.layers[child].id);
         nested.layers.removeIf([&](const Layer &l){return !ids.contains(l.id);});
         for(auto &layer:nested.layers)if(layer.parent==folder.id)layer.parent.clear();
-        const auto image=renderGpuPreview(nested,target,viewportOrigin);if(image.isNull())return {};
+        if (textureOnly) {
+            // Render the folder subtree once as an immutable GPU snapshot,
+            // then let the outer pass apply the folder's own effects and blend
+            // mode without downloading that subtree to a QImage.
+            std::shared_ptr<GpuPreviewTexture> nestedTexture;
+            renderGpuPreviewImpl(nested, target, viewportOrigin, &nestedTexture, sourceOverrides);
+            if (!nestedTexture || !nestedTexture->native) return {};
+            State flattened=state;
+            flattened.layers.removeIf([&](const Layer &l){return ids.contains(l.id);});
+            auto &flat=flattened.layers[flattened.index(folder.id)];
+            flat.group=false;
+            flat.image=QImage(QSize(1, 1), pixelFormat(state.bitDepth));
+            flat.image.fill(Qt::transparent);
+            flat.placement={};
+            flat.placement.size=state.size;
+            flat.originalPng.clear();
+            QHash<QString, std::shared_ptr<GpuNativeTexture>> overrides = sourceOverrides ? *sourceOverrides : QHash<QString, std::shared_ptr<GpuNativeTexture>>();
+            overrides.insert(flat.id, nestedTexture->native);
+            return renderGpuPreviewImpl(flattened, target, viewportOrigin, textureOut, &overrides);
+        }
+        const auto image=renderGpuPreviewImpl(nested,target,viewportOrigin);if(image.isNull())return {};
         State flattened=state;flattened.layers.removeIf([&](const Layer &l){return ids.contains(l.id);});
         auto &flat=flattened.layers[flattened.index(folder.id)];flat.group=false;flat.image=image;flat.placement={};flat.placement.size=state.size;flat.originalPng.clear();
-        return renderGpuPreview(flattened,target,viewportOrigin);
+        return renderGpuPreviewImpl(flattened,target,viewportOrigin);
     }
     for (const auto &layer : state.layers) {
         const auto effects=layer.metadata["effects"].toObject();
@@ -612,6 +753,11 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
         }
         if (!visible || opacity <= 0) continue;
         auto fingerprint = sourceSignature(state, index, ancestors);
+        if (textureOnly && sourceOverrides) {
+            const auto override = sourceOverrides->value(layer.id);
+            if (override)
+                fingerprint.append(QByteArray::number(qulonglong(reinterpret_cast<quintptr>(override.get()))));
+        }
         const auto effects=adjustment?QJsonObject():layer.metadata["effects"].toObject();
         if(!effects.isEmpty()) {++effectLayers;QDataStream effectKey(&fingerprint,QIODevice::Append);effectKey<<effects;}
         fingerprint.append(adjustment ? 'A' : 'R');
@@ -635,8 +781,9 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     const quint64 area = quint64(target.width()) * target.height();
     const quint64 sampleBytes = state.bitDepth == 16 ? 8 : 4;
     const quint64 tableBytes = (state.bitDepth == 16 ? 65536 : 256) * sampleBytes;
+    const quint64 nativeLayerReserve = textureOnly ? area * 16 * quint64(visibleLayers.size()) : 0;
     const quint64 required = ((hasProcessing||effectLayers)?4*1024*1024:0) + area * (32 + (hasBlur ? 32 : 0) + ((hasProcessing || effectLayers) ? (hasRaw?224:128) : 0) + effectLayers*(16+sampleBytes) + sampleBytes * 3 + visibleLayers.size() * sampleBytes * 2) +
-                             toneLayers * tableBytes + (toneLayers ? (state.bitDepth == 16 ? 65536 : 256) * 4 : 0);
+                             toneLayers * tableBytes + (toneLayers ? (state.bitDepth == 16 ? 65536 : 256) * 4 : 0) + nativeLayerReserve;
     const quint64 budget = cacheBudget(d);
     metrics.budgetBytes = budget;
     trimCache(budget);
@@ -644,28 +791,44 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     d.processor->setScratchBudget(area*(hasRaw?192:96)+3*1024*1024);
     auto found = std::find_if(frames.begin(), frames.end(), [&](const FrameCache &f) {
         return f.document == state.id && f.canvas == state.size && f.target == target &&
-               f.origin == viewportOrigin && f.depth == state.bitDepth;
+               f.origin == viewportOrigin && f.depth == state.bitDepth && f.textureMode == textureOnly &&
+               f.overrideSignature == overrideSignature;
     });
     if (found == frames.end()) {
         trimCache(budget - required);
         frames.emplace_back();
         found = std::prev(frames.end());
         found->document = state.id; found->canvas = state.size; found->target = target;
-        found->origin = viewportOrigin; found->depth = state.bitDepth;
+        found->origin = viewportOrigin; found->depth = state.bitDepth; found->textureMode = textureOnly;
+        found->overrideSignature = overrideSignature;
     } else {
         frames.splice(frames.end(), frames, found);
         const auto extra = required > found->bytes ? required - found->bytes : 0;
         trimCache(budget - extra, &*found);
     }
     auto &frame = *found;
-    frame.bytes = required;
+    const bool forceFull = qEnvironmentVariableIntValue("COMPOSITOR_GPU_FULL_FRAME");
+    if (frame.signature != signature || forceFull) frame.textureSnapshot.reset();
+    frame.bytes = required + (frame.textureSnapshot ? frame.textureSnapshot->bytes : 0);
     for (auto it = frame.layers.begin(); it != frame.layers.end();)
         if (!visibleIds.contains(it->first)) it = frame.layers.erase(it);
         else ++it;
-    const bool forceFull = qEnvironmentVariableIntValue("COMPOSITOR_GPU_FULL_FRAME");
-    if (!forceFull && frame.signature == signature && !frame.result.isNull()) {
+    if (!forceFull && frame.signature == signature && textureOnly && frame.textureSnapshot) {
+        ++metrics.cacheHits;
+        ++metrics.noReadbackFrames;
+        publishTexture(frame.textureSnapshot);
+        return {};
+    }
+    if (!forceFull && frame.signature == signature && !textureOnly && !frame.result.isNull()) {
         ++metrics.cacheHits;
         return frame.result;
+    }
+    // A texture-only render intentionally leaves frame.result untouched.  If a
+    // normal render follows it, force a fresh readback rather than returning an
+    // image from an older GPU signature.
+    if (!textureOnly && frame.result.isNull()) {
+        frame.textureSnapshot.reset();
+        frame.bytes = required;
     }
     auto failed = [&]() -> QImage { frames.erase(found); return {}; };
     if (toneLayers) {
@@ -687,11 +850,20 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     const DXGI_FORMAT packedFormat = state.bitDepth == 16 ? DXGI_FORMAT_R16G16B16A16_UINT : DXGI_FORMAT_R8G8B8A8_UINT;
     if (!frame.buffers[0].texture) {
         UINT support = 0;
-        if (FAILED(d.device->CheckFormatSupport(packedFormat, &support)) ||
-            !(support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW)) return failed();
+        if (!textureOnly && (FAILED(d.device->CheckFormatSupport(packedFormat, &support)) ||
+            !(support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW))) return failed();
         if (!createTexture(d, target, DXGI_FORMAT_R32G32B32A32_FLOAT, frame.buffers[0]) ||
-            !createTexture(d, target, DXGI_FORMAT_R32G32B32A32_FLOAT, frame.buffers[1]) ||
-            !createTexture(d, target, packedFormat, frame.packed)) return failed();
+            !createTexture(d, target, DXGI_FORMAT_R32G32B32A32_FLOAT, frame.buffers[1])) return failed();
+        if (!textureOnly && !createTexture(d, target, packedFormat, frame.packed)) return failed();
+        if (!textureOnly) {
+            D3D11_TEXTURE2D_DESC desc{};
+            frame.packed.texture->GetDesc(&desc);
+            desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+            ++metrics.textureAllocations;
+            if (FAILED(d.device->CreateTexture2D(&desc, nullptr, &frame.staging))) return failed();
+        }
+    } else if (!textureOnly && !frame.packed.texture) {
+        if (!createTexture(d, target, packedFormat, frame.packed)) return failed();
         D3D11_TEXTURE2D_DESC desc{};
         frame.packed.texture->GetDesc(&desc);
         desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -703,6 +875,82 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
     QRect dirty;
     if (frame.result.isNull() || frame.stackSignature != stackSignature || hasBlur || hasSpatial || effectLayers ||
         forceFull) dirty = QRect(QPoint(), target);
+    auto nativeSurfaceFrom = [&](const GpuSurfacePtr &surface) {
+        if (!surface || !surface->texture || !surface->view) return std::shared_ptr<GpuNativeTexture>();
+        auto native = std::make_shared<GpuNativeTexture>();
+        native->texture = surface->texture;
+        native->shaderResourceView = surface->view;
+        native->size = target;
+        native->depth = state.bitDepth;
+        native->bytes = area * 16;
+        return native;
+    };
+    auto gpuSurfaceFrom = [&](const std::shared_ptr<GpuNativeTexture> &native) {
+        if (!native || !native->texture || !native->shaderResourceView) return GpuSurfacePtr();
+        auto surface = std::make_shared<GpuSurface>();
+        surface->texture = native->texture;
+        surface->view = native->shaderResourceView;
+        surface->size = target;
+        return surface;
+    };
+    auto nativeCoverage = [&](const VisibleLayer &entry, int index) {
+        State coverageState = state;
+        auto &root = coverageState.layers[index];
+        const Placement originalPlacement = root.placement;
+        if (root.maskLinked) root.maskPlacement = originalPlacement;
+        root.maskLinked = false;
+        root.image = QImage(QSize(1, 1), pixelFormat(state.bitDepth));
+        if (root.image.isNull()) return std::shared_ptr<GpuNativeTexture>();
+        if (state.bitDepth == 16)
+            reinterpret_cast<QRgba64 *>(root.image.bits())[0] = rgba64(65535, 65535, 65535, 65535);
+        else
+            reinterpret_cast<QRgb *>(root.image.bits())[0] = qRgba(255, 255, 255, 255);
+        root.placement = {};
+        root.placement.size = state.size;
+        root.placement.sampling = QStringLiteral("Nearest");
+        root.opacity = 1;
+        root.metadata = {};
+        for (int ancestor : entry.ancestors)
+            coverageState.layers[ancestor].opacity = 1;
+        GpuNativeResult nativeStats;
+        const quint64 resident = residentBytes();
+        const quint64 helperBudget = budget > resident ? budget - resident : 0;
+        const auto native = renderGpuLayerSurface(d.device.Get(), d.context.Get(), coverageState, index,
+                                                  target, true, false, helperBudget, nativeStats);
+        metrics.processingDispatches += nativeStats.dispatches;
+        if (nativeStats.uploadedBytes) ++metrics.processingUploads;
+        metrics.processingUploadedBytes += nativeStats.uploadedBytes;
+        metrics.processingReadbackBytes += nativeStats.readbackBytes;
+        return native;
+    };
+    auto nativeAncestorMask = [&](const VisibleLayer &entry, int index, const GpuSurfacePtr &input) {
+        if (!input || entry.ancestors.isEmpty()) return input;
+        State maskState = state;
+        auto &root = maskState.layers[index];
+        root.image = QImage(QSize(1, 1), pixelFormat(state.bitDepth));
+        if (root.image.isNull()) return GpuSurfacePtr();
+        root.image.fill(Qt::white);
+        root.placement = {};
+        root.placement.size = state.size;
+        root.placement.sampling = QStringLiteral("Nearest");
+        root.opacity = 1;
+        root.mask = {};
+        root.maskEnabled = false;
+        root.maskSource.clear();
+        root.metadata = {};
+        for (int ancestor : entry.ancestors)
+            maskState.layers[ancestor].opacity = 1;
+        GpuNativeResult nativeStats;
+        const quint64 resident = residentBytes();
+        const quint64 helperBudget = budget > resident ? budget - resident : 0;
+        const auto native = renderGpuLayerSurface(d.device.Get(), d.context.Get(), maskState, index, target,
+                                                  true, false, helperBudget, nativeStats, nativeSurfaceFrom(input));
+        metrics.processingDispatches += nativeStats.dispatches;
+        if (nativeStats.uploadedBytes) ++metrics.processingUploads;
+        metrics.processingUploadedBytes += nativeStats.uploadedBytes;
+        metrics.processingReadbackBytes += nativeStats.readbackBytes;
+        return gpuSurfaceFrom(native);
+    };
     for (const auto &entry : visibleLayers) {
         const int index = entry.index;
         const auto &layer = state.layers[index];
@@ -722,63 +970,127 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
                 cached.toneSignature = toneKey;
             }
         } else { cached.toneTable = {}; cached.toneSignature.clear(); }
-        if (cached.signature != entry.signature || !cached.source.texture) {
+        const bool effected = !entry.adjustment && !layer.metadata["effects"].toObject().isEmpty();
+        const bool nativeSource = textureOnly;
+        const bool sourceNeedsPrepare = nativeSource
+            ? (!cached.nativeSource || cached.nativeSignature != entry.signature)
+            : (!cached.source.texture || cached.signature != entry.signature);
+        if (sourceNeedsPrepare) {
             ++metrics.preparedLayers;
-            const bool effected=!entry.adjustment&&!layer.metadata["effects"].toObject().isEmpty();
-            State sourceState=state;
-            if(effected)sourceState.layers[index].opacity=1;
-            auto image = entry.adjustment ? adjustmentCoverage(state, entry, target) : layerSurface(sourceState, index, target);
-            if (!entry.adjustment && !effected) {
-                double groupOpacity = 1;
-                for (int ancestor : entry.ancestors) {
-                    const auto &group = state.layers[ancestor];
-                    groupOpacity *= group.opacity;
-                    if (!group.mask.isNull() && group.maskEnabled) {
-                        QPainter painter(&image);
-                        painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-                        painter.drawImage(0, 0, renderMask(group, state.size, target));
-                    }
+            if (nativeSource) {
+                // Native layer preparation keeps transforms, masks, clipping,
+                // and ancestor opacity on the GPU.  Effect layers deliberately
+                // omit root/ancestor opacity here; the existing GPU coverage
+                // sequence below applies it after the effect kernel.
+                std::shared_ptr<GpuNativeTexture> prepared;
+                if (entry.adjustment) {
+                    // Adjustment coverage is a white synthetic layer.  Its
+                    // masks, clipping source, and ancestor masks stay native;
+                    // ancestor opacity is intentionally left to entry.opacity
+                    // in the adjustment shader below.
+                    prepared = nativeCoverage(entry, index);
+                } else {
+                    GpuNativeResult nativeStats;
+                    const auto rootOverride = sourceOverrides ? sourceOverrides->value(layer.id)
+                                                              : std::shared_ptr<GpuNativeTexture>();
+                    // The frame estimate already reserves retained float outputs;
+                    // only currently free adapter/cache bytes are available for
+                    // this helper's transient source/mask/intermediate work.
+                    const quint64 resident = residentBytes();
+                    const quint64 helperBudget = budget > resident ? budget - resident : 0;
+                    static const QSet<QString> painterBlendModes{
+                        "Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "Difference",
+                        "Exclusion", "Color Dodge", "Color Burn", "Soft Light", "Hard Light"};
+                    bool coverageOpacity = (!layer.mask.isNull() && layer.maskEnabled) ||
+                                           !layer.maskSource.isEmpty() || !painterBlendModes.contains(layer.blend);
+                    for (int ancestor : entry.ancestors)
+                        coverageOpacity = coverageOpacity ||
+                            (!state.layers[ancestor].mask.isNull() && state.layers[ancestor].maskEnabled);
+                    // Renderer uses DestinationIn after masks/clipping for a
+                    // prepared layer, but a bare painter layer receives the
+                    // combined root/folder opacity in a single drawImage.
+                    State preparationState = state;
+                    if (!effected && !coverageOpacity)
+                        preparationState.layers[index].opacity = entry.opacity;
+                    prepared = renderGpuLayerSurface(
+                        d.device.Get(), d.context.Get(), preparationState, index, target,
+                        !effected && coverageOpacity, !effected,
+                        helperBudget, nativeStats, rootOverride, !effected && coverageOpacity);
+                    metrics.processingDispatches += nativeStats.dispatches;
+                    if (nativeStats.uploadedBytes) ++metrics.processingUploads;
+                    metrics.processingUploadedBytes += nativeStats.uploadedBytes;
+                    metrics.processingReadbackBytes += nativeStats.readbackBytes;
                 }
-                if (groupOpacity < 1) {
-                    QPainter painter(&image);
-                    painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-                    painter.fillRect(image.rect(), QColor::fromRgbF(0, 0, 0, groupOpacity));
-                }
-            }
-            image = image.convertToFormat(state.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
-                                                             : QImage::Format_RGBA8888_Premultiplied);
-            if (!cached.source.texture) {
-                if (!createTexture(d, target, state.bitDepth == 16 ? DXGI_FORMAT_R16G16B16A16_UNORM
-                                                                 : DXGI_FORMAT_R8G8B8A8_UNORM, cached.source, &image))
-                    return failed();
-                ++metrics.sourceUploads; metrics.uploadedBytes += area * sampleBytes;
+                if (!prepared) return failed();
+                cached.nativeSource = prepared;
+                cached.nativeSignature = entry.signature;
+                cached.source = {};
+                cached.pixels = {};
                 dirty = QRect(QPoint(), target);
             } else {
-                const auto changed = changedBounds(cached.pixels, image);
-                if (!changed.isEmpty()) {
-                    dirty = dirty.united(changed);
-                    D3D11_BOX box{UINT(changed.left()), UINT(changed.top()), 0,
-                                  UINT(changed.right()+1), UINT(changed.bottom()+1), 1};
-                    d.context->UpdateSubresource(cached.source.texture.Get(), 0, &box,
-                        image.constScanLine(changed.top()) + changed.left() * sampleBytes,
-                        UINT(image.bytesPerLine()), 0);
-                    ++metrics.sourceUploads;
-                    metrics.uploadedBytes += quint64(changed.width()) * changed.height() * sampleBytes;
+                cached.nativeSource.reset();
+                cached.nativeSignature.clear();
+                State sourceState=state;
+                if(effected)sourceState.layers[index].opacity=1;
+                auto image = entry.adjustment ? adjustmentCoverage(state, entry, target) : layerSurface(sourceState, index, target);
+                if (!entry.adjustment && !effected) {
+                    double groupOpacity = 1;
+                    for (int ancestor : entry.ancestors) {
+                        const auto &group = state.layers[ancestor];
+                        groupOpacity *= group.opacity;
+                        if (!group.mask.isNull() && group.maskEnabled) {
+                            QPainter painter(&image);
+                            painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                            painter.drawImage(0, 0, renderMask(group, state.size, target));
+                        }
+                    }
+                    if (groupOpacity < 1) {
+                        QPainter painter(&image);
+                        painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                        painter.fillRect(image.rect(), QColor::fromRgbF(0, 0, 0, groupOpacity));
+                    }
                 }
+                image = image.convertToFormat(state.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
+                                                                 : QImage::Format_RGBA8888_Premultiplied);
+                if (!cached.source.texture) {
+                    if (!createTexture(d, target, state.bitDepth == 16 ? DXGI_FORMAT_R16G16B16A16_UNORM
+                                                                     : DXGI_FORMAT_R8G8B8A8_UNORM, cached.source, &image))
+                        return failed();
+                    ++metrics.sourceUploads; metrics.uploadedBytes += area * sampleBytes;
+                    dirty = QRect(QPoint(), target);
+                } else {
+                    const auto changed = changedBounds(cached.pixels, image);
+                    if (!changed.isEmpty()) {
+                        dirty = dirty.united(changed);
+                        D3D11_BOX box{UINT(changed.left()), UINT(changed.top()), 0,
+                                      UINT(changed.right()+1), UINT(changed.bottom()+1), 1};
+                        d.context->UpdateSubresource(cached.source.texture.Get(), 0, &box,
+                            image.constScanLine(changed.top()) + changed.left() * sampleBytes,
+                            UINT(image.bytesPerLine()), 0);
+                        ++metrics.sourceUploads;
+                        metrics.uploadedBytes += quint64(changed.width()) * changed.height() * sampleBytes;
+                    }
+                }
+                cached.pixels = image;
+                cached.signature = entry.signature;
             }
-            cached.pixels = image;
-            cached.signature = entry.signature;
         }
         if(!entry.adjustment&&!layer.metadata["effects"].toObject().isEmpty()) {
             if(cached.effectSignature!=entry.signature||!cached.effected) {
                 const auto before=d.processor->dispatches;
-                cached.effected=d.processor->effects(cached.source.view.Get(),target,state.bitDepth,layer.metadata["effects"].toObject(),double(target.width())/state.size.width());
+                auto *effectInput = textureOnly && cached.nativeSource
+                    ? cached.nativeSource->shaderResourceView.Get() : cached.source.view.Get();
+                cached.effected=d.processor->effects(effectInput,target,state.bitDepth,layer.metadata["effects"].toObject(),double(target.width())/state.size.width());
                 metrics.processingDispatches+=d.processor->dispatches-before;
                 if(!cached.effected){d.status=d.processor->error;return failed();}
                 // Match reference order: effects, layer opacity, each ancestor mask, then folder opacity.
                 if(layer.opacity<1)cached.effected=d.processor->coverage(cached.effected,nullptr,state.bitDepth,layer.opacity);
                 double groupOpacity=1;
-                for(int ancestor:entry.ancestors){const auto &group=state.layers[ancestor];groupOpacity*=group.opacity;
+                for(int ancestor:entry.ancestors) groupOpacity*=state.layers[ancestor].opacity;
+                if (textureOnly && !entry.ancestors.isEmpty()) {
+                    cached.effected=nativeAncestorMask(entry,index,cached.effected);
+                    if(!cached.effected)return failed();
+                } else for(int ancestor:entry.ancestors){const auto &group=state.layers[ancestor];
                     if(!group.mask.isNull()&&group.maskEnabled){auto mask=renderMask(group,state.size,target).convertToFormat(state.bitDepth==16?QImage::Format_RGBA64_Premultiplied:QImage::Format_RGBA8888_Premultiplied);
                         Texture texture;if(!createTexture(d,target,state.bitDepth==16?DXGI_FORMAT_R16G16B16A16_UNORM:DXGI_FORMAT_R8G8B8A8_UNORM,texture,&mask))return failed();
                         cached.effected=d.processor->coverage(cached.effected,texture.view.Get(),state.bitDepth,1);}}
@@ -788,7 +1100,7 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             }
         } else {cached.effected.reset();cached.effectCoverage={};cached.effectSignature.clear();}
     }
-    QImage result = std::move(frame.result);
+    QImage result = textureOnly ? frame.result : std::move(frame.result);
     if (!dirty.isEmpty()) {
         auto *constants = d.settings.Get();
         d.context->CSSetConstantBuffers(0, 1, &constants);
@@ -803,6 +1115,10 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
                         UINT(dirty.x()), UINT(dirty.y()), 1};
         const quint64 pixels = quint64(dirty.width()) * dirty.height();
         int current = 0;
+        if (visibleLayers.isEmpty()) {
+            const float transparent[4]{};
+            d.context->ClearUnorderedAccessViewFloat(frame.buffers[current].output.Get(), transparent);
+        }
         for (const auto &entry : visibleLayers) {
             const auto &layer = state.layers[entry.index];
             if (entry.adjustment && toneAdjustment(layer.metadata["adjustment"].toObject())) {
@@ -811,8 +1127,11 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
                 toneParams.padding = std::bit_cast<UINT>(float(entry.opacity));
                 d.context->CSSetShader(d.toneShader.Get(), nullptr, 0);
                 d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &toneParams, 0, 0);
+                auto *coverage = textureOnly && frame.layers[layer.id].nativeSource
+                    ? frame.layers[layer.id].nativeSource->shaderResourceView.Get()
+                    : frame.layers[layer.id].source.view.Get();
                 ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(),
-                    frame.layers[layer.id].toneTable.view.Get(), frame.layers[layer.id].source.view.Get(), frame.toneAlpha.view.Get()};
+                    frame.layers[layer.id].toneTable.view.Get(), coverage, frame.toneAlpha.view.Get()};
                 d.context->CSSetShaderResources(0, 4, views);
                 auto *out = frame.buffers[1-current].output.Get();
                 d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
@@ -862,7 +1181,10 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
                 mixParams.padding = std::bit_cast<UINT>(float(entry.opacity));
                 d.context->CSSetShader(d.blurMixShader.Get(), nullptr, 0);
                 d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &mixParams, 0, 0);
-                ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), input, frame.layers[layer.id].source.view.Get()};
+                auto *coverage = textureOnly && frame.layers[layer.id].nativeSource
+                    ? frame.layers[layer.id].nativeSource->shaderResourceView.Get()
+                    : frame.layers[layer.id].source.view.Get();
+                ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), input, coverage};
                 d.context->CSSetShaderResources(0, 3, views);
                 auto *out = frame.buffers[1-current].output.Get();
                 d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
@@ -878,7 +1200,11 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             auto &cached=frame.layers[layer.id];
             params.padding=0;
             d.context->UpdateSubresource(d.settings.Get(),0,nullptr,&params,0,0);
-            ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), cached.effected?cached.effected->view.Get():cached.source.view.Get(),cached.effectCoverage.view.Get()};
+            auto *layerView = cached.effected ? cached.effected->view.Get()
+                                              : (textureOnly && cached.nativeSource
+                                                     ? cached.nativeSource->shaderResourceView.Get()
+                                                     : cached.source.view.Get());
+            ID3D11ShaderResourceView *views[]{frame.buffers[current].view.Get(), layerView, cached.effectCoverage.view.Get()};
             d.context->CSSetShaderResources(0, 3, views);
             auto *out = frame.buffers[1-current].output.Get();
             d.context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
@@ -889,40 +1215,115 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
             current = 1-current;
             params.firstLayer = 0;
         }
-        // Keep the packed texture and staging allocation resident, but transfer
-        // only the dirty rectangle. Empty stacks explicitly write transparency.
-        params.firstLayer = visibleLayers.isEmpty() ? 1 : 0;
-        d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &params, 0, 0);
-        d.context->CSSetShader(d.packShader.Get(), nullptr, 0);
-        auto *input = frame.buffers[current].view.Get();
-        auto *output = frame.packed.output.Get();
-        d.context->CSSetShaderResources(0, 1, &input);
-        d.context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
-        d.context->Dispatch((params.width+15)/16, (params.height+15)/16, 1);
-        ++metrics.packDispatches;
-        metrics.packedPixels += pixels;
-        unbind();
-        const D3D11_BOX box{UINT(dirty.left()), UINT(dirty.top()), 0,
-                            UINT(dirty.right()+1), UINT(dirty.bottom()+1), 1};
-        d.context->CopySubresourceRegion(frame.staging.Get(), 0, box.left, box.top, 0,
-                                         frame.packed.texture.Get(), 0, &box);
-        D3D11_MAPPED_SUBRESOURCE mapped{};
-        if (FAILED(d.context->Map(frame.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return failed();
-        ++metrics.readbacks;
-        metrics.readbackBytes += pixels * sampleBytes;
-        if (result.isNull()) result = QImage(target, pixelFormat(state.bitDepth));
-        // Detach before modifying the retained image: callers may still display
-        // earlier previews. Padding outside the copied region is never accessed.
-        auto *destination = result.bits();
-        if (!destination) { d.context->Unmap(frame.staging.Get(), 0); return failed(); }
-        for (int y = dirty.top(); y <= dirty.bottom(); ++y)
-            std::memcpy(destination + y * result.bytesPerLine() + dirty.left() * sampleBytes,
-                        static_cast<const char *>(mapped.pData) + y * mapped.RowPitch + dirty.left() * sampleBytes,
-                        size_t(dirty.width()) * sampleBytes);
-        d.context->Unmap(frame.staging.Get(), 0);
-        if (!d.ready()) { frames.clear(); processingCaches.clear(); return {}; }
+        frame.currentBuffer = current;
+        if (!textureOnly) {
+            // Keep the packed texture and staging allocation resident, but
+            // transfer only the dirty rectangle. Empty stacks explicitly write
+            // transparency.
+            params.firstLayer = visibleLayers.isEmpty() ? 1 : 0;
+            d.context->UpdateSubresource(d.settings.Get(), 0, nullptr, &params, 0, 0);
+            d.context->CSSetShader(d.packShader.Get(), nullptr, 0);
+            auto *input = frame.buffers[current].view.Get();
+            auto *output = frame.packed.output.Get();
+            d.context->CSSetShaderResources(0, 1, &input);
+            d.context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+            d.context->Dispatch((params.width+15)/16, (params.height+15)/16, 1);
+            ++metrics.packDispatches;
+            metrics.packedPixels += pixels;
+            unbind();
+            const D3D11_BOX box{UINT(dirty.left()), UINT(dirty.top()), 0,
+                                UINT(dirty.right()+1), UINT(dirty.bottom()+1), 1};
+            d.context->CopySubresourceRegion(frame.staging.Get(), 0, box.left, box.top, 0,
+                                             frame.packed.texture.Get(), 0, &box);
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (FAILED(d.context->Map(frame.staging.Get(), 0, D3D11_MAP_READ, 0, &mapped))) return failed();
+            ++metrics.readbacks;
+            metrics.readbackBytes += pixels * sampleBytes;
+            if (result.isNull()) result = QImage(target, pixelFormat(state.bitDepth));
+            // Detach before modifying the retained image: callers may still display
+            // earlier previews. Padding outside the copied region is never accessed.
+            auto *destination = result.bits();
+            if (!destination) { d.context->Unmap(frame.staging.Get(), 0); return failed(); }
+            for (int y = dirty.top(); y <= dirty.bottom(); ++y)
+                std::memcpy(destination + y * result.bytesPerLine() + dirty.left() * sampleBytes,
+                            static_cast<const char *>(mapped.pData) + y * mapped.RowPitch + dirty.left() * sampleBytes,
+                            size_t(dirty.width()) * sampleBytes);
+            d.context->Unmap(frame.staging.Get(), 0);
+            if (!d.ready()) { frames.clear(); processingCaches.clear(); return {}; }
+        } else {
+            // The composited float surface is copied to an immutable SRV.  The
+            // frame's ping-pong buffers are reused next frame, so returning one
+            // of them directly would expose a mutable resource to the presenter.
+            const quint64 snapshotBytes = area * 16;
+            if (residentBytes() + snapshotBytes > budget) {
+                const quint64 allowed = budget > snapshotBytes ? budget - snapshotBytes : 0;
+                trimCache(allowed, &frame);
+                if (residentBytes() + snapshotBytes > budget) return failed();
+            }
+            auto snapshot = std::make_shared<GpuNativeTexture>();
+            D3D11_TEXTURE2D_DESC desc{};
+            frame.buffers[current].texture->GetDesc(&desc);
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            desc.CPUAccessFlags = 0;
+            desc.MiscFlags = 0;
+            if (FAILED(d.device->CreateTexture2D(&desc, nullptr, &snapshot->texture)) ||
+                FAILED(d.device->CreateShaderResourceView(snapshot->texture.Get(), nullptr,
+                                                          &snapshot->shaderResourceView))) return failed();
+            d.context->CopyResource(snapshot->texture.Get(), frame.buffers[current].texture.Get());
+            snapshot->size = target;
+            snapshot->depth = state.bitDepth;
+            snapshot->bytes = snapshotBytes;
+            frame.textureSnapshot = snapshot;
+            textureSnapshots.emplace_back(snapshot);
+            frame.bytes += snapshotBytes;
+            ++metrics.textureFrameCopies;
+            ++metrics.noReadbackFrames;
+            metrics.externalBytes = externalTextureBytes();
+            publishTexture(snapshot);
+            // This render changed GPU state without producing a CPU image.  A
+            // later normal preview must therefore not return an old frame.result.
+            if (!dirty.isEmpty()) frame.result = {};
+            if (!d.ready()) { frames.clear(); processingCaches.clear(); return {}; }
+        }
     } else {
-        ++metrics.cacheHits;
+        if (textureOnly) {
+            const quint64 snapshotBytes = area * 16;
+            if (residentBytes() + snapshotBytes > budget) {
+                const quint64 allowed = budget > snapshotBytes ? budget - snapshotBytes : 0;
+                trimCache(allowed, &frame);
+                if (residentBytes() + snapshotBytes > budget) return failed();
+            }
+            auto snapshot = std::make_shared<GpuNativeTexture>();
+            D3D11_TEXTURE2D_DESC desc{};
+            frame.buffers[0].texture->GetDesc(&desc);
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            desc.CPUAccessFlags = 0;
+            desc.MiscFlags = 0;
+            if (FAILED(d.device->CreateTexture2D(&desc, nullptr, &snapshot->texture)) ||
+                FAILED(d.device->CreateShaderResourceView(snapshot->texture.Get(), nullptr,
+                                                          &snapshot->shaderResourceView))) return failed();
+            d.context->CopyResource(snapshot->texture.Get(), frame.buffers[frame.currentBuffer].texture.Get());
+            snapshot->size = target;
+            snapshot->depth = state.bitDepth;
+            snapshot->bytes = snapshotBytes;
+            frame.textureSnapshot = snapshot;
+            textureSnapshots.emplace_back(snapshot);
+            frame.bytes += snapshotBytes;
+            ++metrics.textureFrameCopies;
+            ++metrics.noReadbackFrames;
+            metrics.externalBytes = externalTextureBytes();
+            publishTexture(snapshot);
+        } else {
+            ++metrics.cacheHits;
+        }
+    }
+    if (textureOnly) {
+        metrics.externalBytes = externalTextureBytes();
+        frame.signature = signature;
+        frame.stackSignature = stackSignature;
+        return {};
     }
     result.setColorSpace(QColorSpace::SRgb);
     result.setDotsPerMeterX(qRound(state.resolution / .0254));
@@ -934,5 +1335,15 @@ QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin)
 #else
     Q_UNUSED(state); Q_UNUSED(target); Q_UNUSED(viewportOrigin); return {};
 #endif
+}
+
+QImage renderGpuPreview(const State &state, QSize target, QPoint viewportOrigin) {
+    return renderGpuPreviewImpl(state, target, viewportOrigin);
+}
+
+std::shared_ptr<GpuPreviewTexture> renderGpuTexture(const State &state, QSize target, QPoint viewportOrigin) {
+    std::shared_ptr<GpuPreviewTexture> result;
+    renderGpuPreviewImpl(state, target, viewportOrigin, &result);
+    return result;
 }
 } // namespace comp

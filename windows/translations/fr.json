@@ -544,6 +544,8 @@
   "rememberWindow": "Mémoriser la taille et la position de la fenêtre",
   "autoReload": "Recharger les projets modifiés par d’autres applications",
   "autoReloadNote": "Seuls les documents sans modifications non enregistrées sont rechargés. Vos retouches sont conservées dans les autres documents.",
+  "gpuEditingExperimental": "Utiliser le GPU pour peindre, effacer, cloner, le pinceau de flou et la retouche (expérimental)",
+  "gpuEditingNote": "Utilise le GPU pour peindre, effacer, cloner, appliquer le pinceau de flou, effectuer des retouches et utiliser la perspective. Expérimental : peut être plus lent que le CPU ; les autres fonctions GPU sont inchangées.",
   "defaultBitDepth": "Profondeur par défaut",
   "defaultResolution": "Résolution par défaut",
   "newDocumentDefaultsNote": "La profondeur et la résolution s’appliquent aux nouvelles zones de travail. Les réglages d’affichage s’appliquent à l’espace de travail.",
@@ -605,5 +607,9 @@
   "refineEdges": "Améliorer les contours",
   "matteContrast": "Contraste du masque",
   "shiftEdge": "Décaler le contour",
-  "psdCropped": "Les pixels des calques hors du canevas ont été omis pour respecter le budget mémoire du document."
+  "psdCropped": "Les pixels des calques hors du canevas ont été omis pour respecter le budget mémoire du document.",
+  "exportRenderer": "Moteur de rendu",
+  "exportRendererCpu": "Référence CPU",
+  "exportRendererGpu": "Accélération GPU",
+  "exportGpuNote": "Le rééchantillonnage et les effets peuvent légèrement différer sur GPU. Les opérations non prises en charge utilisent le CPU."
 }

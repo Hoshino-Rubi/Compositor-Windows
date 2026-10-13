@@ -544,6 +544,8 @@
   "rememberWindow": "창 크기와 위치 기억",
   "autoReload": "다른 앱에서 변경한 프로젝트 다시 불러오기",
   "autoReloadNote": "저장하지 않은 편집이 없는 문서만 다시 불러옵니다. 편집 중인 문서는 변경 사항을 유지합니다.",
+  "gpuEditingExperimental": "페인트, 지우개, 복제, 흐림 브러시 및 복구에 GPU 사용(실험적)",
+  "gpuEditingNote": "페인트, 지우개, 복제, 흐림 브러시, 복구 및 원근에 GPU를 사용합니다. 실험적 기능이므로 CPU보다 느릴 수 있으며 다른 GPU 기능은 변경되지 않습니다.",
   "defaultBitDepth": "기본 비트 심도",
   "defaultResolution": "기본 해상도",
   "newDocumentDefaultsNote": "비트 심도와 해상도는 새 캔버스에 적용됩니다. 표시 설정은 작업 영역에 적용됩니다.",
@@ -605,5 +607,9 @@
   "refineEdges": "가장자리 다듬기",
   "matteContrast": "매트 대비",
   "shiftEdge": "가장자리 이동",
-  "psdCropped": "문서 메모리 제한을 맞추기 위해 캔버스 밖의 레이어 픽셀을 제외했습니다."
+  "psdCropped": "문서 메모리 제한을 맞추기 위해 캔버스 밖의 레이어 픽셀을 제외했습니다.",
+  "exportRenderer": "렌더러",
+  "exportRendererCpu": "CPU 기준 렌더링",
+  "exportRendererGpu": "GPU 가속",
+  "exportGpuNote": "GPU 출력의 리샘플링 및 효과에 약간의 차이가 있을 수 있습니다. 지원하지 않는 작업은 CPU로 처리됩니다."
 }

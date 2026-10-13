@@ -544,6 +544,8 @@
   "rememberWindow": "Fenstergröße und -position merken",
   "autoReload": "Extern geänderte Projekte neu laden",
   "autoReloadNote": "Nur Dokumente ohne ungespeicherte Änderungen werden neu geladen. Bearbeitete Dokumente behalten Ihre Änderungen.",
+  "gpuEditingExperimental": "GPU für Malen, Radierer, Klonen, Weichzeichnerpinsel und Heilung verwenden (experimentell)",
+  "gpuEditingNote": "Verwendet die GPU für Malen, Radierer, Klonen, Weichzeichnerpinsel, Heilung und Perspektive. Experimentell: kann langsamer als die CPU sein; andere GPU-Funktionen bleiben unverändert.",
   "defaultBitDepth": "Standardbittiefe",
   "defaultResolution": "Standardauflösung",
   "newDocumentDefaultsNote": "Bittiefe und Auflösung gelten für neue Leinwände. Anzeigeeinstellungen gelten für den Arbeitsbereich.",
@@ -605,5 +607,9 @@
   "refineEdges": "Kanten verbessern",
   "matteContrast": "Maskenkontrast",
   "shiftEdge": "Kante verschieben",
-  "psdCropped": "Ebenenpixel außerhalb der Leinwand wurden ausgelassen, um das Speicherbudget des Dokuments einzuhalten."
+  "psdCropped": "Ebenenpixel außerhalb der Leinwand wurden ausgelassen, um das Speicherbudget des Dokuments einzuhalten.",
+  "exportRenderer": "Renderer",
+  "exportRendererCpu": "CPU-Referenz",
+  "exportRendererGpu": "GPU-beschleunigt",
+  "exportGpuNote": "Bei GPU-Ausgabe können Neuberechnung und Effekte leicht abweichen. Nicht unterstützte Vorgänge werden auf der CPU ausgeführt."
 }

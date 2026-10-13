@@ -1,3 +1,20 @@
+# Windows 0.4.1a7 pre-release verification
+
+Windows x64 / MSVC 2022 / Qt 6.8.3, October 13, 2026 (Asia/Taipei). Pre-release only; stable Latest remains `windows-v0.4.0`.
+
+- Native and extracted portable builds: eight suites, **186 passes, one optional external HEIC-alpha fixture skipped, zero failures**, including initialization/cleanup. Breakdown: core 131/1 skip, warp 11, editing 12, perspective 8, display 5, surfaces 5, textures 8, export 6. Reports are generated locally as `windows/test-results/a7-{suite}-{native|portable}-release.xml`.
+- Real hardware is required by `COMPOSITOR_REQUIRE_GPU=1`; benchmarks use `COMPOSITOR_GPU_BENCHMARK=1` and `COMPOSITOR_PERSPECTIVE_PERF=1`. Tests exercise GPU counters and reject silent CPU fallback in supported fixtures.
+- Native display uses hidden-window D3D swap-chain pixel readback **only in tests**, checking sprite UV/target bounds, overlay order, immutable snapshots, cache clearing and repeated resize. This does not certify an interactive session on every driver/DPI configuration.
+- GPU edits cover 8/16-bit brush/eraser/clone/blur, fractional transforms, selections, masks and undo. Three healing modes match reference samples within one native channel level after GPU pyramid/wavefront solving. Perspective verifies 512-square colored/opaque samples, geometric transparency, metadata and strict budget failure. Geometric coverage is CPU-prepared from constant white, never a CPU-transformed document image.
+- Layer tests cover nearest/smooth identity, fractional translation, scale, rotation and reflections. Nearest cases are exact in these fixtures. Smooth geometry is within 4/11 native steps at 8/16-bit. One 8-bit mask-edge sample differs from Qt by five levels: Qt's 1/16-weight SIMD gives alpha102, while independent full-fraction interpolation and GPU both give alpha97. That case has explicit analytic and mean-error assertions; 16-bit mask tolerance is 32 native steps. Adjustment/group/clip texture comparisons are within one native step; nested folder effects within two.
+- New editing paths, including perspective, are opt-in and default OFF because warm local end-to-end fixtures are slower than CPU. Release notes record median-of-three measurements including coverage, transfer and readback. Existing GPU filters/liquify and native display remain independent. Sequential denoise/error-diffusion CPU routing is preserved.
+- Export remains reference-CPU by default; explicit GPU tests cover native 16-bit PNG, metadata, >8MP tiled output, disable/fallback and CPU-side encoding. Shapes, text, analysis and geometry preparation remain CPU-backed. No all-GPU, zero-copy or universal-speedup claim.
+- Eight language catalogs have identical 613-key sets. `.comp` format and runtime dependencies are unchanged. Packaged app is byte-identical to the tested Release executable; QtTest/offscreen test files are copied only into validation extraction, not the release ZIP.
+
+- Portable ZIP: 26,451,406 bytes; SHA-256 `efa8be586c00eb50f42478a108099919228c982d22c8ca95742def3379b2d1d4`. Application SHA-256 `99622b34219031da95f26310d126a3d043a510432cd182aac0b5a214319c1806` matches the tested native executable.
+
+---
+
 # Windows 0.4.1a4 pre-release verification
 
 Verified on Windows x64 / MSVC 2022 / Qt 6.8.3, October 11, 2026 (Asia/Taipei). Fourth GPU-pipeline batch; **pre-release only**, stable Latest remains `windows-v0.4.0`. Upstream baseline remains `3081719d5178b466214860fe5fcf5691394dc558`.

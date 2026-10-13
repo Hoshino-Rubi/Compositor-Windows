@@ -3,6 +3,8 @@
 #include "Selection.h"
 #include "Renderer.h"
 #include "Warp.h"
+#include "GpuPerspective.h"
+#include "Preferences.h"
 #include <QtConcurrent>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -256,7 +258,8 @@ void MainWindow::transformDialog(bool distort) {
                                       {0, double(l.image.height())}};
                     auto quad = map.map(l.placement.matrix(l.image.size()).map(corners));
                     auto box = quad.boundingRect().toAlignedRect();
-                    l.image = perspectiveWarp(l.image, quad);
+                    const auto warp = Preferences::gpuEditingEnabled() ? perspectiveWarpAccelerated : perspectiveWarp;
+                    l.image = warp(l.image, quad);
                     if (!l.mask.isNull()) {
                         const auto maskPlace = l.maskLinked ? l.placement : l.maskPlacement;
                         QPolygonF maskCorners{{0, 0},
@@ -265,7 +268,7 @@ void MainWindow::transformDialog(bool distort) {
                                               {0, double(l.mask.height())}};
                         auto maskQuad = map.map(maskPlace.matrix(l.mask.size()).map(maskCorners));
                         auto rect = maskQuad.boundingRect().toAlignedRect();
-                        l.mask = maskImage(perspectiveWarp(l.mask.convertToFormat(pixelFormat(s.bitDepth)), maskQuad),
+                        l.mask = maskImage(warp(l.mask.convertToFormat(pixelFormat(s.bitDepth)), maskQuad),
                                            s.bitDepth);
                         l.maskLinked = false;
                         l.maskPlacement = {};

@@ -544,6 +544,8 @@
   "rememberWindow": "Recordar tamaño y posición de ventana",
   "autoReload": "Recargar proyectos modificados por otras aplicaciones",
   "autoReloadNote": "Solo se recargan documentos sin cambios pendientes. Los documentos modificados conservan tus ediciones.",
+  "gpuEditingExperimental": "Usar la GPU para pintar, borrar, clonar, pincel de desenfoque y reparar (experimental)",
+  "gpuEditingNote": "Usa la GPU para pintar, borrar, clonar, aplicar el pincel de desenfoque, reparar y usar la perspectiva. Experimental: puede ser más lento que la CPU; las demás funciones de GPU no cambian.",
   "defaultBitDepth": "Profundidad predeterminada",
   "defaultResolution": "Resolución predeterminada",
   "newDocumentDefaultsNote": "La profundidad y resolución se aplican a nuevos lienzos. Los ajustes de visualización se aplican al espacio de trabajo.",
@@ -605,5 +607,9 @@
   "refineEdges": "Perfeccionar bordes",
   "matteContrast": "Contraste de máscara",
   "shiftEdge": "Desplazar borde",
-  "psdCropped": "Se omitieron los píxeles de las capas fuera del lienzo para respetar el límite de memoria del documento."
+  "psdCropped": "Se omitieron los píxeles de las capas fuera del lienzo para respetar el límite de memoria del documento.",
+  "exportRenderer": "Motor de renderizado",
+  "exportRendererCpu": "Referencia de CPU",
+  "exportRendererGpu": "Aceleración por GPU",
+  "exportGpuNote": "El remuestreo y los efectos pueden variar ligeramente en la salida de GPU. Las operaciones no compatibles se procesan en la CPU."
 }

@@ -544,6 +544,8 @@
   "rememberWindow": "记住窗口大小与位置",
   "autoReload": "自动重新加载被其他应用修改的项目",
   "autoReloadNote": "仅重新加载没有未保存更改的文档；存在本地编辑时会保留你的修改。",
+  "gpuEditingExperimental": "使用 GPU 进行绘画、橡皮擦、克隆、模糊画笔和修复（实验性）",
+  "gpuEditingNote": "使用 GPU 进行绘画、橡皮擦、克隆、模糊画笔、修复和透视。实验性功能：速度可能比 CPU 慢；其他 GPU 功能不受影响。",
   "defaultBitDepth": "默认位深",
   "defaultResolution": "默认分辨率",
   "newDocumentDefaultsNote": "位深和分辨率用于新建画布；显示设置应用于工作区。",
@@ -605,5 +607,9 @@
   "refineEdges": "优化边缘",
   "matteContrast": "蒙版对比度",
   "shiftEdge": "移动边缘",
-  "psdCropped": "为符合文档内存预算，已省略画布外的图层像素。"
+  "psdCropped": "为符合文档内存预算，已省略画布外的图层像素。",
+  "exportRenderer": "渲染器",
+  "exportRendererCpu": "CPU 参考渲染",
+  "exportRendererGpu": "GPU 加速",
+  "exportGpuNote": "GPU 输出在重采样和效果上可能有细微差异。不支持的操作会回退到 CPU。"
 }

@@ -4,6 +4,12 @@
 #include "Renderer.h"
 #include "Filters.h"
 #include "GpuWarp.h"
+#include "GpuNative.h"
+#include "GpuHeal.h"
+#include "GpuPaintStroke.h"
+#include "GpuPreview.h"
+#include "Preferences.h"
+#include <QGuiApplication>
 #include "Warp.h"
 #include "Selection.h"
 #include "Text.h"
@@ -39,6 +45,9 @@ Canvas::Canvas(Document *document, QWidget *parent) : QWidget(parent), document_
             renderedDocument_ = document_->state().id;
             preview_ = QImage();
             frame_ = {};
+            nativePresentation_ = false;
+            setAttribute(Qt::WA_PaintOnScreen, false);
+            setAttribute(Qt::WA_OpaquePaintEvent, false);
             fit();
         }
         scheduleRender();
@@ -54,6 +63,13 @@ Canvas::Canvas(Document *document, QWidget *parent) : QWidget(parent), document_
             if (runningGeneration_ == generation_) {
                 frame_ = watcher_.result();
                 preview_ = frame_.overview;
+                const bool native = bool(frame_.overviewTexture) && !gpuPresentationFailed_;
+                if (native != nativePresentation_) {
+                    nativePresentation_ = native;
+                    if (native) setAttribute(Qt::WA_NativeWindow);
+                    setAttribute(Qt::WA_PaintOnScreen, native);
+                    setAttribute(Qt::WA_OpaquePaintEvent, native);
+                }
             }
         } catch (const Error &e) {
             emit failed(e.key, e.detail);
@@ -92,8 +108,10 @@ void Canvas::startRender() {
     const auto revision = contentRevision_;
     renderCancelled_ = std::make_shared<std::atomic_bool>(false);
     const auto cancelled = renderCancelled_;
-    watcher_.setFuture(QtConcurrent::run([state, target, visible, detailed, revision, previous, cancelled] {
-        return renderCanvasPreview(state, visible, target, detailed, revision, previous, cancelled);
+    const bool preferGpu = QGuiApplication::platformName() == "windows" && !gpuPresentationFailed_ &&
+                           !qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU");
+    watcher_.setFuture(QtConcurrent::run([state, target, visible, detailed, revision, previous, cancelled, preferGpu] {
+        return renderCanvasPreview(state, visible, target, detailed, revision, previous, cancelled, preferGpu);
     }));
 }
 bool Canvas::isBrush() const {
@@ -180,8 +198,20 @@ void Canvas::snapTargets(const State &state, QVector<double> &xs, QVector<double
             ys << box.top() << box.center().y() << box.bottom();
         }
 }
+QPaintEngine *Canvas::paintEngine() const {
+    return nativePresentation_ ? nullptr : QWidget::paintEngine();
+}
 void Canvas::paintEvent(QPaintEvent *) {
-    QPainter p(this);
+    const bool native = nativePresentation_ && frame_.overviewTexture && document_->hasDocument();
+    const double dpr = devicePixelRatioF();
+    const QSize physical(qMax(1, qRound(width()*dpr)), qMax(1, qRound(height()*dpr)));
+    QImage underlay, overlay;
+    if (native) {
+        overlay = QImage(physical, QImage::Format_ARGB32_Premultiplied);
+        overlay.setDevicePixelRatio(dpr);
+        overlay.fill(Qt::transparent);
+    }
+    QPainter p(native ? static_cast<QPaintDevice *>(&overlay) : static_cast<QPaintDevice *>(this));
     p.fillRect(rect(), fullscreenCanvas_ ? QColor(Qt::black) : QColor("#1c1c1c"));
     if (!document_->hasDocument())
         return;
@@ -199,10 +229,21 @@ void Canvas::paintEvent(QPaintEvent *) {
     p.setClipRect(canvas);
     p.fillRect(canvas, QBrush(checker));
     p.setRenderHint(QPainter::SmoothPixmapTransform, zoom_ < 1);
-    p.drawImage(canvas, preview_);
-    for (const auto &tile : frame_.tiles)
-        p.drawImage(QRectF(viewPoint(tile.rectangle.topLeft()), QSizeF(tile.rectangle.size()) * zoom_), tile.image);
-    p.restore();
+    if (!native) {
+        p.drawImage(canvas, preview_);
+        for (const auto &tile : frame_.tiles)
+            p.drawImage(QRectF(viewPoint(tile.rectangle.topLeft()), QSizeF(tile.rectangle.size()) * zoom_), tile.image);
+        p.restore();
+    } else {
+        p.restore();
+        const auto nav = navigatorRect();
+        if (!nav.isEmpty()) p.fillRect(nav, QBrush(checker));
+        p.end();
+        underlay = std::move(overlay);
+        overlay = QImage(physical, QImage::Format_ARGB32_Premultiplied);
+        overlay.setDevicePixelRatio(dpr); overlay.fill(Qt::transparent);
+        p.begin(&overlay);
+    }
     p.save();
     p.translate(offset_);
     p.scale(zoom_, zoom_);
@@ -331,8 +372,13 @@ void Canvas::paintEvent(QPaintEvent *) {
     const auto nav = navigatorRect();
     if (!nav.isEmpty()) {
         p.fillRect(nav.adjusted(-5, -5, 5, 5), QColor(20, 20, 20, 235));
-        p.fillRect(nav, QBrush(checker));
-        p.drawImage(nav, preview_);
+        if (native) {
+            p.save();p.setCompositionMode(QPainter::CompositionMode_Source);
+            p.fillRect(nav, Qt::transparent);p.restore();
+        } else {
+            p.fillRect(nav, QBrush(checker));
+            p.drawImage(nav, preview_);
+        }
         const QRectF visible(documentPoint(QPointF(0, 0)), documentPoint(QPointF(width(), height())));
         const QRectF clipped = visible.intersected(QRectF(QPointF(), size));
         QRectF viewport(nav.x() + clipped.x() / size.width() * nav.width(),
@@ -341,6 +387,39 @@ void Canvas::paintEvent(QPaintEvent *) {
         p.setBrush(QColor(255, 255, 255, 30));
         p.setPen(QPen(Qt::white, 1.5));
         p.drawRect(viewport);
+    }
+    if (native) {
+        p.end();
+#ifdef Q_OS_WIN
+        if (!gpuPresenter_) gpuPresenter_ = std::make_unique<GpuCanvasPresenter>();
+        QVector<GpuCanvasSprite> sprites;
+        const auto append = [&](const std::shared_ptr<GpuPreviewTexture> &texture, QRectF destination, QRectF source = {}) {
+            if (!texture || !texture->native) return;
+            sprites.append({texture->native->shaderResourceView.Get(), texture->size, source,
+                            QRectF(destination.topLeft()*dpr, destination.size()*dpr), zoom_ < 1});
+        };
+        append(frame_.overviewTexture, canvas);
+        for (const auto &tile : frame_.tiles)
+            append(tile.texture, QRectF(viewPoint(tile.rectangle.topLeft()),QSizeF(tile.rectangle.size())*zoom_),
+                   tile.textureSource);
+        if (!nav.isEmpty()) append(frame_.overviewTexture, nav);
+        bool presented = false;
+        runGpuNative([&](ID3D11Device *device, ID3D11DeviceContext *context, quint64) {
+            presented = gpuPresenter_->present(device,context,reinterpret_cast<HWND>(winId()),physical,
+                                                  underlay,overlay,sprites);
+            const auto info = gpuPresenter_->lastPresent();
+            GpuNativeResult result;
+            result.uploadedBytes = info.underlayUploadBytes + info.overlayUploadBytes;
+            return result;
+        });
+        if (presented) return;
+#endif
+        gpuPresentationFailed_ = true;
+        nativePresentation_ = false;
+        setAttribute(Qt::WA_PaintOnScreen,false);setAttribute(Qt::WA_OpaquePaintEvent,false);
+        if (gpuPresenter_) gpuPresenter_->release();
+        frame_ = {}; ++contentRevision_;
+        scheduleRender();
     }
 }
 void Canvas::resizeEvent(QResizeEvent *e) {
@@ -531,7 +610,7 @@ void Canvas::mousePressEvent(QMouseEvent *e) {
         if (tool_ == Tool::Clone || tool_ == Tool::Blur) {
             retouchSource_ = document_->state().layers[i].image;
             if (tool_ == Tool::Blur && retouchMode_ == 0)
-                retouchSource_ = blurImage(retouchSource_, blurRadius_);
+                retouchSource_ = filteredAccelerated(retouchSource_, {{"kind", "Gaussian Blur"}, {"blurRadius", blurRadius_}});
             else if (tool_ == Tool::Clone) {
                 if (cloneSampleAll_) {
                     QImage merged = comp::render(document_->state());
@@ -645,6 +724,17 @@ void Canvas::paintStroke(QPointF from, QPointF to) {
         return;
     }
     const QImage beforeDab = *target;
+    const auto hardSelection = s.selectionActive && s.selectionMask.isNull() ? s.selection : QPainterPath();
+    if (Preferences::gpuEditingEnabled() &&
+        (!s.selectionActive || !s.selectionMask.isNull() || !hardSelection.isEmpty()) &&
+        paintStrokeAccelerated(*target, from, to, brushSize_, hardness_, flow_, color_, tool_ == Tool::Eraser,
+                               maskTarget_, placement.matrix(target->size()).inverted(), hardSelection,
+                               retouchSource_, tool_ == Tool::Clone ? cloneOffset_ : QPointF(),
+                               tool_ == Tool::Clone || tool_ == Tool::Blur)) {
+        if (!s.selectionMask.isNull()) constrainSelection(s, placement, beforeDab, *target);
+        document_->preview();
+        return;
+    }
     QPainter painter(target);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setTransform(placement.matrix(target->size()).inverted());
@@ -974,13 +1064,17 @@ void Canvas::finishHealing() {
     for (int y = 0; y < image.height(); ++y)
         memcpy(coverage.data() + y * image.width(), mask.constScanLine(y), image.width());
     const auto *coverageBytes = reinterpret_cast<const uint8_t *>(coverage.constData());
-    const int healResult =
-        s.bitDepth == 16 ? wide::spot_heal(reinterpret_cast<quint16 *>(image.bits()), coverageBytes, image.width(),
-                                           image.height(), image.bytesPerLine() / 2, float(flow_), healingMode_, 0)
-                         : spot_heal(image.bits(), coverageBytes, image.width(), image.height(), image.bytesPerLine(),
-                                     float(flow_), healingMode_, 0);
-    if (healResult < 0)
-        throw Error("tooLarge");
+    const auto gpuHealed = Preferences::gpuEditingEnabled()
+                               ? healGpuImage(image, mask, float(flow_), healingMode_, 0) : QImage();
+    if (!gpuHealed.isNull()) image = gpuHealed;
+    else {
+        const int healResult =
+            s.bitDepth == 16 ? wide::spot_heal(reinterpret_cast<quint16 *>(image.bits()), coverageBytes, image.width(),
+                                               image.height(), image.bytesPerLine() / 2, float(flow_), healingMode_, 0)
+                             : spot_heal(image.bits(), coverageBytes, image.width(), image.height(), image.bytesPerLine(),
+                                         float(flow_), healingMode_, 0);
+        if (healResult < 0) throw Error("tooLarge");
+    }
     auto healed = image.convertToFormat(pixelFormat(s.bitDepth));
     if (!s.selectionMask.isNull())
         constrainSelection(s, l.placement, l.image, healed);
@@ -1284,6 +1378,9 @@ void Canvas::beginInlineText(const QString &id) {
     inlineTextId_ = id;
     inlineText_ = new QTextEdit(this);
     inlineText_->setObjectName("inlineTextEditor");
+    // A paint-on-screen parent has no QWidget backing store for alien children.
+    // Give the inline editor its own native surface above the swap chain.
+    if (testAttribute(Qt::WA_NativeWindow)) inlineText_->setAttribute(Qt::WA_NativeWindow);
     inlineText_->setAcceptRichText(false);
     auto displayStyle = layer.metadata["text"].toObject();
     double scale = zoom_ * layer.placement.size.height() / std::max(1, layer.image.height());

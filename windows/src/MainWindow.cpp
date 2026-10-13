@@ -615,6 +615,10 @@ void MainWindow::exportImage() {
     format.addItem("PNG", "png");
     format.addItem("JPEG", "jpeg");
     format.addItem("PDF", "pdf");
+    QComboBox renderer;
+    renderer.setObjectName("exportRenderer");
+    renderer.addItem(t("exportRendererCpu"), int(ExportRenderer::ReferenceCpu));
+    renderer.addItem(t("exportRendererGpu"), int(ExportRenderer::AcceleratedGpu));
     QSpinBox width, height, quality;
     width.setRange(1, MaxSide);
     height.setRange(1, MaxSide);
@@ -625,6 +629,7 @@ void MainWindow::exportImage() {
     QCheckBox aspect(t("keepAspect"));
     aspect.setChecked(true);
     form->addRow(t("format"), &format);
+    form->addRow(t("exportRenderer"), &renderer);
     form->addRow(t("width"), &width);
     form->addRow(t("height"), &height);
     form->addRow(&aspect);
@@ -633,11 +638,14 @@ void MainWindow::exportImage() {
     auto *precisionNote = new QLabel(t("exportPrecisionNote"));
     precisionNote->setWordWrap(true);
     layout->addWidget(precisionNote);
+    auto *gpuNote = new QLabel(t("exportGpuNote"));
+    gpuNote->setWordWrap(true);
+    layout->addWidget(gpuNote);
     auto *preview = new QLabel;
     preview->setMinimumSize(460, 250);
     preview->setAlignment(Qt::AlignCenter);
     layout->addWidget(preview, 1);
-    const auto image = comp::render(document_.state(), document_.state().size.scaled(540, 280, Qt::KeepAspectRatio));
+    auto image = comp::render(document_.state(), document_.state().size.scaled(540, 280, Qt::KeepAspectRatio));
     auto update = [&] {
         quality.setEnabled(format.currentData() == "jpeg");
         QImage tile(16, 16, QImage::Format_RGB32);
@@ -672,6 +680,11 @@ void MainWindow::exportImage() {
         update();
     });
     connect(&format, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, update);
+    connect(&renderer, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] {
+        image = renderExportImage(document_.state(), document_.state().size.scaled(540, 280, Qt::KeepAspectRatio),
+                                  ExportRenderer(renderer.currentData().toInt()));
+        update();
+    });
     update();
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     buttons->button(QDialogButtonBox::Ok)->setText(t("exportAction"));
@@ -694,7 +707,9 @@ void MainWindow::exportImage() {
         return;
     const State snapshot = document_.state();
     runIO([snapshot, file, encoding, size = QSize(width.value(), height.value()),
-           q = quality.value()] { exportDocument(snapshot, file, encoding, size, q); },
+           q = quality.value(), selectedRenderer = ExportRenderer(renderer.currentData().toInt())] {
+              exportDocument(snapshot, file, encoding, size, q, selectedRenderer);
+          },
           [this] { statusBar()->showMessage(t("exported"), 3000); });
 }
 void MainWindow::sample() {

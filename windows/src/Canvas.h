@@ -1,6 +1,7 @@
 #pragma once
 #include "Document.h"
 #include "PreviewRenderer.h"
+#include "GpuCanvasPresenter.h"
 #include <QWidget>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -125,6 +126,7 @@ class Canvas : public QWidget {
     void objectRequested(QPoint point);
 
   protected:
+    QPaintEngine *paintEngine() const override;
     void paintEvent(QPaintEvent *) override;
     void resizeEvent(QResizeEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
@@ -150,6 +152,8 @@ class Canvas : public QWidget {
     bool dragging_ = false, panning_ = false, space_ = false, maskTarget_ = false, guides_ = true, resizing_ = false;
     State start_;
     QRectF draftRect_;
+    bool nativePresentation_ = false, gpuPresentationFailed_ = false;
+    std::unique_ptr<GpuCanvasPresenter> gpuPresenter_;
     QImage preview_;
     CanvasPreview frame_;
     quint64 contentRevision_ = 1;

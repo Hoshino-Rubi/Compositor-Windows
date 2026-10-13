@@ -1,14 +1,23 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a6 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a7 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a6). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a7). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a6-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a7-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a7 — GPU editing, transforms, export and native presentation (pre-release)
+
+- Adds Direct3D 11 paths for paint, eraser, clone, blur brush, healing and perspective transforms in 8/16-bit documents, preserving selections and undo. Qt still prepares tip/selection coverage and perspective geometry from a constant white texel; pixel sampling, blending and solving run on the GPU when the experimental editing preference is enabled. That preference is **off by default** and controls only paint, eraser, clone, blur, healing and perspective; current warm measurements are slower than the CPU reference, so it remains an evaluation switch rather than a speed promise. Unsuitable or resource-limited requests retain CPU fallback.
+- The native Windows canvas can present GPU composites directly without synchronously reading document pixels back for that display path. Layer image/mask transforms and blending run on the GPU; Qt still draws interface overlays. Offscreen or unavailable hardware uses the reference canvas.
+- Native display and Export As renderer selection are independent of the experimental editing preference. Export now offers an explicit renderer choice: CPU reference remains the default, with GPU output opt-in. Large local renders use tiles; large full-image adjustments and nonuniform resize may fall back to CPU. PNG/JPEG/PDF encoding remains CPU work.
+- Sequential luminance denoising and Atkinson/Floyd–Steinberg retain their performance-validated CPU routing. Project format, runtime dependencies and the eight existing interface languages are unchanged.
+
+**Pre-release only; Latest stays 0.4.0.** GPU paths do not imply that every operation is GPU-resident, pixel-identical or always faster. See [release notes](releases/0.4.1a7.md) for scope, validation and measurements.
 
 ## Version 0.4.1a6 — GPU liquify/smudge and transfer reuse (pre-release)
 

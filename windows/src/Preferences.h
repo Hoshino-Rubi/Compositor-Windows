@@ -17,7 +17,9 @@ struct Preferences {
     bool snapGuides = true, snapGrid = false, snapLayers = true, snapBounds = true;
     bool lockGuides = false, pixelGrid = false, transformControls = true;
     bool rememberWindow = true, autoReload = true;
+    bool gpuEditingExperimental = false;
     static Preferences load();
+    static bool gpuEditingEnabled();
     void save() const;
 };
 class PreferencesDialog : public QDialog {
@@ -35,7 +37,7 @@ class PreferencesDialog : public QDialog {
     QTabWidget *sections_;
     QComboBox *language_, *depth_, *resolution_;
     QSpinBox *spacing_;
-    QCheckBox *remember_, *reload_, *rulers_, *grid_, *guides_, *snap_;
+    QCheckBox *remember_, *reload_, *gpuEditingExperimental_, *rulers_, *grid_, *guides_, *snap_;
     QCheckBox *snapGuides_, *snapGrid_, *snapLayers_, *snapBounds_, *lockGuides_, *pixelGrid_, *transformControls_;
     QTableWidget *shortcuts_;
     QLabel *shortcutStatus_;
