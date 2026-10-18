@@ -822,7 +822,7 @@ class GpuEditTests : public QObject {
         }
     }
 
-    void gpuEditingPreferenceGatesCanvasAndPreservesUndo() {
+    void retiredGpuEditingUsesCpuAndPreservesUndo() {
         QSettings settings;
         settings.remove("rendering/gpuEditingExperimental");
         settings.setValue("preferences/gridSpacing", 731);
@@ -832,15 +832,15 @@ class GpuEditTests : public QObject {
 
         settings.setValue("rendering/gpuEditingExperimental", true);
         settings.sync();
-        QVERIFY(Preferences::gpuEditingEnabled());
+        QVERIFY(!Preferences::gpuEditingEnabled());
         Preferences saved = Preferences::load();
-        QVERIFY(saved.gpuEditingExperimental);
+        QVERIFY(!saved.gpuEditingExperimental);
         saved.gpuEditingExperimental = false;
         saved.save();
         QVERIFY(!Preferences::gpuEditingEnabled());
         saved.gpuEditingExperimental = true;
         saved.save();
-        QVERIFY(Preferences::gpuEditingEnabled());
+        QVERIFY(!Preferences::gpuEditingEnabled());
         QCOMPARE(QSettings().value("preferences/gridSpacing").toInt(), 731);
 
         const QSize size(600, 256);
@@ -894,20 +894,14 @@ class GpuEditTests : public QObject {
         saved = Preferences::load();
         saved.gpuEditingExperimental = true;
         saved.save();
-        QVERIFY(Preferences::gpuEditingEnabled());
+        QVERIFY(!Preferences::gpuEditingEnabled());
         canvas.fit();
         QCoreApplication::processEvents();
         resetGpuPreviewMetrics();
         stroke();
         const auto gpuMetrics = gpuPreviewMetrics();
-        if (gpuMetrics.processingDispatches == 0 || gpuMetrics.readbacks == 0) {
-            const QString message = QString("Canvas GPU preference did not dispatch: dispatches=%1 readbacks=%2")
-                                        .arg(gpuMetrics.processingDispatches)
-                                        .arg(gpuMetrics.readbacks);
-            if (qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU"))
-                QFAIL(qPrintable(message));
-            QSKIP(qPrintable(message));
-        }
+        QCOMPARE(gpuMetrics.processingDispatches, quint64(0));
+        QCOMPARE(gpuMetrics.readbacks, quint64(0));
         QVERIFY(document.canUndo());
         QVERIFY(document.state().layers[0].image != original);
         document.undo();

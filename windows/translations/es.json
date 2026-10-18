@@ -544,8 +544,6 @@
   "rememberWindow": "Recordar tamaño y posición de ventana",
   "autoReload": "Recargar proyectos modificados por otras aplicaciones",
   "autoReloadNote": "Solo se recargan documentos sin cambios pendientes. Los documentos modificados conservan tus ediciones.",
-  "gpuEditingExperimental": "Usar la GPU para pintar, borrar, clonar, pincel de desenfoque y reparar (experimental)",
-  "gpuEditingNote": "Usa la GPU para pintar, borrar, clonar, aplicar el pincel de desenfoque, reparar y usar la perspectiva. Experimental: puede ser más lento que la CPU; las demás funciones de GPU no cambian.",
   "defaultBitDepth": "Profundidad predeterminada",
   "defaultResolution": "Resolución predeterminada",
   "newDocumentDefaultsNote": "La profundidad y resolución se aplican a nuevos lienzos. Los ajustes de visualización se aplican al espacio de trabajo.",
@@ -611,5 +609,15 @@
   "exportRenderer": "Motor de renderizado",
   "exportRendererCpu": "Referencia de CPU",
   "exportRendererGpu": "Aceleración por GPU",
-  "exportGpuNote": "El remuestreo y los efectos pueden variar ligeramente en la salida de GPU. Las operaciones no compatibles se procesan en la CPU."
+  "exportGpuNote": "El remuestreo y los efectos pueden variar ligeramente en la salida de GPU. Las operaciones no compatibles se procesan en la CPU.",
+  "checkUpdates": "Buscar actualizaciones…",
+  "autoCheckUpdates": "Buscar actualizaciones automáticamente al iniciar",
+  "updateAvailable": "La versión %1 está disponible. ¿Descargarla?",
+  "updateCurrent": "No hay una versión más reciente en este canal.",
+  "updateFailure": "Error de actualización",
+  "downloadUpdate": "Descargar actualización",
+  "updateDownloadComplete": "Descarga verificada guardada en:\n%1\n\nGuarda tu trabajo y cierra Compositor antes de extraer la nueva versión en una carpeta independiente. La instalación actual no ha cambiado.",
+  "updateIntegrity": "El tamaño o la suma SHA-256 no coincide con la publicación.",
+  "updateManualNote": "El ZIP se verifica antes de guardarlo. La instalación es manual; no se reemplazan automáticamente archivos ni documentos abiertos.",
+  "referencePreview": "Usar renderizado CPU de referencia en la vista previa (más lento)"
 }

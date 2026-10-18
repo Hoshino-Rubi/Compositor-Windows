@@ -1,13 +1,24 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a8（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.4.1a9（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a8) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a9) 下载便携包。
 
-解压 `Compositor-0.4.1a8-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.4.1a9-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.4.1a9 — 状态化修饰与参考渲染流程（预发布）
+
+- 液化采用累计位移从原图采样，涂抹携带刚混合的颜色。8／16 位共享 CPU／GPU 算法；合适的大笔刷保留 GPU 笔画资源，超过 8MP／预算时使用 CPU，最终回读仍同步。
+- 画笔／橡皮／克隆／模糊笔刷／修复／透视的低收益 GPU 编辑入口已撤下。现有 GPU 滤镜／调整与原生显示保留；首选项可切换 CPU 参考预览。
+- 平移未修改文档时复用全局调整预览；符合像素对齐条件的大图使用 CPU 分块导出，存在旋转等不安全条件时保留整图参考路径。
+- 对象选择保持图像比例、对未命中点击重试局部推理，并排除透明像素；仍非 macOS Vision 等效实现。
+- 帮助菜单可检查更新，启动检查需自愿开启；下载校验仓库地址、大小和 SHA-256。**仍手动安装，不自动覆盖。** 新文案覆盖八种语言，便携包带 Qt Network／Windows TLS。
+- 未提供发行证书，**程序仍未签名**；提供显式证书签名脚本。GPU 边缘完全一致、自动安装、多设备人工交互认证仍未完成。
+
+详见[发布说明](releases/0.4.1a9.md)。**仅预发布，Latest 保持 0.4.0。**下方为历史版本，包含已退役实验功能的记录。
 
 ## 0.4.1a8 — 减少 GPU 传输与中间准备开销（预发布）
 
@@ -190,7 +201,7 @@ Windows 原生端同步适配：
 PSD/PSB 支持 8 位及 16 位 RGB，超出原版的 8 位范围；暂不支持 CMYK 和 32 位 PSD。编辑使用整数 sRGB，不是浮点／HDR 管线。Photoshop 智能对象、复杂路径/文字变形与部分效果保留栅格后备或给出转换报告，不承诺 Photoshop 所有结构都可继续编辑。导入不是 PSD 导出。
 Camera Raw 对应本项目原版的功能，不是 Adobe 插件；镜头配置使用原版通用校正内核，不带 Adobe 相机/镜头数据库。
 对象识别使用 Windows 本地模型，效果可能与 macOS Vision 不同；它对模型识别出的前景做连通区域选择，不能保证识别图中任意对象。
-CPU／Direct3D 预览合成、字体、几何插值、模糊与发光边缘可能与 Metal 输出不同，不宣称逐像素一致。GPU 预览与 CPU 整数输出可能有少量舍入差异，保存／导出仍走 CPU 参考路径。启动前设置 `COMPOSITOR_DISABLE_GPU=1` 可禁用 GPU 预览。
+CPU／Direct3D 预览合成、字体、几何插值、模糊与发光边缘可能与 Metal 输出不同，不宣称逐像素一致。GPU 预览与 CPU 输出仍存在舍入及边缘采样差异。可选 CPU 参考预览及默认导出使用 CPU；GPU 导出需显式选择，直接编辑保存实际处理后的像素。启动前设置 `COMPOSITOR_DISABLE_GPU=1` 可禁用 GPU 预览。
 
 画布最大单边 30,000px、总计 200MP；图像和蒙版分别最多 400MP，最多 10,000 层。实际像素预算随机器内存降低；大图滤镜需要更多内存和时间。保存使用暂存目录、摘要检查及恢复备份；目录替换不保证断电事务原子性。
 

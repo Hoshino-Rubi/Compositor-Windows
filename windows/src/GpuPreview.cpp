@@ -553,6 +553,14 @@ QImage processGpuImage(const QImage &source, const QJsonObject &settings, double
 }
 }
 
+void retainGpuNativeAllocation(const std::shared_ptr<GpuNativeTexture> &allocation) {
+#ifdef Q_OS_WIN
+    textureSnapshots.emplace_back(allocation);
+#else
+    Q_UNUSED(allocation);
+#endif
+}
+
 QImage runGpuNative(const GpuNativeCallback &callback) {
 #ifdef Q_OS_WIN
     if (!callback) return {};

@@ -1,5 +1,6 @@
 #include "Pixels.h"
 #include "MainWindow.h"
+#include "Updates.h"
 #include "Export.h"
 #include "Renderer.h"
 #include "Icons.h"
@@ -47,6 +48,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     canvas_ = new Canvas(&document_);
     buildActions();
     buildUi();
+    if (Preferences::load().autoCheckUpdates && !qEnvironmentVariableIsSet("COMPOSITOR_HEADLESS_TEST") &&
+        QApplication::platformName() != "offscreen")
+        QTimer::singleShot(5000, this, [this] { checkForUpdates(this, false); });
     connect(&localization_, &Localization::changed, this, &MainWindow::retranslate);
     connect(&document_, &Document::changed, this, &MainWindow::refresh);
     connect(&document_, &Document::selectionChanged, this, &MainWindow::refreshSelection);
@@ -203,6 +207,7 @@ void MainWindow::buildActions() {
     actions_["showGuides"]->setChecked(true);
     add("preferences", "Ctrl+,", [this] { showPreferences(); });
     add("shortcuts", "", [this] { shortcutsDialog(); });
+    add("checkUpdates", "", [this] { checkForUpdates(this, true); });
     add("about", "", [this] { QMessageBox::about(this, t("about"), t("aboutBody")); });
     add("quit", "Alt+F4", [this] { close(); });
     auto *group = new QActionGroup(this);

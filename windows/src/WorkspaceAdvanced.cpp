@@ -3,7 +3,6 @@
 #include "Selection.h"
 #include "Renderer.h"
 #include "Warp.h"
-#include "GpuPerspective.h"
 #include "Preferences.h"
 #include <QtConcurrent>
 #include <QDialog>
@@ -138,6 +137,7 @@ void MainWindow::showPreferences(bool shortcuts) {
     preferences_->activateWindow();
 }
 void MainWindow::applyPreferences() {
+    canvas_->setReferencePreview(Preferences::load().referencePreview);
     const auto p = Preferences::load();
     const QList<QPair<QString, bool>> flags{
         {"showRulers", p.rulers}, {"showGrid", p.grid}, {"showGuides", p.guides}, {"snap", p.snap},
@@ -258,7 +258,7 @@ void MainWindow::transformDialog(bool distort) {
                                       {0, double(l.image.height())}};
                     auto quad = map.map(l.placement.matrix(l.image.size()).map(corners));
                     auto box = quad.boundingRect().toAlignedRect();
-                    const auto warp = Preferences::gpuEditingEnabled() ? perspectiveWarpAccelerated : perspectiveWarp;
+                    const auto warp = perspectiveWarp;
                     l.image = warp(l.image, quad);
                     if (!l.mask.isNull()) {
                         const auto maskPlace = l.maskLinked ? l.placement : l.maskPlacement;

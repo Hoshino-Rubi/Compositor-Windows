@@ -84,7 +84,10 @@ CanvasPreview renderCanvasPreviewCpu(const State &s, QRect visible, QSize overvi
                                      bool referenceOnly = false) {
     CanvasPreview result;
     result.revision = revision;
-    if (previous.revision == revision && previous.overview.size() == overviewSize)
+    result.referenceOnly = referenceOnly;
+    result.documentId = s.id;
+    result.canvasSize = s.size;
+    if (previous.referenceOnly == referenceOnly && previous.revision == revision && previous.documentId == s.id && previous.canvasSize == s.size && previous.overview.size() == overviewSize)
         result.overview = previous.overview;
     else result.overview = referenceOnly ? render(s, overviewSize) : renderPreview(s, overviewSize);
     if (cancelled(cancelledFlag) || !detailed) return result;
@@ -92,22 +95,26 @@ CanvasPreview renderCanvasPreviewCpu(const State &s, QRect visible, QSize overvi
     if (visible.isEmpty()) return result;
     constexpr int tileSize = 512;
     QImage full;
+    if (previous.referenceOnly == referenceOnly && previous.revision == revision && previous.documentId == s.id && previous.canvasSize == s.size)
+        full = previous.fullReference;
     for (int y = visible.top() / tileSize * tileSize; y <= visible.bottom(); y += tileSize)
         for (int x = visible.left() / tileSize * tileSize; x <= visible.right(); x += tileSize) {
             if (cancelled(cancelledFlag)) return result;
             const QRect region = QRect(x, y, tileSize, tileSize).intersected(QRect(QPoint(), s.size));
             QImage image;
-            if (previous.revision == revision)
+            if (previous.referenceOnly == referenceOnly && previous.revision == revision && previous.documentId == s.id && previous.canvasSize == s.size)
                 for (const auto &tile : previous.tiles)
                     if (tile.rectangle == region) { image = tile.image; break; }
             if (image.isNull()) {
                 if (globalAdjustment(s)) {
                     if (full.isNull()) full = referenceOnly ? render(s) : renderPreview(s);
+                    result.fullReference = full;
                     image = full.copy(region);
                 } else image = renderRegion(s, region, !referenceOnly);
             }
             result.tiles.append({region, image});
         }
+    if (!full.isNull()) result.fullReference = full;
     return result;
 }
 
@@ -136,7 +143,9 @@ std::shared_ptr<GpuPreviewTexture> renderRegionTexture(const State &state, const
 CanvasPreview renderCanvasPreview(const State &s, QRect visible, QSize overviewSize, bool detailed,
                                   quint64 revision, const CanvasPreview &previous,
                                   const std::shared_ptr<std::atomic_bool> &cancelledFlag,
-                                  bool preferGpuTexture) {
+                                  bool preferGpuTexture, bool referenceOnly) {
+    if (referenceOnly)
+        return renderCanvasPreviewCpu(s, visible, overviewSize, detailed, revision, previous, cancelledFlag, true);
     if (!preferGpuTexture)
         return renderCanvasPreviewCpu(s, visible, overviewSize, detailed, revision, previous, cancelledFlag);
 
@@ -145,7 +154,9 @@ CanvasPreview renderCanvasPreview(const State &s, QRect visible, QSize overviewS
     // one complete CPU frame rather than mixing a GPU frame with readback tiles.
     CanvasPreview result;
     result.revision = revision;
-    const bool sameRevision = previous.revision == revision;
+    result.documentId = s.id;
+    result.canvasSize = s.size;
+    const bool sameRevision = previous.revision == revision && previous.documentId == s.id && previous.canvasSize == s.size;
     const bool previousOverviewSize = previous.overview.size() == overviewSize ||
                                       textureSize(previous.overviewTexture) == overviewSize;
     auto overviewTexture = (sameRevision && previousOverviewSize && usableTexture(previous.overviewTexture))

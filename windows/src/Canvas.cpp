@@ -3,10 +3,7 @@
 #include "Canvas.h"
 #include "Renderer.h"
 #include "Filters.h"
-#include "GpuWarp.h"
 #include "GpuNative.h"
-#include "GpuHeal.h"
-#include "GpuPaintStroke.h"
 #include "GpuPreview.h"
 #include "Preferences.h"
 #include <QGuiApplication>
@@ -41,6 +38,7 @@ Canvas::Canvas(Document *document, QWidget *parent) : QWidget(parent), document_
     connect(document_, &Document::changed, this, [this] {
         ++contentRevision_;
         frame_.tiles.clear();
+        frame_.fullReference = {};
         if (renderedDocument_ != document_->state().id) {
             renderedDocument_ = document_->state().id;
             preview_ = QImage();
@@ -56,6 +54,7 @@ Canvas::Canvas(Document *document, QWidget *parent) : QWidget(parent), document_
     connect(document_, &Document::visualChanged, this, [this] {
         ++contentRevision_;
         frame_.tiles.clear();
+        frame_.fullReference = {};
         scheduleRender();
     });
     connect(&watcher_, &QFutureWatcher<CanvasPreview>::finished, this, [this] {
@@ -105,14 +104,22 @@ void Canvas::startRender() {
     const QRect visible = QRectF(documentPoint(QPointF()), documentPoint(QPointF(width(), height()))).toAlignedRect();
     const bool detailed = zoom_ * devicePixelRatioF() >= 1 && target != state.size;
     const auto previous = frame_;
+    const bool reference = referencePreview_;
     const auto revision = contentRevision_;
     renderCancelled_ = std::make_shared<std::atomic_bool>(false);
     const auto cancelled = renderCancelled_;
     const bool preferGpu = QGuiApplication::platformName() == "windows" && !gpuPresentationFailed_ &&
                            !qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU");
-    watcher_.setFuture(QtConcurrent::run([state, target, visible, detailed, revision, previous, cancelled, preferGpu] {
-        return renderCanvasPreview(state, visible, target, detailed, revision, previous, cancelled, preferGpu);
+    watcher_.setFuture(QtConcurrent::run([state, target, visible, detailed, revision, previous, cancelled, preferGpu, reference] {
+        return renderCanvasPreview(state, visible, target, detailed, revision, previous, cancelled, preferGpu, reference);
     }));
+}
+void Canvas::setReferencePreview(bool enabled) {
+    if (referencePreview_ == enabled) return;
+    referencePreview_ = enabled;
+    ++contentRevision_;
+    frame_.fullReference = {};
+    scheduleRender();
 }
 bool Canvas::isBrush() const {
     return tool_ == Tool::Brush || tool_ == Tool::Eraser || tool_ == Tool::Clone || tool_ == Tool::Blur ||
@@ -629,10 +636,12 @@ void Canvas::mousePressEvent(QMouseEvent *e) {
             }
         }
         healingPath_ = {};
+        retouchStroke_.reset();
         document_->begin();
         try {
             paintStroke(anchor_, anchor_);
         } catch (const Error &error) {
+            retouchStroke_.reset();
             document_->cancel();
             emit failed(error.key, error.detail);
             return;
@@ -705,36 +714,19 @@ void Canvas::paintStroke(QPointF from, QPointF to) {
         double scale = target->width() / placement.size.width();
         const double spacing = std::max(1., brushSize_ * scale * (retouchMode_ == 1 ? .005 : .025));
         int steps = std::max(1, int(QLineF(a, b).length() / spacing));
-        const QImage before = *target;
-        QPainterPath selection =
-            s.selectionActive && s.selectionMask.isNull() ? inverse.map(s.selection) : QPainterPath();
-        if (s.selectionActive && s.selectionMask.isNull() && selection.isEmpty())
-            return;
+        if (!retouchStroke_) {
+            const auto coverage = s.selectionActive ? grayFromAlpha(selectionCoverage(s, target->size(), placement), s.bitDepth) : QImage();
+            retouchStroke_ = std::make_unique<RetouchStroke>(*target, brushSize_ * scale / 2, hardness_, flow_, retouchMode_ == 1, coverage);
+        }
         QVector<QPointF> points;
         points.reserve(steps + 1);
         points.append(a);
-        for (int k = 1; k <= steps; ++k) {
-            auto point = a + (b - a) * (double(k) / steps);
-            points.append(point);
-        }
-        warpStrokeAccelerated(*target, points, brushSize_ * scale / 2, hardness_, flow_, retouchMode_ == 1, selection);
-        if (!s.selectionMask.isNull())
-            constrainSelection(s, placement, before, *target);
+        for (int k = 1; k <= steps; ++k) points.append(a + (b - a) * (double(k) / steps));
+        retouchStroke_->append(*target, points);
         document_->preview();
         return;
     }
     const QImage beforeDab = *target;
-    const auto hardSelection = s.selectionActive && s.selectionMask.isNull() ? s.selection : QPainterPath();
-    if (Preferences::gpuEditingEnabled() &&
-        (!s.selectionActive || !s.selectionMask.isNull() || !hardSelection.isEmpty()) &&
-        paintStrokeAccelerated(*target, from, to, brushSize_, hardness_, flow_, color_, tool_ == Tool::Eraser,
-                               maskTarget_, placement.matrix(target->size()).inverted(), hardSelection,
-                               retouchSource_, tool_ == Tool::Clone ? cloneOffset_ : QPointF(),
-                               tool_ == Tool::Clone || tool_ == Tool::Blur)) {
-        if (!s.selectionMask.isNull()) constrainSelection(s, placement, beforeDab, *target);
-        document_->preview();
-        return;
-    }
     QPainter painter(target);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setTransform(placement.matrix(target->size()).inverted());
@@ -1064,17 +1056,12 @@ void Canvas::finishHealing() {
     for (int y = 0; y < image.height(); ++y)
         memcpy(coverage.data() + y * image.width(), mask.constScanLine(y), image.width());
     const auto *coverageBytes = reinterpret_cast<const uint8_t *>(coverage.constData());
-    const auto gpuHealed = Preferences::gpuEditingEnabled()
-                               ? healGpuImage(image, mask, float(flow_), healingMode_, 0) : QImage();
-    if (!gpuHealed.isNull()) image = gpuHealed;
-    else {
-        const int healResult =
-            s.bitDepth == 16 ? wide::spot_heal(reinterpret_cast<quint16 *>(image.bits()), coverageBytes, image.width(),
-                                               image.height(), image.bytesPerLine() / 2, float(flow_), healingMode_, 0)
-                             : spot_heal(image.bits(), coverageBytes, image.width(), image.height(), image.bytesPerLine(),
-                                         float(flow_), healingMode_, 0);
-        if (healResult < 0) throw Error("tooLarge");
-    }
+    const int healResult =
+        s.bitDepth == 16 ? wide::spot_heal(reinterpret_cast<quint16 *>(image.bits()), coverageBytes, image.width(),
+                                           image.height(), image.bytesPerLine() / 2, float(flow_), healingMode_, 0)
+                         : spot_heal(image.bits(), coverageBytes, image.width(), image.height(), image.bytesPerLine(),
+                                     float(flow_), healingMode_, 0);
+    if (healResult < 0) throw Error("tooLarge");
     auto healed = image.convertToFormat(pixelFormat(s.bitDepth));
     if (!s.selectionMask.isNull())
         constrainSelection(s, l.placement, l.image, healed);
@@ -1195,6 +1182,7 @@ void Canvas::mouseReleaseEvent(QMouseEvent *e) {
     if (e->button() != Qt::LeftButton || !dragging_)
         return;
     dragging_ = false;
+    retouchStroke_.reset();
     try {
         if (tool_ == Tool::Move) {
             if (documentPoint(e->position()) == anchor_)
@@ -1225,6 +1213,7 @@ void Canvas::mouseReleaseEvent(QMouseEvent *e) {
     update();
 }
 void Canvas::cancelGesture() {
+    retouchStroke_.reset();
     if (dragging_)
         document_->cancel();
     dragging_ = false;

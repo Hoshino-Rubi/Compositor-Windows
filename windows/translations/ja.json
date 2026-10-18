@@ -544,8 +544,6 @@
   "rememberWindow": "ウィンドウのサイズと位置を記憶",
   "autoReload": "他のアプリで変更されたプロジェクトを再読み込み",
   "autoReloadNote": "未保存の編集がないドキュメントのみ再読み込みします。編集中のドキュメントでは変更が保持されます。",
-  "gpuEditingExperimental": "描画、消しゴム、クローン、ぼかしブラシ、修復にGPUを使用（実験的）",
-  "gpuEditingNote": "描画、消しゴム、クローン、ぼかしブラシ、修復、遠近補正にGPUを使用します。実験的機能のためCPUより遅くなる場合があります。他のGPU機能には影響しません。",
   "defaultBitDepth": "既定のビット深度",
   "defaultResolution": "既定の解像度",
   "newDocumentDefaultsNote": "ビット深度と解像度は新規キャンバスに適用されます。表示設定はワークスペースに適用されます。",
@@ -611,5 +609,15 @@
   "exportRenderer": "レンダラー",
   "exportRendererCpu": "CPU 参照レンダリング",
   "exportRendererGpu": "GPU アクセラレーション",
-  "exportGpuNote": "GPU 出力は再サンプリングや効果にわずかな差が生じる場合があります。非対応の処理は CPU に切り替わります。"
+  "exportGpuNote": "GPU 出力は再サンプリングや効果にわずかな差が生じる場合があります。非対応の処理は CPU に切り替わります。",
+  "checkUpdates": "更新を確認…",
+  "autoCheckUpdates": "起動時に更新を自動確認",
+  "updateAvailable": "バージョン %1 を利用できます。ダウンロードしますか？",
+  "updateCurrent": "この更新チャンネルに新しいリリースはありません。",
+  "updateFailure": "更新に失敗しました",
+  "downloadUpdate": "更新をダウンロード",
+  "updateDownloadComplete": "検証済みのファイルを保存しました：\n%1\n\n作業を保存して Compositor を終了し、新しいバージョンを別のフォルダーに展開してください。現在のインストールは変更されていません。",
+  "updateIntegrity": "ダウンロードのサイズまたは SHA-256 がリリースと一致しません。",
+  "updateManualNote": "ZIP は保存前に検証されます。インストールは手動です。ファイルや開いている文書は自動で置き換えません。",
+  "referencePreview": "プレビューに標準 CPU レンダリングを使用（低速）"
 }

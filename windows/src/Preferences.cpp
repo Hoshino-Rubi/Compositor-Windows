@@ -28,13 +28,15 @@ Preferences Preferences::load() {
     p.pixelGrid = s.value("preferences/pixelGrid", false).toBool();
     p.transformControls = s.value("preferences/transformControls", true).toBool();
     p.rememberWindow = s.value("preferences/rememberWindow", true).toBool();
+    p.referencePreview = s.value("preferences/referencePreview", false).toBool();
+    p.autoCheckUpdates = s.value("preferences/autoCheckUpdates", false).toBool();
     p.autoReload = s.value("preferences/autoReload", true).toBool();
-    p.gpuEditingExperimental = s.value("rendering/gpuEditingExperimental", false).toBool();
+    // Retired after end-to-end benchmarks remained slower than CPU.
+    p.gpuEditingExperimental = false;
     return p;
 }
 bool Preferences::gpuEditingEnabled() {
-    QSettings s;
-    return s.value("rendering/gpuEditingExperimental", false).toBool();
+    return false;
 }
 void Preferences::save() const {
     QSettings s;
@@ -53,8 +55,10 @@ void Preferences::save() const {
     s.setValue("preferences/pixelGrid", pixelGrid);
     s.setValue("preferences/transformControls", transformControls);
     s.setValue("preferences/rememberWindow", rememberWindow);
+    s.setValue("preferences/referencePreview", referencePreview);
+    s.setValue("preferences/autoCheckUpdates", autoCheckUpdates);
     s.setValue("preferences/autoReload", autoReload);
-    s.setValue("rendering/gpuEditingExperimental", gpuEditingExperimental);
+    s.remove("rendering/gpuEditingExperimental");
 }
 PreferencesDialog::PreferencesDialog(Localization *localization, QList<QAction *> actions, QWidget *parent)
     : QDialog(parent), localization_(localization), actions_(std::move(actions)) {
@@ -109,12 +113,15 @@ PreferencesDialog::PreferencesDialog(Localization *localization, QList<QAction *
     remember_->setObjectName("rememberWindowPreference");
     reload_ = new QCheckBox;
     reload_->setObjectName("autoReloadPreference");
-    gpuEditingExperimental_ = new QCheckBox;
-    gpuEditingExperimental_->setObjectName("gpuEditingExperimental");
+    updates_ = new QCheckBox;
+    updates_->setObjectName("autoCheckUpdatesPreference");
     general->addWidget(remember_);
     general->addWidget(reload_);
     general->addWidget(label("autoReloadNote"));
-    general->addWidget(gpuEditingExperimental_);
+    general->addWidget(updates_);
+    reference_ = new QCheckBox;
+    reference_->setObjectName("referencePreviewPreference");
+    general->addWidget(reference_);
     general->addStretch();
     auto *canvas = section();
     auto *canvasForm = new QFormLayout;
@@ -229,7 +236,7 @@ PreferencesDialog::PreferencesDialog(Localization *localization, QList<QAction *
             QSettings().setValue("language", localization_->selection());
         }
     });
-    for (auto *box : {remember_, reload_, gpuEditingExperimental_, rulers_, grid_, guides_, snap_, snapGuides_, snapGrid_, snapLayers_, snapBounds_, lockGuides_, pixelGrid_, transformControls_})
+    for (auto *box : {remember_, reload_, updates_, reference_, rulers_, grid_, guides_, snap_, snapGuides_, snapGrid_, snapLayers_, snapBounds_, lockGuides_, pixelGrid_, transformControls_})
         connect(box, &QCheckBox::toggled, this, &PreferencesDialog::saveSettings);
     for (auto *box : {depth_, resolution_})
         connect(box, qOverload<int>(&QComboBox::currentIndexChanged), this, &PreferencesDialog::saveSettings);
@@ -246,7 +253,8 @@ void PreferencesDialog::refresh() {
     spacing_->setValue(p.gridSpacing);
     remember_->setChecked(p.rememberWindow);
     reload_->setChecked(p.autoReload);
-    gpuEditingExperimental_->setChecked(p.gpuEditingExperimental);
+    updates_->setChecked(p.autoCheckUpdates);
+    reference_->setChecked(p.referencePreview);
     rulers_->setChecked(p.rulers);
     grid_->setChecked(p.grid);
     guides_->setChecked(p.guides);
@@ -276,7 +284,8 @@ void PreferencesDialog::saveSettings() {
     p.gridSpacing = spacing_->value();
     p.rememberWindow = remember_->isChecked();
     p.autoReload = reload_->isChecked();
-    p.gpuEditingExperimental = gpuEditingExperimental_->isChecked();
+    p.autoCheckUpdates = updates_->isChecked();
+    p.referencePreview = reference_->isChecked();
     p.rulers = rulers_->isChecked();
     p.grid = grid_->isChecked();
     p.guides = guides_->isChecked();
@@ -303,6 +312,8 @@ void PreferencesDialog::resetSection() {
     if (sections_->currentIndex() == 0) {
         p.rememberWindow = defaults.rememberWindow;
         p.autoReload = defaults.autoReload;
+        p.autoCheckUpdates = defaults.autoCheckUpdates;
+        p.referencePreview = defaults.referencePreview;
         p.gpuEditingExperimental = defaults.gpuEditingExperimental;
         localization_->setLanguage("system");
         QSettings().setValue("language", "system");
@@ -381,8 +392,8 @@ void PreferencesDialog::retranslate() {
     depth_->setItemText(1, t("depth16"));
     remember_->setText(t("rememberWindow"));
     reload_->setText(t("autoReload"));
-    gpuEditingExperimental_->setText(t("gpuEditingExperimental"));
-    gpuEditingExperimental_->setToolTip(t("gpuEditingNote"));
+    updates_->setText(t("autoCheckUpdates"));
+    reference_->setText(t("referencePreview"));
     rulers_->setText(t("showRulers"));
     grid_->setText(t("showGrid"));
     guides_->setText(t("showGuides"));

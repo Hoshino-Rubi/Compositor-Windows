@@ -544,8 +544,6 @@
   "rememberWindow": "Fenstergröße und -position merken",
   "autoReload": "Extern geänderte Projekte neu laden",
   "autoReloadNote": "Nur Dokumente ohne ungespeicherte Änderungen werden neu geladen. Bearbeitete Dokumente behalten Ihre Änderungen.",
-  "gpuEditingExperimental": "GPU für Malen, Radierer, Klonen, Weichzeichnerpinsel und Heilung verwenden (experimentell)",
-  "gpuEditingNote": "Verwendet die GPU für Malen, Radierer, Klonen, Weichzeichnerpinsel, Heilung und Perspektive. Experimentell: kann langsamer als die CPU sein; andere GPU-Funktionen bleiben unverändert.",
   "defaultBitDepth": "Standardbittiefe",
   "defaultResolution": "Standardauflösung",
   "newDocumentDefaultsNote": "Bittiefe und Auflösung gelten für neue Leinwände. Anzeigeeinstellungen gelten für den Arbeitsbereich.",
@@ -611,5 +609,15 @@
   "exportRenderer": "Renderer",
   "exportRendererCpu": "CPU-Referenz",
   "exportRendererGpu": "GPU-beschleunigt",
-  "exportGpuNote": "Bei GPU-Ausgabe können Neuberechnung und Effekte leicht abweichen. Nicht unterstützte Vorgänge werden auf der CPU ausgeführt."
+  "exportGpuNote": "Bei GPU-Ausgabe können Neuberechnung und Effekte leicht abweichen. Nicht unterstützte Vorgänge werden auf der CPU ausgeführt.",
+  "checkUpdates": "Nach Updates suchen…",
+  "autoCheckUpdates": "Beim Start automatisch nach Updates suchen",
+  "updateAvailable": "Version %1 ist verfügbar. Herunterladen?",
+  "updateCurrent": "Für diesen Update-Kanal ist keine neuere Version verfügbar.",
+  "updateFailure": "Update fehlgeschlagen",
+  "downloadUpdate": "Update herunterladen",
+  "updateDownloadComplete": "Geprüfter Download gespeichert unter:\n%1\n\nSpeichern Sie Ihre Arbeit und schließen Sie Compositor, bevor Sie die neue Version in einen separaten Ordner entpacken. Die bestehende Installation wurde nicht verändert.",
+  "updateIntegrity": "Downloadgröße oder SHA-256-Prüfsumme stimmt nicht mit der Veröffentlichung überein.",
+  "updateManualNote": "Die ZIP-Datei wird vor dem Speichern geprüft. Die Installation erfolgt manuell; Dateien und offene Dokumente werden nicht automatisch ersetzt.",
+  "referencePreview": "Referenz-CPU-Rendering für die Vorschau (langsamer)"
 }

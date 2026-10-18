@@ -177,7 +177,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     snapMenu->setObjectName("snapTargetsMenu");
     for (const auto &key : QStringList{"snapGuides", "snapGrid", "snapLayers", "snapBounds"})
         snapMenu->addAction(actions_[key]);
-    menu("help", {"shortcuts", "about"});
+    menu("help", {"shortcuts", "checkUpdates", "about"});
     auto *root = new QWidget;
     auto *outer = new QVBoxLayout(root);
     outer->setContentsMargins(0, 0, 0, 0);

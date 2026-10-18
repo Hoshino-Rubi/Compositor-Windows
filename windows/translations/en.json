@@ -544,8 +544,6 @@
   "rememberWindow": "Remember window size and position",
   "autoReload": "Reload projects changed by other applications",
   "autoReloadNote": "Only documents without unsaved edits are reloaded. Modified documents keep your edits.",
-  "gpuEditingExperimental": "Use GPU for paint, eraser, clone, blur brush and healing (experimental)",
-  "gpuEditingNote": "Use GPU for paint, eraser, clone, blur brush, healing and perspective. Experimental: can be slower than CPU; other GPU features are unchanged.",
   "defaultBitDepth": "Default bit depth",
   "defaultResolution": "Default resolution",
   "newDocumentDefaultsNote": "Bit depth and resolution apply to new canvases. Display settings apply to the workspace.",
@@ -611,5 +609,15 @@
   "exportRenderer": "Renderer",
   "exportRendererCpu": "CPU reference",
   "exportRendererGpu": "GPU accelerated",
-  "exportGpuNote": "GPU output can differ slightly in resampling and effects. Unsupported operations fall back to the CPU."
+  "exportGpuNote": "GPU output can differ slightly in resampling and effects. Unsupported operations fall back to the CPU.",
+  "checkUpdates": "Check for Updates…",
+  "autoCheckUpdates": "Automatically check for updates on startup",
+  "updateAvailable": "Version %1 is available. Download it?",
+  "updateCurrent": "No newer release is available for this update channel.",
+  "updateFailure": "Update failed",
+  "downloadUpdate": "Download Update",
+  "updateDownloadComplete": "Verified download saved to:\n%1\n\nSave your work and close Compositor before extracting the new version into a separate folder. Your current installation was not changed.",
+  "updateIntegrity": "The download size or SHA-256 checksum does not match the release.",
+  "updateManualNote": "The ZIP is verified before saving. Installation is manual; no files or open documents will be replaced automatically.",
+  "referencePreview": "Use reference CPU rendering for previews (slower)"
 }

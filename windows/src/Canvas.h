@@ -1,5 +1,6 @@
 #pragma once
 #include "Document.h"
+#include "RetouchStroke.h"
 #include "PreviewRenderer.h"
 #include "GpuCanvasPresenter.h"
 #include <QWidget>
@@ -63,6 +64,7 @@ class Canvas : public QWidget {
         ellipseName_ = std::move(ellipse);
         lineName_ = std::move(line);
     }
+    void setReferencePreview(bool enabled);
     void setGuides(bool visible) {
         guides_ = visible;
         update();
@@ -152,7 +154,7 @@ class Canvas : public QWidget {
     bool dragging_ = false, panning_ = false, space_ = false, maskTarget_ = false, guides_ = true, resizing_ = false;
     State start_;
     QRectF draftRect_;
-    bool nativePresentation_ = false, gpuPresentationFailed_ = false;
+    bool nativePresentation_ = false, gpuPresentationFailed_ = false, referencePreview_ = false;
     std::unique_ptr<GpuCanvasPresenter> gpuPresenter_;
     QImage preview_;
     CanvasPreview frame_;
@@ -186,6 +188,7 @@ class Canvas : public QWidget {
     QColor background_{Qt::white};
     QPointF cloneSource_, cloneOffset_;
     QImage retouchSource_;
+    std::unique_ptr<RetouchStroke> retouchStroke_;
     int retouchMode_ = 0;
     bool polygonal_ = false, objectMode_ = false;
     bool middleZoom_ = false, navigatorDrag_ = false;

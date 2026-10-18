@@ -544,8 +544,6 @@
   "rememberWindow": "Mémoriser la taille et la position de la fenêtre",
   "autoReload": "Recharger les projets modifiés par d’autres applications",
   "autoReloadNote": "Seuls les documents sans modifications non enregistrées sont rechargés. Vos retouches sont conservées dans les autres documents.",
-  "gpuEditingExperimental": "Utiliser le GPU pour peindre, effacer, cloner, le pinceau de flou et la retouche (expérimental)",
-  "gpuEditingNote": "Utilise le GPU pour peindre, effacer, cloner, appliquer le pinceau de flou, effectuer des retouches et utiliser la perspective. Expérimental : peut être plus lent que le CPU ; les autres fonctions GPU sont inchangées.",
   "defaultBitDepth": "Profondeur par défaut",
   "defaultResolution": "Résolution par défaut",
   "newDocumentDefaultsNote": "La profondeur et la résolution s’appliquent aux nouvelles zones de travail. Les réglages d’affichage s’appliquent à l’espace de travail.",
@@ -611,5 +609,15 @@
   "exportRenderer": "Moteur de rendu",
   "exportRendererCpu": "Référence CPU",
   "exportRendererGpu": "Accélération GPU",
-  "exportGpuNote": "Le rééchantillonnage et les effets peuvent légèrement différer sur GPU. Les opérations non prises en charge utilisent le CPU."
+  "exportGpuNote": "Le rééchantillonnage et les effets peuvent légèrement différer sur GPU. Les opérations non prises en charge utilisent le CPU.",
+  "checkUpdates": "Rechercher des mises à jour…",
+  "autoCheckUpdates": "Rechercher automatiquement des mises à jour au démarrage",
+  "updateAvailable": "La version %1 est disponible. La télécharger ?",
+  "updateCurrent": "Aucune version plus récente n’est disponible sur ce canal.",
+  "updateFailure": "Échec de la mise à jour",
+  "downloadUpdate": "Télécharger la mise à jour",
+  "updateDownloadComplete": "Téléchargement vérifié enregistré dans :\n%1\n\nEnregistrez votre travail et fermez Compositor avant d’extraire la nouvelle version dans un dossier séparé. L’installation actuelle n’a pas été modifiée.",
+  "updateIntegrity": "La taille ou la somme SHA-256 ne correspond pas à la publication.",
+  "updateManualNote": "Le ZIP est vérifié avant l’enregistrement. L’installation est manuelle ; aucun fichier ni document ouvert n’est remplacé automatiquement.",
+  "referencePreview": "Utiliser le rendu CPU de référence dans l’aperçu (plus lent)"
 }

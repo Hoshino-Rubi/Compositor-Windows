@@ -1,6 +1,7 @@
 #pragma once
 #include "Project.h"
 namespace comp {
+QImage connectedObjectMask(const QImage &mask, QPoint seed, int threshold = 80);
 QImage subjectMask(const QImage &image, QPoint seed = QPoint(-1, -1));
 QImage refineSubjectMask(const QImage &image, const QImage &mask, int radius, int contrast, int shift);
 QImage selectionCoverage(const State &state, QSize target, const Placement &placement);

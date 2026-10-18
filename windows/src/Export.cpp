@@ -154,12 +154,22 @@ void copyTile(QImage &destination, const QImage &tile, QPoint topLeft) {
     painter.drawImage(topLeft, tile);
 }
 
-QImage renderGpuExport(const State &state, QSize target) {
+bool exactTilePlacement(const Placement &p, QSize pixels) {
+    auto whole=[](double x){return std::abs(x-std::round(x))<1e-9;};
+    // Qt's transformed image edge rasterizer is not invariant under tile
+    // translation at fractional/rotated boundaries. Do not change reference
+    // export pixels merely to lower peak memory.
+    return p.rotation==0 && !p.flipX && !p.flipY && whole(p.origin.x()) && whole(p.origin.y()) &&
+           whole(p.size.width()) && whole(p.size.height()) &&
+           (pixels==QSize(1,1) || p.size==QSizeF(pixels));
+}
+
+QImage renderTiledExport(const State &state, QSize target, bool accelerated) {
     if (qint64(target.width()) * target.height() <= 8 * 1024 * 1024) {
         // A full-size request retains the renderer's native scaling and can
         // safely run full-image-dependent adjustments (noise, Camera Raw,
         // vignette, and similar kernels) while it fits the GPU limit.
-        const auto image = renderGpuPreview(state, target);
+        const auto image = accelerated ? renderGpuPreview(state, target) : QImage();
         if (!image.isNull()) return image;
         return render(state, target);
     }
@@ -178,6 +188,14 @@ QImage renderGpuExport(const State &state, QSize target) {
     if (!qFuzzyCompare(sx, sy)) return render(state, target);
 
     const State scaled = scaledState(state, target);
+    for (const auto &layer : scaled.layers) {
+        if (!layer.visible || layer.opacity<=0) continue;
+        if (!layer.image.isNull() && !exactTilePlacement(layer.placement,layer.image.size()))
+            return render(state,target);
+        if (!layer.mask.isNull() && layer.maskEnabled &&
+            !exactTilePlacement(layer.maskLinked?layer.placement:layer.maskPlacement,layer.mask.size()))
+            return render(state,target);
+    }
     constexpr int tileSize = 512;
 
     QImage result(target, pixelFormat(state.bitDepth));
@@ -191,7 +209,7 @@ QImage renderGpuExport(const State &state, QSize target) {
         for (int x = 0; x < target.width(); x += tileSize) {
             const QRect tile(QPoint(x, y), QSize(tileSize, tileSize));
             const QRect region = tile.intersected(bounds);
-            QImage image = renderGpuRegion(scaled, region);
+            QImage image = accelerated ? renderGpuRegion(scaled, region) : QImage();
             if (image.isNull())
                 image = renderRegion(scaled, region, false);
             if (image.isNull()) throw Error("tooLarge");
@@ -204,9 +222,7 @@ QImage renderGpuExport(const State &state, QSize target) {
 
 QImage renderExportImage(const State &state, QSize size, ExportRenderer renderer) {
     validateExportSize(size);
-    if (renderer == ExportRenderer::AcceleratedGpu)
-        return renderGpuExport(state, size);
-    return render(state, size);
+    return renderTiledExport(state, size, renderer == ExportRenderer::AcceleratedGpu);
 }
 
 void exportDocument(const State &state, const QString &path, const QByteArray &format, QSize size, int quality,

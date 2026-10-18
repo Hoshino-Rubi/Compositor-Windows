@@ -1,14 +1,25 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a8 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.4.1a9 (pre-release)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a8). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a9). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
 
-Extract `Compositor-0.4.1a8-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.4.1a9-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.4.1a9 — Stateful retouch and reference workflows (pre-release)
+
+- Accumulated-displacement Liquify and carried-color Smudge preserve detail and share the same 8/16-bit CPU/GPU gesture model. Supported larger brushes retain GPU resources across segments; final readback remains synchronous. Above 8MP or the device budget, use the stateful CPU implementation.
+- Slower experimental paint/erase/clone/blur/healing/perspective GPU routes are retired from the application. Existing GPU filters/adjustments and native display remain independent. Preferences offers an explicit reference-CPU preview.
+- Reuse unchanged global-adjustment previews while panning; tile eligible pixel-aligned CPU exports, retaining full reference rendering for unsafe transformed/global cases.
+- Aspect-preserving object inference, local retry for missed clicks and transparent-pixel exclusion. Still the bundled local model, not macOS Vision.
+- Help → Check for Updates and optional startup checks; validated repository assets, size and SHA-256 before atomic download. **Manual installation; no silent replacement.** Eight languages, bundled Qt Network/Windows TLS.
+- **Still unsigned**, pending a release certificate; `scripts/sign.ps1` prepares explicit-certificate signing. Full GPU edge equivalence, automatic installation and multi-device interactive certification are not completed.
+
+See [release notes](releases/0.4.1a9.md). **Pre-release only; Latest stays 0.4.0.** Sections below describe earlier versions, including retired experimental features.
 
 ## Version 0.4.1a8 — Reduced GPU transfer and preparation overhead (pre-release)
 
@@ -171,14 +182,14 @@ Reads `.comp` versions 1–12. Writes version 11 for 8-bit documents and version
 
 PSD/PSB import supports 8-bit and 16-bit RGB, extending the upstream 8-bit scope. CMYK and 32-bit PSD remain unsupported. Editing uses integer sRGB, not a floating-point/HDR pipeline. Complex Photoshop objects, text warps and effects use raster fallbacks or conversion notices; PSD export is not provided.
 Camera Raw matches this application's controls, not Adobe's proprietary plugin or lens database. Windows object selection uses local U2Netp foreground inference and connected components, which can differ from macOS Vision.
-CPU/Direct3D preview rendering, fonts, geometry interpolation and effect edges can differ from Metal; pixel-identical output is not claimed. GPU previews can differ from integer CPU output by small rounding amounts; saved/exported pixels keep the reference CPU path. High-zoom tiles display source-resolution pixels; the overview is limited to 2560px per side. PSD layers cropped during import lose their off-canvas pixels. Set `COMPOSITOR_DISABLE_GPU=1` before launch to force CPU previews.
+CPU/Direct3D preview rendering, fonts, geometry interpolation and effect edges can differ from Metal; pixel-identical output is not claimed. GPU previews can differ from integer CPU output by rounding and edge-sampling behavior. Reference CPU preview and default export use the CPU renderer; GPU export is an explicit opt-in. Destructive edits save their resulting pixels. High-zoom tiles display source-resolution pixels; the overview is limited to 2560px per side. PSD layers cropped during import lose their off-canvas pixels. Set `COMPOSITOR_DISABLE_GPU=1` before launch to force CPU previews.
 
 Canvas: up to 30,000px per side, 200MP total, 400MP each for source images and masks, and 10,000 layers; actual pixel budgets scale down with physical RAM. Large operations take time and memory.
 External changes reload clean tabs; dirty tabs retain their edits. Staged saves keep backups and check disk digests; directory replacement is not power-loss atomic.
 
 ## Build
 
-Visual Studio 2022 C++ / Windows SDK, CMake 3.24+, PowerShell 7 and Qt 6.8.3 MSVC 2022 x64 (Image Formats and SVG).
+Visual Studio 2022 C++ / Windows SDK, CMake 3.24+, PowerShell 7 and Qt 6.8.3 MSVC 2022 x64 (Image Formats, SVG and Network).
 
 ```powershell
 pwsh -File ./windows/scripts/prepare-dependencies.ps1

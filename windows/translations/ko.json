@@ -544,8 +544,6 @@
   "rememberWindow": "창 크기와 위치 기억",
   "autoReload": "다른 앱에서 변경한 프로젝트 다시 불러오기",
   "autoReloadNote": "저장하지 않은 편집이 없는 문서만 다시 불러옵니다. 편집 중인 문서는 변경 사항을 유지합니다.",
-  "gpuEditingExperimental": "페인트, 지우개, 복제, 흐림 브러시 및 복구에 GPU 사용(실험적)",
-  "gpuEditingNote": "페인트, 지우개, 복제, 흐림 브러시, 복구 및 원근에 GPU를 사용합니다. 실험적 기능이므로 CPU보다 느릴 수 있으며 다른 GPU 기능은 변경되지 않습니다.",
   "defaultBitDepth": "기본 비트 심도",
   "defaultResolution": "기본 해상도",
   "newDocumentDefaultsNote": "비트 심도와 해상도는 새 캔버스에 적용됩니다. 표시 설정은 작업 영역에 적용됩니다.",
@@ -611,5 +609,15 @@
   "exportRenderer": "렌더러",
   "exportRendererCpu": "CPU 기준 렌더링",
   "exportRendererGpu": "GPU 가속",
-  "exportGpuNote": "GPU 출력의 리샘플링 및 효과에 약간의 차이가 있을 수 있습니다. 지원하지 않는 작업은 CPU로 처리됩니다."
+  "exportGpuNote": "GPU 출력의 리샘플링 및 효과에 약간의 차이가 있을 수 있습니다. 지원하지 않는 작업은 CPU로 처리됩니다.",
+  "checkUpdates": "업데이트 확인…",
+  "autoCheckUpdates": "시작할 때 자동으로 업데이트 확인",
+  "updateAvailable": "버전 %1을 사용할 수 있습니다. 다운로드하시겠습니까?",
+  "updateCurrent": "이 업데이트 채널에 새 릴리스가 없습니다.",
+  "updateFailure": "업데이트 실패",
+  "downloadUpdate": "업데이트 다운로드",
+  "updateDownloadComplete": "검증된 파일을 저장했습니다:\n%1\n\n작업을 저장하고 Compositor를 닫은 뒤 새 버전을 별도 폴더에 압축 해제하세요. 현재 설치는 변경되지 않았습니다.",
+  "updateIntegrity": "다운로드 크기 또는 SHA-256이 릴리스와 일치하지 않습니다.",
+  "updateManualNote": "ZIP을 저장하기 전에 검증합니다. 수동 설치가 필요하며 파일이나 열린 문서를 자동으로 교체하지 않습니다.",
+  "referencePreview": "미리보기에 CPU 기준 렌더링 사용 (느림)"
 }

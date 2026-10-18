@@ -97,6 +97,9 @@ struct GpuPreviewTexture {
     explicit operator bool() const noexcept { return !isNull(); }
 };
 
+// Register a weak reservation while already inside runGpuNative (no nested lock).
+void retainGpuNativeAllocation(const std::shared_ptr<GpuNativeTexture> &allocation);
+
 // Execute a native operation while holding the process-wide D3D11 context
 // mutex.  On non-Windows builds this is a no-op fallback returning a null image.
 QImage runGpuNative(const GpuNativeCallback &callback);
