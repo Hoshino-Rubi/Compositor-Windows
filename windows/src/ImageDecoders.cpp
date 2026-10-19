@@ -56,6 +56,12 @@ RawFrame decodeRawBytes(const QByteArray &input, double noiseReduction, bool hig
     if (code != LIBRAW_SUCCESS)
         throw Error("rawError", QString::fromLatin1(libraw_strerror(code)));
     checkSize({raw.imgdata.sizes.width, raw.imgdata.sizes.height});
+    // LibRaw promotes DNG DefaultCrop to raw_inset_crops in raw-sensor coordinates.
+    const auto inset = raw.imgdata.sizes.raw_inset_crops[0];
+    QRect dngCrop;
+    if (raw.imgdata.idata.dng_version && inset.cwidth && inset.cheight && inset.cleft != 0xffff && inset.ctop != 0xffff)
+        dngCrop = QRect(int(inset.cleft)-raw.imgdata.sizes.left_margin, int(inset.ctop)-raw.imgdata.sizes.top_margin,
+                        inset.cwidth, inset.cheight);
     raw.imgdata.params.use_camera_wb = 1;
     raw.imgdata.params.no_auto_bright = 1;
     raw.imgdata.params.output_bps = 16;
@@ -84,8 +90,27 @@ RawFrame decodeRawBytes(const QByteArray &input, double noiseReduction, bool hig
             dst[x] = QRgba64::fromRgba64(p[0], p[1], p[2], 65535);
         }
     }
-    return {image, QString::fromLatin1(raw.imgdata.idata.make) + " " + QString::fromLatin1(raw.imgdata.idata.model),
-            QString::fromLatin1(raw.imgdata.lens.Lens),raw.imgdata.other.focal_len, input};
+    RawFrame frame{image, QString::fromLatin1(raw.imgdata.idata.make) + " " + QString::fromLatin1(raw.imgdata.idata.model),
+                   QString::fromLatin1(raw.imgdata.lens.Lens), raw.imgdata.other.focal_len, input};
+    frame.make = QString::fromLatin1(raw.imgdata.idata.make).trimmed();
+    frame.model = QString::fromLatin1(raw.imgdata.idata.model).trimmed();
+    frame.lensMake = QString::fromLatin1(raw.imgdata.lens.LensMake).trimmed();
+    if (frame.lens.trimmed().isEmpty()) frame.lens = QString::fromLatin1(raw.imgdata.lens.makernotes.Lens);
+    frame.lens = frame.lens.trimmed();
+    frame.aperture = raw.imgdata.other.aperture;
+    frame.orientation = raw.imgdata.sizes.flip;
+    if (raw.imgdata.idata.dng_version) {
+        const auto &op = raw.imgdata.color.dng_levels.rawopcodes[2];
+        if (op.data && op.len > 0 && op.len < 4 * 1024 * 1024)
+            frame.dngOpcodes = QByteArray(static_cast<const char *>(op.data), op.len);
+        QSize sensorSize(raw.imgdata.sizes.width, raw.imgdata.sizes.height);
+        frame.dngDefaultCrop = dngCrop;
+        frame.embeddedGeometryCompatible = frame.dngDefaultCrop.isEmpty() || QRect(QPoint{},sensorSize).contains(frame.dngDefaultCrop);
+        if (frame.orientation & 4) sensorSize.transpose();
+        frame.embeddedGeometryCompatible &= sensorSize == image.size() &&
+            std::abs(raw.imgdata.sizes.pixel_aspect - 1.) < 0.001;
+    }
+    return frame;
 }
 QImage developRaw(const RawFrame &frame, double exposure, double temperature, double tint, double boost, int limit,
                   int bitDepth) {

@@ -12,8 +12,25 @@ if (-not $SkipNative) {
     & git -C $native checkout --detach $lock.vcpkgCommit
     if ($LASTEXITCODE) {throw 'vcpkg revision checkout failed.'}
     if (-not (Test-Path -LiteralPath (Join-Path $native 'vcpkg.exe'))) { & (Join-Path $native 'bootstrap-vcpkg.bat') -disableMetrics; if ($LASTEXITCODE) {throw 'vcpkg bootstrap failed.'} }
-    & (Join-Path $native 'vcpkg.exe') install --triplet x64-windows "--x-manifest-root=$sourceRoot" "--x-install-root=$(Join-Path $native 'installed')"
-    if ($LASTEXITCODE) {throw 'Native dependency build failed.'}
+    # GNU configure/libtool cannot reliably quote a workspace containing spaces.
+    # SUBST maps only this repository; no files are moved and the mapping is removed on exit.
+    $drive = $null
+    $buildRoot = $repoRoot
+    try {
+        if ($repoRoot.Contains(' ')) {
+            $letter = @('Z','Y','X','W','V','U','T','S','R') | Where-Object { -not (Test-Path ($_.ToString() + ':\')) } | Select-Object -First 1
+            if (-not $letter) { throw 'A free drive letter is required to build native dependencies in a path with spaces.' }
+            $drive = $letter + ':'
+            & subst $drive $repoRoot
+            if ($LASTEXITCODE) { $drive = $null; throw 'Cannot map the workspace for native dependency builds.' }
+            $buildRoot = $drive + '/'
+        }
+        $buildNative = Join-Path $buildRoot '.tools/vcpkg'
+        & (Join-Path $buildNative 'vcpkg.exe') install --triplet x64-windows "--vcpkg-root=$buildNative" "--x-manifest-root=$(Join-Path $buildRoot 'windows')" "--x-install-root=$(Join-Path $buildNative 'installed')" "--x-buildtrees-root=$(Join-Path $buildNative 'buildtrees-native')" "--x-packages-root=$(Join-Path $buildNative 'packages')"
+        if ($LASTEXITCODE) {throw 'Native dependency build failed.'}
+    } finally {
+        if ($drive) { & subst $drive /D }
+    }
 }
 function Get-VerifiedFile([string]$Url,[string]$Path,[string]$Hash) {
     if (Test-Path -LiteralPath $Path) {if ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ieq $Hash) {return}}

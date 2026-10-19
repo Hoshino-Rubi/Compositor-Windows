@@ -33,7 +33,7 @@ namespace comp {
 namespace {
 using Version = std::array<int, 6>;
 std::optional<Version> version(const QString &text) {
-    static const QRegularExpression re(R"(^(\d{1,5})\.(\d{1,5})\.(\d{1,5})(?:a(\d{1,5})(?:p(\d{1,5}))?)?$)");
+    static const QRegularExpression re(R"(^(\d{1,5})\.(\d{1,5})\.(\d{1,5})(?:a(\d{1,5}))?(?:p(\d{1,5}))?$)");
     const auto m = re.match(text);
     if (!m.hasMatch())
         return {};

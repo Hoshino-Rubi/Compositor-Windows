@@ -1,13 +1,24 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.5.3（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.5.3p1（正式补丁版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.3) 下载正式版便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.3p1) 下载正式版便携包。
 
-解压 `Compositor-0.5.3-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.5.3p1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.5.3p1 — RAW 自动镜头校正
+
+- RAW 显影优先使用支持的 DNG 内嵌校正，否则自动匹配随包离线 Lensfun 数据库；可用时默认开启。界面显示配置来源以及可校正的畸变／暗角，可关闭、手动加载单镜头 XML，或恢复自动选择。
+- 根据可用的相机／镜头身份、卡口、裁切系数、焦距及光圈匹配。身份不明或匹配不唯一时不擅自套用，显示原因。由 Lensfun 执行标定插值及几何自动缩放；缺光圈信息不校正暗角，未知对焦距离按无穷远近似。
+- 支持 DNG OpcodeList3 的共通道 WarpRectilinear、WarpFisheye 和 FixVignetteRadial，在线性图像编码前处理，按传感器坐标处理方向。不会把不支持的必需操作或逐通道变形伪装为已支持；可用内嵌校正优先，不叠加 Lensfun 造成重复校正。
+- 保留 16 位精度，预览缓存缩小图；改变曝光不重复校正整幅原图。最终导入在后台处理全分辨率；重置恢复自动选择。
+- 数据库固定为 Lensfun `43f9e001`，包含 1,057 个相机及 1,571 个镜头条目（各条目标定覆盖不同），内嵌于程序，导入无需联网。新增文案覆盖八种语言。
+- 更新器新增正式版 `pN` 补丁后缀识别。**0.5.3 及更早版本无法识别该后缀，本次需手动下载并解压 0.5.3p1；之后可继续使用软件内更新。**
+
+不代表支持所有相机私有内嵌配置、DNG GainMap／ACM 模型、逐通道色差校正或 Apple RAW 引擎。未知／不受支持的设备可能仍需手动配置。项目格式及 GPU 分流策略不变。详见[补丁发布说明](releases/0.5.3p1.md)。
 
 ## 0.5.3 — 工作流与项目兼容保存
 

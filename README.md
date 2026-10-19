@@ -10,7 +10,7 @@ Because it’s open source, you can download the Xcode project and add, remove, 
 
 **Windows download:** [Latest Windows release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) · [中文说明](windows/README.zh-CN.md) · [Build instructions](windows/README.md#build)
 
-A native C++20 / Qt 6 port is available in [windows/](windows/README.md). **0.5.3 is the stable Windows release**, based on upstream 1.5.3. It adds compatible project saves retaining lossless Windows mask precision, welcome-page paste and new-tab drops, numeric-label scrubbing, layer-list dragging, nonblocking snapshot saves, CMYK profile management and verified update installation/relaunch. HDR/EXR, print color, native 8/16-bit editing, validated GPU policies and eight interface languages remain available. The executable is unsigned; platform-specific RAW, Vision and rendering behavior still differs. See [release notes](windows/releases/0.5.3.md) and [中文说明](windows/README.zh-CN.md) for scope and compatibility details.
+A native C++20 / Qt 6 port is available in [windows/](windows/README.md). **0.5.3p1 is the stable Windows patch release**, based on upstream 1.5.3. RAW imports now automatically select supported embedded DNG corrections or a matching offline Lensfun profile, with distortion/vignetting correction, explicit status and manual override. Native 8/16-bit editing, HDR/EXR, print color, compatible project saves, validated GPU policies and eight interface languages remain available. The application is unsigned; RAW engine, object-selection and rendering results are not identical to macOS. Upgrading from 0.5.3 requires downloading and extracting this patch once. See [release notes](windows/releases/0.5.3p1.md) and [中文说明](windows/README.zh-CN.md).
 
 ## Installation
 

@@ -14,6 +14,12 @@ struct RawFrame {
     QString lens;
     double focal = 0;
     QByteArray encoded;
+    QString make, model, lensMake;
+    double aperture = 0;
+    int orientation = 0;
+    QByteArray dngOpcodes;
+    QRect dngDefaultCrop;
+    bool embeddedGeometryCompatible = true;
 };
 RawFrame decodeRaw(const QString &path, double noiseReduction = 0, bool highlightRecovery = false);
 RawFrame decodeRawBytes(const QByteArray &bytes, double noiseReduction, bool highlightRecovery);

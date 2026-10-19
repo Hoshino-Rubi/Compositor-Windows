@@ -1,3 +1,6 @@
 
 # Preserve hash-pinned upstream codec bytes, including original whitespace.
 windows/third_party/tinyexr/* -text -whitespace
+# Keep the pinned database and upstream build recipes byte-exact across checkouts.
+windows/third_party/lensfun-db/* -text -whitespace linguist-vendored
+windows/vcpkg-overlays/** -text -whitespace linguist-vendored

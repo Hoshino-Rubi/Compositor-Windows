@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "Importers.h"
+#include "RawAutoLens.h"
 #include "Cmyk.h"
 #include <QtConcurrent>
 #include <QFileInfo>
@@ -87,8 +88,9 @@ void MainWindow::importPhotoshop(const QString &path) {
 }
 void MainWindow::importRaw(const QString &path, QStringList remaining, bool openAsDocument) {
     auto frame = std::make_shared<RawFrame>();
-    runIO([frame, path] { *frame = decodeRaw(path); },
-          [this, frame, path, remaining, openAsDocument] {
+    auto automatic = std::make_shared<RawLensCorrection>();
+    runIO([frame, automatic, path] { *frame = decodeRaw(path); *automatic = automaticRawLens(*frame); },
+          [this, frame, automatic, path, remaining, openAsDocument] {
               QDialog dialog(this);
               dialog.setObjectName("rawDevelopDialog");
               dialog.setWindowTitle(t("rawDevelop"));
@@ -101,6 +103,7 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
               body->addWidget(&preview, 1);
               auto *form = new QFormLayout;
               QLabel camera(frame->camera);
+              camera.setTextFormat(Qt::PlainText);
               form->addRow(&camera);
               QDoubleSpinBox exposure, temperature, tint, boost;
               exposure.setRange(-10, 10);
@@ -117,11 +120,27 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
               form->addRow(t("rawBoost"), &boost);
               QDoubleSpinBox noise; noise.setRange(0,100); noise.setObjectName("rawDecodeNoise");
               QCheckBox recovery(t("rawHighlightRecovery")), lens(t("rawLensCorrection"));
-              recovery.setObjectName("rawHighlightRecovery"); lens.setEnabled(false);
-              QByteArray lensProfile;
-              QPushButton loadLens(t("rawLoadLensProfile"));
-              form->addRow(t("rawDecodeNoise"), &noise); form->addRow(&recovery);form->addRow(&lens);form->addRow(&loadLens);
-              QLabel lensNote(t("rawLensProfileHint"));lensNote.setWordWrap(true);form->addRow(&lensNote);
+              recovery.setObjectName("rawHighlightRecovery"); lens.setObjectName("rawLensCorrection");
+              RawLensCorrection correction = *automatic;
+              lens.setEnabled(correction.available()); lens.setChecked(correction.available());
+              QPushButton loadLens(t("rawLoadLensProfile")), autoLens(t("rawUseAutomaticLens"));
+              loadLens.setObjectName("rawLoadLensProfile"); autoLens.setObjectName("rawUseAutomaticLens");
+              form->addRow(t("rawDecodeNoise"), &noise); form->addRow(&recovery); form->addRow(&lens);
+              QLabel lensNote; lensNote.setTextFormat(Qt::PlainText); lensNote.setObjectName("rawLensStatus"); lensNote.setWordWrap(true); form->addRow(&lensNote);
+              form->addRow(&loadLens); form->addRow(&autoLens);
+              QLabel lensHint(t("rawLensProfileHint")); lensHint.setWordWrap(true); form->addRow(&lensHint);
+              auto showLensStatus = [&] {
+                  QString message = t(correction.status);
+                  if (correction.available()) {
+                      QStringList effects;
+                      if (correction.distortion) effects.append(t("rawLensDistortion"));
+                      if (correction.vignetting) effects.append(t("rawLensVignetting"));
+                      message = message.arg(correction.profile, effects.join(", "));
+                  }
+                  lensNote.setText(message);
+              };
+              showLensStatus();
+              QImage correctedPreview;
               bool openCameraRaw=false;
               QLabel note(t("rawDevelopNote"));
               note.setWordWrap(true);
@@ -138,7 +157,10 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
               connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
               auto update = [&] {
                   auto developed = *frame;
-                  if(lens.isChecked())developed.linear=correctRawLens(frame->linear,lensProfile,frame->focal);
+                  if (lens.isChecked()) {
+                      if (correctedPreview.isNull()) correctedPreview = applyRawLens(*frame, correction, 700);
+                      developed.linear = correctedPreview;
+                  }
                   preview.setPixmap(QPixmap::fromImage(developRaw(developed,exposure.value(),temperature.value(),tint.value(),boost.value(),700))
                                       .scaled(preview.size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));
               };
@@ -152,7 +174,7 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
               connect(&decodeTimer,&QTimer::timeout,&dialog,decodeStart);
               connect(&decodeWatcher,&QFutureWatcher<RawFrame>::finished,&dialog,[&]{
                   if(closing)return;
-                  try{*frame=decodeWatcher.result();update();buttons->button(QDialogButtonBox::Ok)->setEnabled(true);rawButton->setEnabled(true);}
+                  try{*frame=decodeWatcher.result();correctedPreview={};update();buttons->button(QDialogButtonBox::Ok)->setEnabled(true);rawButton->setEnabled(true);}
                   catch(const Error &e){showError(e.key,e.detail);}
                   if(pending){decodeTimer.stop();decodeStart();}
               });
@@ -163,8 +185,13 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
               connect(&loadLens,&QPushButton::clicked,&dialog,[&]{
                   const auto path=QFileDialog::getOpenFileName(&dialog,t("rawLoadLensProfile"),{},"Lensfun XML (*.xml)");if(path.isEmpty())return;
                   invoke([&]{QFile file(path);if(!file.open(QIODevice::ReadOnly))throw Error("fileError");if(file.size()>4*1024*1024)throw Error("tooLarge");
-                      auto profile=file.readAll();correctRawLens(frame->linear.scaled(32,32,Qt::KeepAspectRatio),profile,frame->focal);
-                      lensProfile=profile;lens.setEnabled(true);lens.setChecked(true);update();});
+                      const auto selected = manualRawLens(*frame, file.readAll());
+                      correction=selected; correctedPreview={}; showLensStatus();
+                      lens.setEnabled(true); lens.setChecked(true); update();});
+              });
+              connect(&autoLens,&QPushButton::clicked,&dialog,[&] {
+                  correction=*automatic; correctedPreview={}; showLensStatus();
+                  lens.setEnabled(correction.available()); lens.setChecked(correction.available()); invoke(update);
               });
               for (auto *box : {&exposure, &temperature, &tint, &boost})
                   connect(box, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog, [&] { update(); });
@@ -172,7 +199,7 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
                   exposure.setValue(0);
                   temperature.setValue(6500);
                   tint.setValue(0);
-                  boost.setValue(1);noise.setValue(0);recovery.setChecked(false);lens.setChecked(false);
+                  boost.setValue(1);noise.setValue(0);recovery.setChecked(false);autoLens.click();
               });
               update();
               const bool accepted=dialog.exec()==QDialog::Accepted;
@@ -182,9 +209,13 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
                   return;
               }
               double e = exposure.value(), temp = temperature.value(), ti = tint.value(), b = boost.value();
-              if(lens.isChecked())frame->linear=correctRawLens(frame->linear,lensProfile,frame->focal);
+              const auto selectedCorrection = lens.isChecked() ? correction : RawLensCorrection{};
               auto image = std::make_shared<QImage>();
-              runIO([frame, image, e, temp, ti, b] { *image = developRaw(*frame, e, temp, ti, b); },
+              runIO([frame, image, e, temp, ti, b, selectedCorrection] {
+                        auto developed = *frame;
+                        developed.linear = applyRawLens(*frame, selectedCorrection);
+                        *image = developRaw(developed, e, temp, ti, b);
+                    },
                     [this, image, path, remaining, openAsDocument, openCameraRaw] {
                         invoke([&] {
                             insertImported(QFileInfo(path).completeBaseName(), *image, openAsDocument);

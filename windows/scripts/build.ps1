@@ -18,7 +18,7 @@ if (-not $BuildDir) { $BuildDir = Join-Path $sourceRoot 'build-native' }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 $deps = Join-Path $repoRoot '.tools/vcpkg/installed/x64-windows'
 $onnx = Join-Path $repoRoot '.tools/onnxruntime/package'
-if (-not (Test-Path -LiteralPath (Join-Path $deps 'bin/raw_r.dll')) -or -not (Test-Path -LiteralPath (Join-Path $onnx 'runtimes/win-x64/native/onnxruntime.dll'))) {
+if (-not (Test-Path -LiteralPath (Join-Path $deps 'bin/lensfun.dll')) -or -not (Test-Path -LiteralPath (Join-Path $deps 'bin/raw_r.dll')) -or -not (Test-Path -LiteralPath (Join-Path $onnx 'runtimes/win-x64/native/onnxruntime.dll'))) {
     & (Join-Path $PSScriptRoot 'prepare-dependencies.ps1')
 }
 $cmake = (Get-Command cmake -ErrorAction SilentlyContinue).Source

@@ -1,14 +1,25 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.5.3 (stable)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.5.3p1 (stable patch)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the stable [0.5.3 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.3), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
+Download the stable [0.5.3p1 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.3p1), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.5.3-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.5.3p1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.5.3p1 — Automatic RAW lens correction
+
+- RAW development automatically enables supported embedded DNG corrections, or a unique matching profile from the bundled offline Lensfun database. The dialog shows the selected profile and whether distortion, vignetting or both are available. Disable correction, load a single-lens XML manually, or return to automatic selection.
+- Camera/lens identity, mount, crop factor, focal length and aperture are used where available; ambiguous or missing matches remain uncorrected with an explanation. Lensfun performs calibration interpolation and automatic geometry scaling. Vignetting is skipped without aperture metadata; unknown focus distance is approximated as infinity.
+- Embedded DNG OpcodeList3 supports common-channel WarpRectilinear, WarpFisheye and FixVignetteRadial, before display encoding and with orientation handled in sensor coordinates. Unsupported required operations/channel-dependent warps are not silently approximated. Supported embedded operations take priority over Lensfun, preventing double correction.
+- Correction retains 16-bit precision. Cached reduced previews avoid full-size remapping for every exposure change; final processing runs at full resolution in the background. Reset restores automatic selection.
+- The database is pinned to Lensfun `43f9e001` (1,057 cameras and 1,571 lens entries; entries may have different calibration coverage). It is embedded in the application; imports make no network requests. New controls are translated in all eight languages.
+- Stable `pN` patch versions are recognized by the updated version checker. **0.5.3 and earlier cannot recognize this patch suffix: download and extract 0.5.3p1 manually once.** Existing update installation remains available for subsequent recognized releases.
+
+This is not support for every proprietary camera-embedded profile, DNG GainMap/ACM model, channel-specific TCA or Apple's RAW engine. Unsupported/unknown equipment may still require a manual profile. Project format and GPU policies are unchanged. See [patch release notes](releases/0.5.3p1.md).
 
 ## Version 0.5.3 — Workflow and project compatibility
 

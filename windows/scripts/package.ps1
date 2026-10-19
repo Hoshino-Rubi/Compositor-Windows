@@ -10,7 +10,7 @@ if (-not $BuildDir) { $BuildDir = Join-Path $sourceRoot 'build-native' }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -QtDir $QtDir -BuildDir $BuildDir }
 $version = (Get-Content -LiteralPath (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
-if ($version -notmatch '^\d+\.\d+\.\d+(?:a\d+(?:p\d+)?)?$') { throw 'Invalid Windows release version.' }
+if ($version -notmatch '^\d+\.\d+\.\d+(?:a\d+(?:p\d+)?|p\d+)?$') { throw 'Invalid Windows release version.' }
 $executable = Join-Path $BuildDir 'Release/Compositor.exe'
 $metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
 if ($metadata.ProductVersion -ne $version -or $metadata.FileVersion -ne $version) {
@@ -39,7 +39,7 @@ foreach ($name in 'vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll') {
     if (-not (Test-Path -LiteralPath (Join-Path $stage $name))) { throw "Missing runtime: $name" }
 }
 $native = Join-Path $repoRoot '.tools/vcpkg/installed/x64-windows'
-foreach ($dll in 'raw_r.dll','jasper.dll','jpeg62.dll','lcms2-2.dll','heif.dll','libde265.dll','z.dll') {
+foreach ($dll in 'raw_r.dll','jasper.dll','jpeg62.dll','lcms2-2.dll','heif.dll','libde265.dll','z.dll','lensfun.dll','glib-2.0-0.dll','intl-8.dll','iconv-2.dll','pcre2-8.dll') {
     Copy-Item -LiteralPath (Join-Path $native "bin/$dll") -Destination $stage
 }
 $onnx = Join-Path $repoRoot '.tools/onnxruntime/package'
@@ -51,9 +51,11 @@ $licenses = Join-Path $stage 'licenses'
 New-Item -ItemType Directory -Path $licenses -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination (Join-Path $licenses 'Compositor-MIT.txt')
 Copy-Item -Path (Join-Path $sourceRoot 'resources/licenses/*') -Destination $licenses
-foreach ($library in 'libraw','jasper','libjpeg-turbo','lcms','libheif','libde265','zlib') {
+foreach ($library in 'libraw','jasper','libjpeg-turbo','lcms','libheif','libde265','zlib','lensfun','glib','gettext-libintl','libiconv','pcre2','dirent') {
     Copy-Item -LiteralPath (Join-Path $native "share/$library/copyright") -Destination (Join-Path $licenses "$library-NOTICE.txt")
 }
+Copy-Item -LiteralPath (Join-Path $sourceRoot 'third_party/lensfun-db/COPYING.CC_BY-SA_3.0') -Destination (Join-Path $licenses 'Lensfun-Database-CC-BY-SA-3.0.txt')
+Copy-Item -LiteralPath (Join-Path $sourceRoot 'third_party/lensfun-db/SOURCE.md') -Destination (Join-Path $licenses 'Lensfun-Database-Source.md')
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'third_party/tinyexr/LICENSE') -Destination (Join-Path $licenses 'TinyEXR-BSD.txt')
 Copy-Item -LiteralPath (Join-Path $onnx 'LICENSE') -Destination (Join-Path $licenses 'ONNXRuntime-MIT.txt')
 Copy-Item -LiteralPath (Join-Path $onnx 'ThirdPartyNotices.txt') -Destination (Join-Path $licenses 'ONNXRuntime-ThirdPartyNotices.txt')
