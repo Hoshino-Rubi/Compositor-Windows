@@ -23,6 +23,7 @@ $distributionRoot = Join-Path $sourceRoot 'dist'
 $stage = Join-Path $distributionRoot ("Compositor-$version-win-x64-" + [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 Copy-Item -LiteralPath $executable -Destination $stage
+Copy-Item -LiteralPath (Join-Path $BuildDir 'Release/CompositorUpdater.exe') -Destination $stage
 $env:PATH = (Join-Path $QtDir 'bin') + [IO.Path]::PathSeparator + $env:PATH
 $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio/Installer/vswhere.exe'
 if (Test-Path -LiteralPath $vswhere) {

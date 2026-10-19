@@ -1,13 +1,29 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.5.2（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.5.3（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.2) 下载正式版便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.3) 下载正式版便携包。
 
-解压 `Compositor-0.5.2-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.5.3-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.5.3 — 工作流与项目兼容保存
+
+- 保存／另存为的文件选择对话框新增 **兼容模式**，新文档默认不勾选。未勾选时保留原生 16 位蒙版；勾选时将标准蒙版写为上游支持的 8 位，同时在项目内部保存无损 16 位副本。Windows 重新打开时自动恢复原精度；若外部编辑器修改了标准蒙版，以外部修改为准，不覆盖成旧内容。普通保存沿用本项目上次成功保存的模式，另存为可切换。
+- 欢迎页可直接粘贴图片或复制的图片文件新建文档。图片、项目可拖到标签栏空白处新建标签；图层拖入空白处时按变换后的实际边界创建画布，保留相对位置及独立蒙版。
+- 中键拖动图层列表不会改变选择。拖动数值标签调整参数（Shift 精调、Ctrl 粗调、Escape 取消）；缩放工具支持拖动缩放，放大／缩小光标随方向即时变化。
+- 保存快照期间可继续编辑和切换标签，后续修改仍标为未保存，不会把保存结果应用到错误文档。
+- 视图 → CMYK 配置管理：枚举 Windows 系统配置和已导入配置，可选择、导入、删除非当前的导入副本；系统配置只读。
+- 下载并校验更新后可选择“安装并重启”。原生更新助手等待编辑器退出，再替换软件包文件；检测到失败时回滚，并重新打开已保存项目。要求便携目录及父目录可写，不请求提权；保留旁边的恢复目录，不删除无关文件。更新前关闭其他实例。程序仍未签名。
+- 新增文案覆盖八种语言，详见[0.5.3 发布说明](releases/0.5.3.md)。
+
+**格式与往返注意：**含原生 16 位蒙版的非兼容保存使用 Windows v15，旧 Windows 版本会拒绝；兼容模式保持上游 v11–v14。复制项目时必须保留整个 .comp 文件夹（包括 windows 子目录）。上游重新保存可能丢弃 Windows 附加数据，无法保证这种往返仍保留原始 16 位样本，应保留 Windows 原件。
+
+## 历史版本
+
+以下章节记录各版本当时的能力与限制，不代表当前版本仍有同样缺项。
 
 ## 0.5.2 — HDR、印刷色彩与编辑工具
 
@@ -232,7 +248,7 @@ Windows 原生端同步适配：
 
 ## 兼容范围
 
-读取支持范围内的 `.comp` version 1–14，包括 EXR 资产和平滑圆角；8 位、16 位、HDR、平滑圆角分别按所需的 v11／v12／v13／v14 保存。缺省时从 PNG 推断整数位深，HDR 图层保留浮点数据。未触碰的 PNG 字节及未知非渲染元数据保留。文字保留 fontRuns/colorRuns；Windows 缺少的字体可能替代，重新编辑会按 Windows 字体排版。像素滤镜/绘画/自由扭曲会栅格化文字和形状。选区与历史为会话状态。
+读取支持范围内的 `.comp` version 1–15，包括 EXR 资产和平滑圆角；8 位、16 位、HDR、平滑圆角分别按所需的 v11／v12／v13／v14 保存。含原生 16 位蒙版时使用 v15；兼容模式保留上游可读的版本并附带独立版本化的无损蒙版数据。缺省时从 PNG 推断整数位深，HDR 图层保留浮点数据。未触碰的 PNG 字节及未知非渲染元数据保留。文字保留 fontRuns/colorRuns；Windows 缺少的字体可能替代，重新编辑会按 Windows 字体排版。像素滤镜/绘画/自由扭曲会栅格化文字和形状。选区与历史为会话状态。
 
 PSD/PSB 支持 8 位及 16 位 RGB，以及通过嵌入或手动选定 ICC 配置转换的 8 位 CMYK；仍不支持 32 位 PSD。8／16 位图层使用整数 sRGB，HDR 图层使用浮点扩展范围 sRGB。Photoshop 智能对象、复杂路径/文字变形与部分效果保留栅格后备或给出转换报告，不承诺 Photoshop 所有结构都可继续编辑。导入不是 PSD 导出。
 Camera Raw 对应本项目原版的功能，不是 Adobe 插件；镜头配置使用原版通用校正内核，不带 Adobe 相机/镜头数据库。

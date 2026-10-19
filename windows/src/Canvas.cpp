@@ -155,6 +155,7 @@ void Canvas::setTool(Tool tool) {
               : tool == Tool::Text ? Qt::IBeamCursor
               : tool == Tool::Move ? Qt::ArrowCursor
                                    : Qt::CrossCursor);
+    if (tool == Tool::Zoom) setZoomCursor(false);
     update();
 }
 QPointF Canvas::documentPoint(QPointF view) const {
@@ -455,6 +456,22 @@ void Canvas::resizeEvent(QResizeEvent *e) {
         offset_ += QPointF((width() - e->oldSize().width()) / 2., (height() - e->oldSize().height()) / 2.);
     scheduleRender();
 }
+void Canvas::setZoomCursor(bool out) {
+    QPixmap pixmap(32, 32);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(Qt::black, 3));
+    painter.setBrush(Qt::white);
+    painter.drawEllipse(QRectF(3, 3, 18, 18));
+    painter.drawLine(QPointF(20, 20), QPointF(28, 28));
+    painter.setPen(QPen(Qt::black, 2));
+    painter.drawLine(7, 12, 17, 12);
+    if (!out) painter.drawLine(12, 7, 12, 17);
+    painter.end();
+    setCursor(QCursor(pixmap, 12, 12));
+    setProperty("zoomCursorOut", out);
+}
 void Canvas::mousePressEvent(QMouseEvent *e) {
     if (!document_->hasDocument())
         return;
@@ -467,6 +484,8 @@ void Canvas::mousePressEvent(QMouseEvent *e) {
     }
     if (e->button() == Qt::MiddleButton && e->modifiers().testFlag(Qt::ControlModifier)) {
         middleZoom_ = true;
+        toolZoom_ = zoomMoved_ = false;
+        setZoomCursor(false);
         last_ = mouse_;
         return;
     }
@@ -523,7 +542,10 @@ void Canvas::mousePressEvent(QMouseEvent *e) {
         return;
     }
     if (tool_ == Tool::Zoom) {
-        setZoom(zoom_ * (e->modifiers().testFlag(Qt::AltModifier) ? .8 : 1.25));
+        middleZoom_ = toolZoom_ = true;
+        zoomMoved_ = false;
+        last_ = e->position();
+        setZoomCursor(e->modifiers().testFlag(Qt::AltModifier));
         return;
     }
     gestureSelectionMode_ = e->modifiers().testFlag(Qt::ShiftModifier) ? 1
@@ -824,8 +846,11 @@ void Canvas::mouseMoveEvent(QMouseEvent *e) {
         return;
     }
     if (middleZoom_) {
+        const double delta = mouse_.x() - last_.x() - mouse_.y() + last_.y();
+        if (!zoomMoved_ && std::abs(delta) < 3) return;
+        if (delta != 0) { zoomMoved_ = true; setZoomCursor(delta < 0); }
         const auto point = documentPoint(last_);
-        zoom_ = std::clamp(zoom_ * std::exp((mouse_.x() - last_.x() - mouse_.y() + last_.y()) * .01), .02, 32.);
+        zoom_ = std::clamp(zoom_ * std::exp(delta * .01), .02, 32.);
         offset_ = last_ - point * zoom_;
         last_ = mouse_;
         emit zoomChanged(zoom_);
@@ -1175,7 +1200,13 @@ void Canvas::mouseReleaseEvent(QMouseEvent *e) {
         return;
     }
     if (middleZoom_) {
+        if (e->button() != (toolZoom_ ? Qt::LeftButton : Qt::MiddleButton)) return;
         middleZoom_ = false;
+        if (toolZoom_ && !zoomMoved_)
+            setZoom(zoom_ * (e->modifiers().testFlag(Qt::AltModifier) ? .8 : 1.25));
+        toolZoom_ = zoomMoved_ = false;
+        if (tool_ == Tool::Zoom) setZoomCursor(e->modifiers().testFlag(Qt::AltModifier));
+        else setCursor(tool_ == Tool::Hand ? Qt::OpenHandCursor : Qt::CrossCursor);
         return;
     }
     if (guideDrag_) {
@@ -1242,7 +1273,8 @@ void Canvas::cancelGesture() {
         document_->cancel();
     dragging_ = false;
     panning_ = false;
-    middleZoom_ = navigatorDrag_ = false;
+    middleZoom_ = navigatorDrag_ = toolZoom_ = zoomMoved_ = false;
+    if (tool_ == Tool::Zoom) setZoomCursor(false);
     guideDrag_ = false;
     movingGuide_ = -1;
     rotating_ = false;
@@ -1266,6 +1298,7 @@ void Canvas::wheelEvent(QWheelEvent *e) {
     e->accept();
 }
 void Canvas::keyPressEvent(QKeyEvent *e) {
+    if (tool_ == Tool::Zoom && !middleZoom_ && e->key() == Qt::Key_Alt) setZoomCursor(true);
     if (tool_ == Tool::Crop && (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) &&
         !draftRect_.isEmpty()) {
         try { document_->crop(draftRect_.toAlignedRect()); }
@@ -1361,6 +1394,7 @@ void Canvas::keyPressEvent(QKeyEvent *e) {
     QWidget::keyPressEvent(e);
 }
 void Canvas::keyReleaseEvent(QKeyEvent *e) {
+    if (tool_ == Tool::Zoom && !middleZoom_ && e->key() == Qt::Key_Alt) setZoomCursor(false);
     if (e->key() == Qt::Key_Space)
         space_ = false;
     QWidget::keyReleaseEvent(e);

@@ -30,6 +30,9 @@ class MainWindow : public QMainWindow {
     Canvas *canvas() { return canvas_; }
     void openProject(const QString &path);
     void sample();
+    void openFiles(const QStringList &paths) { importNext(paths, true); }
+    bool prepareForUpdate(QStringList &reopen);
+    void exitForUpdate();
     void showError(const QString &key, const QString &detail = {});
 
   protected:
@@ -58,8 +61,12 @@ class MainWindow : public QMainWindow {
     QVector<QPair<QPushButton *, QString>> buttons_;
     QString path_, name_;
     QByteArray diskDigest_;
-    quint64 savedRevision_ = 0;
-    bool busy_ = false, refreshing_ = false;
+    struct SaveResult { QByteArray digest; std::exception_ptr error; };
+    QFutureWatcher<SaveResult> saveWatcher_;
+    bool saving_ = false, compatibilityMode_ = false;
+    QString saveTabKey_;
+    quint64 watchGeneration_ = 0;
+    bool busy_ = false, refreshing_ = false, updateExitReady_ = false;
     QFutureWatcher<void> io_;
     QString pendingPath_;
     QByteArray pendingDigest_;
@@ -78,6 +85,7 @@ class MainWindow : public QMainWindow {
     void refreshSelection();
     void updateTitle();
     void chooseColor();
+    void cmykProfilesDialog();
     void newDialog();
     void addText(QPointF point);
     void importImages(QStringList paths = {});
@@ -125,6 +133,8 @@ class MainWindow : public QMainWindow {
         QString path, name;
         QByteArray digest;
         double zoom = 1;
+        QString key = newId();
+        bool compatibility = false;
     };
     QVector<Tab> documents_;
     int currentTab_ = -1;

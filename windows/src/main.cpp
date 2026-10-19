@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
     if (parser.isSet("sample"))
         window.sample();
     else if (!parser.positionalArguments().isEmpty())
-        window.openProject(QFileInfo(parser.positionalArguments().first()).absoluteFilePath());
+        window.openFiles(parser.positionalArguments());
     if (parser.isSet("capture")) {
         if (parser.isSet("capture-size")) {
             const auto parts = parser.value("capture-size").split('x');

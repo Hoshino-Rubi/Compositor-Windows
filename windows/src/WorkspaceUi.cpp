@@ -17,6 +17,7 @@
 #include <QPainter>
 #include <QHeaderView>
 #include <QDropEvent>
+#include <QMouseEvent>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QMimeData>
@@ -51,7 +52,40 @@ class LayerTree final : public QTreeWidget {
     std::function<void(QByteArray, QString, QString, bool)> pasted;
     using QTreeWidget::QTreeWidget;
 
+  private:
+    bool middleScrolling_ = false;
+    QPoint lastScroll_;
   protected:
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::MiddleButton) {
+            middleScrolling_ = true;
+            lastScroll_ = event->globalPosition().toPoint();
+            viewport()->setCursor(Qt::ClosedHandCursor);
+            event->accept();
+            return;
+        }
+        QTreeWidget::mousePressEvent(event);
+    }
+    void mouseMoveEvent(QMouseEvent *event) override {
+        if (middleScrolling_) {
+            const auto now = event->globalPosition().toPoint();
+            verticalScrollBar()->setValue(verticalScrollBar()->value() + lastScroll_.y() - now.y());
+            horizontalScrollBar()->setValue(horizontalScrollBar()->value() + lastScroll_.x() - now.x());
+            lastScroll_ = now;
+            event->accept();
+            return;
+        }
+        QTreeWidget::mouseMoveEvent(event);
+    }
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (middleScrolling_ && event->button() == Qt::MiddleButton) {
+            middleScrolling_ = false;
+            viewport()->unsetCursor();
+            event->accept();
+            return;
+        }
+        QTreeWidget::mouseReleaseEvent(event);
+    }
     QMimeData *mimeData(const QList<QTreeWidgetItem *> &items) const override {
         auto *mime = QTreeWidget::mimeData(items);
         QStringList ids;
@@ -172,7 +206,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
         adjustLayer->addAction(actions_["adjustment." + key]);
     auto *view = menu("view", {"fit", "actualSize", "zoomIn", "zoomOut", "", "showRulers", "showGuides", "showGrid", "snap",
                   "gridSettings", "addGuide", "clearGuides", "lockGuides", "pixelGrid", "transformControls",
-                  "", "loadCmykProfile", "cmykProof", "cmykGamut", "", "toggleFullscreen", "searchCommands"});
+                  "", "cmykProfiles", "loadCmykProfile", "cmykProof", "cmykGamut", "", "toggleFullscreen", "searchCommands"});
     auto *snapMenu = view->addMenu("");
     snapMenu->setObjectName("snapTargetsMenu");
     for (const auto &key : QStringList{"snapGuides", "snapGrid", "snapLayers", "snapBounds"})
@@ -194,6 +228,8 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     };
     auto *bar = new QWidget;
     bar->setObjectName("documentBar");
+    bar->setAcceptDrops(true);
+    bar->installEventFilter(this);
     auto *barRow = new QHBoxLayout(bar);
     barRow->setContentsMargins(9, 4, 10, 4);
     barRow->setSpacing(6);
@@ -571,6 +607,8 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     });
     auto *tree = new LayerTree;
     layers_ = tree;
+    tree->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    tree->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     layers_->setObjectName("layerList");
     layers_->setItemDelegate(new LayerDelegate(layers_));
     layers_->setHeaderHidden(true);
@@ -1001,6 +1039,9 @@ void MainWindow::refreshSelection() {
                                        "addGuide",      "clearGuides",      "closeDocument",  "paste",
                                        "copyMerged"})
         actions_[key]->setEnabled(!busy_ && doc);
+    actions_["save"]->setEnabled(!busy_ && !saving_ && doc);
+    actions_["saveAs"]->setEnabled(!busy_ && !saving_ && doc);
+    actions_["paste"]->setEnabled(!busy_);
     for (const auto &key :
          QStringList{"duplicate", "delete", "rename", "transformLayers", "freeDistort", "moveUp", "moveDown",
                      "groupSelection", "merge", "addMask", "hideMask", "copy", "cut", "selectPixels"})

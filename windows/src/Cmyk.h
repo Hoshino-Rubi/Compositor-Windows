@@ -1,6 +1,9 @@
 #pragma once
 #include "Project.h"
 namespace comp {
+struct CmykProfileEntry { QString name, path; QByteArray data; bool removable = false; };
+QVector<CmykProfileEntry> installedCmykProfiles();
+void removeCmykProfile(const QString &path);
 void validateCmykProfile(const QByteArray &profile);
 QByteArray chosenCmykProfile();
 void chooseCmykProfile(const QByteArray &profile);

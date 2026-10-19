@@ -74,6 +74,8 @@ QByteArray encodeLayers(const State &source, const QStringList &selected) {
     }
     return QJsonDocument(QJsonObject{{"format", "com.compositor.layers"}, {"version", hasHdr(source)?2:1},
                                      {"document", source.id}, {"bitDepth", source.bitDepth},
+                                     {"width", source.size.width()}, {"height", source.size.height()},
+                                     {"resolution", source.resolution},
                                      {"layers", entries}}).toJson(QJsonDocument::Compact);
 }
 QString layerClipboardDocument(const QByteArray &data) {
@@ -135,6 +137,35 @@ bool pasteLayers(Document &target, const QByteArray &data, const QString &parent
         s.active = copies.last().id;
     });
     return true;
+}
+State layersAsDocument(const QByteArray &data) {
+    const auto object = header(data);
+    State initial;
+    initial.id = newId();
+    initial.size = QSize(object.value("width").toInt(1200), object.value("height").toInt(800));
+    initial.resolution = object.value("resolution").toDouble(72);
+    Document document;
+    document.reset(initial);
+    if (!pasteLayers(document, data)) throw Error("invalidProject");
+    State result = document.state();
+    QRectF bounds;
+    bool first = true;
+    for (const auto &layer : result.layers) {
+        if (layer.group || layer.image.isNull()) continue;
+        const auto rect = layer.placement.matrix(layer.image.size()).mapRect(QRectF(QPointF(), layer.image.size()));
+        bounds = first ? rect : bounds.united(rect);
+        first = false;
+    }
+    if (!first) {
+        const auto fitted = bounds.toAlignedRect();
+        result.size = fitted.size();
+        for (auto &layer : result.layers) {
+            layer.placement.origin -= QPointF(fitted.topLeft());
+            if (!layer.maskLinked) layer.maskPlacement.origin -= QPointF(fitted.topLeft());
+        }
+    }
+    validateState(result);
+    return result;
 }
 bool moveLayers(Document &document, const QStringList &selected, const QString &parent, const QString &before) {
     const auto &state = document.state();

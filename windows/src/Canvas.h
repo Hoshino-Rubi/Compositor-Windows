@@ -196,7 +196,8 @@ class Canvas : public QWidget {
     std::unique_ptr<RetouchStroke> retouchStroke_;
     int retouchMode_ = 0;
     bool polygonal_ = false, objectMode_ = false;
-    bool middleZoom_ = false, navigatorDrag_ = false;
+    void setZoomCursor(bool out);
+    bool middleZoom_ = false, navigatorDrag_ = false, toolZoom_ = false, zoomMoved_ = false;
     QRectF navigatorRect() const;
     void navigateTo(QPointF point);
     QPolygonF polygonPoints_;

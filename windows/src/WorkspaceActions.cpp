@@ -2,6 +2,7 @@
 #include "MainWindow.h"
 #include "Cmyk.h"
 #include <QFileDialog>
+#include <QColorSpace>
 #include <QFile>
 #include <QSettings>
 #include "Renderer.h"
@@ -87,11 +88,29 @@ void MainWindow::buildEditingActions() {
     });
     add("paste", "Ctrl+V", [this] {
         const auto *mime = QApplication::clipboard()->mimeData();
-        if (mime && mime->hasFormat(LayerMimeType))
-            pasteLayers(document_, mime->data(LayerMimeType));
-        else {
-            auto image = QApplication::clipboard()->image();
-            if (!image.isNull()) document_.pastePixels(image, t("pastedLayer"));
+        if (!mime) return;
+        if (mime->hasFormat(LayerMimeType)) {
+            if (document_.hasDocument()) pasteLayers(document_, mime->data(LayerMimeType));
+            else adoptDocument(layersAsDocument(mime->data(LayerMimeType)), t("pastedLayer"));
+        } else if (mime->hasUrls()) {
+            QStringList paths;
+            for (const auto &url : mime->urls())
+                if (url.isLocalFile()) paths.append(url.toLocalFile());
+            if (!paths.isEmpty()) importNext(paths, !document_.hasDocument());
+        } else {
+            QImage image;
+            // Decode original PNG/TIFF bytes, not the clipboard's low-depth display thumbnail.
+            for (const auto &type : {QString("image/png"), QString("image/tiff")}) {
+                if (mime->hasFormat(type)) image = QImage::fromData(mime->data(type));
+                if (!image.isNull()) break;
+            }
+            if (image.isNull()) image = QApplication::clipboard()->image();
+            if (!image.isNull()) {
+                if (image.colorSpace().isValid() && image.colorSpace() != QColorSpace::SRgb)
+                    image.convertToColorSpace(QColorSpace::SRgb);
+                if (document_.hasDocument()) document_.pastePixels(image, t("pastedLayer"));
+                else insertImported(t("pastedLayer"), image, true);
+            }
         }
     });
     add("fillForeground", "Alt+Backspace", [this] { document_.fill(canvas_->color(), false, mask_->isChecked()); });
@@ -142,6 +161,7 @@ void MainWindow::buildEditingActions() {
     add("applyMask", "", [this] { document_.maskAction("applyMask"); });
     add("deleteMask", "", [this] { document_.maskAction("deleteMask"); });
     add("clipMask", "", [this] { document_.maskAction("clipMask"); });
+    add("cmykProfiles", "", [this] { cmykProfilesDialog(); });
     add("loadCmykProfile", "", [this] {
         const auto path = QFileDialog::getOpenFileName(this,t("loadCmykProfile"),{},"ICC (*.icc *.icm)");
         if(path.isEmpty())return;QFile file(path);if(!file.open(QIODevice::ReadOnly))throw Error("fileError");
@@ -340,8 +360,10 @@ void MainWindow::maskMenu() {
     menu.exec(QCursor::pos());
 }
 void MainWindow::stashTab() {
-    if (currentTab_ >= 0 && currentTab_ < documents_.size())
-        documents_[currentTab_] = {document_.session(), path_, name_, diskDigest_, canvas_->zoom()};
+    if (currentTab_ >= 0 && currentTab_ < documents_.size()) {
+        const auto key = documents_[currentTab_].key;
+        documents_[currentTab_] = {document_.session(), path_, name_, diskDigest_, canvas_->zoom(), key, compatibilityMode_};
+    }
 }
 void MainWindow::adoptDocument(State state, QString name, QString path, QByteArray digest, bool saved) {
     canvas_->finishInlineText();
@@ -352,8 +374,9 @@ void MainWindow::adoptDocument(State state, QString name, QString path, QByteArr
     path_ = std::move(path);
     diskDigest_ = std::move(digest);
     currentTab_ = int(documents_.size());
+    compatibilityMode_ = state.metadata.value("windowsCompatibility").toBool();
     document_.reset(std::move(state), saved);
-    documents_.append({document_.session(), path_, name_, diskDigest_, 1});
+    documents_.append({document_.session(), path_, name_, diskDigest_, 1, newId(), compatibilityMode_});
     tabs_->addTab(name_);
     auto *close = new QToolButton;
     close->setObjectName("closeTabButton");
@@ -386,6 +409,7 @@ void MainWindow::switchTab(int index) {
     path_ = tab.path;
     name_ = tab.name;
     diskDigest_ = tab.digest;
+    compatibilityMode_ = tab.compatibility;
     document_.restore(tab.session);
     switchingTab_ = false;
     canvas_->setZoom(tab.zoom);
@@ -407,6 +431,7 @@ bool MainWindow::closeTab(int index) {
         name_ = t("untitled");
         path_.clear();
         diskDigest_.clear();
+        compatibilityMode_ = false;
         refresh();
     } else {
         const int next = std::min(index, int(documents_.size()) - 1);
@@ -416,26 +441,40 @@ bool MainWindow::closeTab(int index) {
     return true;
 }
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
-    if (watched == tabs_ && (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)) {
+    const bool bar = watched == tabs_ || (watched->objectName() == "documentBar");
+    if (bar && !busy_ && (event->type() == QEvent::DragEnter || event->type() == QEvent::DragMove)) {
         auto *drag = static_cast<QDropEvent *>(event);
-        if (drag->mimeData()->hasFormat(LayerMimeType) && tabs_->tabAt(drag->position().toPoint()) >= 0) {
+        const auto *mime = drag->mimeData();
+        if (mime->hasFormat(LayerMimeType) || mime->hasUrls() || mime->hasImage()) {
             drag->acceptProposedAction();
             return true;
         }
     }
-    if (watched == tabs_ && event->type() == QEvent::Drop) {
+    if (bar && !busy_ && event->type() == QEvent::Drop) {
         auto *drop = static_cast<QDropEvent *>(event);
-        const int index = tabs_->tabAt(drop->position().toPoint());
-        if (index >= 0 && drop->mimeData()->hasFormat(LayerMimeType)) {
-            const auto encodedLayers = drop->mimeData()->data(LayerMimeType);
+        const int index = watched == tabs_ ? tabs_->tabAt(drop->position().toPoint()) : -1;
+        const auto *mime = drop->mimeData();
+        if (mime->hasFormat(LayerMimeType)) {
+            const auto encoded = mime->data(LayerMimeType);
             invoke([&] {
-                tabs_->setCurrentIndex(index);
-                if (layerClipboardDocument(encodedLayers) != document_.state().id)
-                    pasteLayers(document_, encodedLayers);
+                if (index < 0) adoptDocument(layersAsDocument(encoded), t("untitled"));
+                else {
+                    tabs_->setCurrentIndex(index);
+                    if (layerClipboardDocument(encoded) != document_.state().id)
+                        pasteLayers(document_, encoded);
+                }
             });
-            drop->acceptProposedAction();
-            return true;
-        }
+        } else if (mime->hasUrls()) {
+            QStringList paths;
+            for (const auto &url : mime->urls()) if (url.isLocalFile()) paths.append(url.toLocalFile());
+            if (index >= 0) tabs_->setCurrentIndex(index);
+            if (!paths.isEmpty()) importNext(paths, index < 0);
+        } else if (mime->hasImage()) {
+            if (index >= 0) tabs_->setCurrentIndex(index);
+            invoke([&] { insertImported(t("pastedLayer"), qvariant_cast<QImage>(mime->imageData()), index < 0); });
+        } else return QMainWindow::eventFilter(watched, event);
+        drop->acceptProposedAction();
+        return true;
     }
     return QMainWindow::eventFilter(watched, event);
 }

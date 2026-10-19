@@ -3,6 +3,18 @@
 #include <lcms2.h>
 #include <jpeglib.h>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QCryptographicHash>
+#include <QSaveFile>
+#include <QDir>
+#include <QFile>
+#include <QSet>
+#include <algorithm>
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <Windows.h>
+#include <icm.h>
+#endif
 #include <QPainter>
 #include <QDataStream>
 #include <QBuffer>
@@ -174,6 +186,11 @@ void validateCmykProfile(const QByteArray &data) { Profile profile(data); }
 QByteArray chosenCmykProfile() { return QSettings().value("print/cmykProfile").toByteArray(); }
 void chooseCmykProfile(const QByteArray &data) {
     validateCmykProfile(data);
+    const auto folder = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/CMYK Profiles";
+    if (!QDir().mkpath(folder)) throw Error("fileError");
+    QSaveFile copy(folder + "/" + QString::fromLatin1(QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex()) + ".icc");
+    if (!copy.open(QIODevice::WriteOnly) || copy.write(data) != data.size() || !copy.commit())
+        throw Error("fileError", copy.errorString());
     QSettings().setValue("print/cmykProfile", data);
 }
 QString cmykProfileName(const QByteArray &data) {
@@ -181,6 +198,53 @@ QString cmykProfileName(const QByteArray &data) {
     char name[1024]{};
     cmsGetProfileInfoASCII(profile.value, cmsInfoDescription, "en", "US", name, sizeof(name));
     return QString::fromUtf8(name);
+}
+QVector<CmykProfileEntry> installedCmykProfiles() {
+    const QString user = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/CMYK Profiles";
+    QStringList folders{user};
+#ifdef Q_OS_WIN
+    wchar_t directory[32768]{};
+    DWORD bytes = sizeof(directory);
+    if (GetColorDirectoryW(nullptr, directory, &bytes)) folders.append(QString::fromWCharArray(directory));
+#endif
+    QVector<CmykProfileEntry> result;
+    QSet<QByteArray> seen;
+    for (const auto &folder : folders)
+        for (const auto &info : QDir(folder).entryInfoList(QDir::Files | QDir::NoSymLinks)) {
+            if ((info.suffix().compare("icc", Qt::CaseInsensitive) != 0 &&
+                 info.suffix().compare("icm", Qt::CaseInsensitive) != 0) || info.size() > 4 * 1024 * 1024) continue;
+            QFile file(info.absoluteFilePath());
+            if (!file.open(QIODevice::ReadOnly)) continue;
+            const auto data = file.readAll();
+            try {
+                validateCmykProfile(data);
+                const auto hash = QCryptographicHash::hash(data, QCryptographicHash::Sha256);
+                if (seen.contains(hash)) continue;
+                seen.insert(hash);
+                const auto name = cmykProfileName(data);
+                result.append({name.isEmpty() ? info.completeBaseName() : name, info.absoluteFilePath(), data, folder == user});
+            } catch (const Error &) {}
+        }
+    const auto chosen = chosenCmykProfile();
+    if (!chosen.isEmpty() && !seen.contains(QCryptographicHash::hash(chosen, QCryptographicHash::Sha256))) {
+        try { result.append({cmykProfileName(chosen), {}, chosen, false}); }
+        catch (const Error &) {}
+    }
+    std::sort(result.begin(), result.end(), [](const auto &a, const auto &b) {
+        return QString::localeAwareCompare(a.name, b.name) < 0;
+    });
+    return result;
+}
+void removeCmykProfile(const QString &path) {
+    const QDir directory(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/CMYK Profiles");
+    const QFileInfo info(path);
+    if (info.isSymLink() || info.absolutePath() != directory.absolutePath() || !info.fileName().endsWith(".icc"))
+        throw Error("fileError");
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) throw Error("fileError");
+    const auto data = file.readAll(); file.close();
+    if (data == chosenCmykProfile()) throw Error("cmykRemoveActive");
+    if (!QFile::remove(path)) throw Error("fileError");
 }
 QImage cmykToRgb(const QImage &cmyk, const QByteArray &data) {
     Profile profile(data);

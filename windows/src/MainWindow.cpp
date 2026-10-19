@@ -3,6 +3,8 @@
 #include "MainWindow.h"
 #include "Cmyk.h"
 #include "Updates.h"
+#include "ProjectSaveDialog.h"
+#include "NumericScrub.h"
 #include "Export.h"
 #include "Renderer.h"
 #include "Icons.h"
@@ -50,6 +52,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     canvas_ = new Canvas(&document_);
     buildActions();
     buildUi();
+    installNumericScrubbing(this);
     if (Preferences::load().autoCheckUpdates && !qEnvironmentVariableIsSet("COMPOSITOR_HEADLESS_TEST") &&
         QApplication::platformName() != "offscreen")
         QTimer::singleShot(5000, this, [this] { checkForUpdates(this, false); });
@@ -117,6 +120,7 @@ MainWindow::~MainWindow() {
     projectWatchTimer_.stop();
     projectWatcher_.waitForFinished();
     io_.waitForFinished();
+    saveWatcher_.waitForFinished();
 }
 void MainWindow::invoke(const std::function<void()> &action) {
     if (busy_)
@@ -546,46 +550,105 @@ void MainWindow::openProject(const QString &path) {
           });
 }
 bool MainWindow::save(bool as, std::function<void(bool)> after) {
-    if (busy_ || !document_.hasDocument())
+    if (busy_ || saving_ || !document_.hasDocument())
         return false;
+    canvas_->finishInlineText();
+    canvas_->cancelGesture();
     QString target = as ? QString() : path_;
+    bool compatible = compatibilityMode_;
     if (target.isEmpty()) {
-        target = QFileDialog::getSaveFileName(this, t("saveAs"), name_ + ".comp", "Compositor (*.comp)", nullptr,
-                                              QFileDialog::DontConfirmOverwrite);
-        if (target.isEmpty()) {
-            if (after)
-                after(false);
+        const auto chosen = chooseProjectSave(this, localization_,
+            path_.isEmpty() ? name_ + ".comp" : path_, compatible);
+        if (!chosen) {
+            if (after) after(false);
             return false;
         }
-        if (!target.endsWith(".comp", Qt::CaseInsensitive))
-            target += ".comp";
+        target = chosen->path;
+        compatible = chosen->compatibility;
+        if (!target.endsWith(".comp", Qt::CaseInsensitive)) target += ".comp";
+        target = QFileInfo(target).absoluteFilePath();
+        for (int i = 0; i < documents_.size(); ++i)
+            if (i != currentTab_ && !documents_[i].path.isEmpty() &&
+                QFileInfo(documents_[i].path).absoluteFilePath().compare(target, Qt::CaseInsensitive) == 0) {
+                showError("saveOpenDocument");
+                if (after) after(false);
+                return false;
+            }
         if (QFileInfo::exists(target) &&
-            QMessageBox::question(this, t("overwrite"), t("overwriteBody"), QMessageBox::Yes | QMessageBox::Cancel,
-                                  QMessageBox::Cancel) != QMessageBox::Yes) {
-            if (after)
-                after(false);
+            QMessageBox::question(this, t("overwrite"), t("overwriteBody"),
+                QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
+            if (after) after(false);
             return false;
         }
     }
+    stashTab();
     const State snapshot = document_.state();
-    savedRevision_ = document_.revision();
+    const auto revision = document_.revision();
     const QByteArray expected = target == path_ ? diskDigest_ : QByteArray();
-    auto digest = std::make_shared<QByteArray>();
-    runIO([target, snapshot, expected, digest] { *digest = writeProject(target, snapshot, expected); },
-          [this, target, digest, after] {
-              path_ = target;
-              diskDigest_ = *digest;
-              name_ = QFileInfo(target).completeBaseName();
-              document_.markSaved(savedRevision_);
-              stashTab();
-              remember(target);
-              statusBar()->showMessage(t("projectSaved"), 3000);
-              if (after)
-                  after(true);
-          });
+    const QString tabKey = currentTab_ >= 0 ? documents_[currentTab_].key : QString();
+    saveTabKey_ = tabKey;
+    saving_ = true;
+    ++watchGeneration_;
+    refreshSelection();
+    statusBar()->showMessage(t("savingProject"));
+    disconnect(&saveWatcher_, nullptr, this, nullptr);
+    connect(&saveWatcher_, &QFutureWatcher<SaveResult>::finished, this,
+            [this, target, revision, tabKey, compatible, after] {
+        const auto result = saveWatcher_.result();
+        saving_ = false;
+        saveTabKey_.clear();
+        ++watchGeneration_;
+        if (result.error) {
+            refreshSelection();
+            try { std::rethrow_exception(result.error); }
+            catch (const Error &e) { showError(e.key, e.detail); }
+            catch (...) { showError("fileError"); }
+            if (after) after(false);
+            return;
+        }
+        stashTab();
+        for (int i = 0; i < documents_.size(); ++i) {
+            auto &tab = documents_[i];
+            if (tab.key != tabKey) continue;
+            tab.path = target;
+            tab.name = QFileInfo(target).completeBaseName();
+            tab.digest = result.digest;
+            tab.compatibility = compatible;
+            tab.session.cleanRevision = revision;
+            tabs_->setTabText(i, tab.name + (tab.session.revision != revision ? " *" : ""));
+            if (i == currentTab_) {
+                path_ = tab.path;
+                name_ = tab.name;
+                diskDigest_ = tab.digest;
+                compatibilityMode_ = compatible;
+                document_.markSaved(revision);
+                stashTab();
+            }
+            break;
+        }
+        watchStamps_.remove(target);
+        changedProjects_.remove(target);
+        remember(target);
+        updateTitle();
+        refreshSelection();
+        statusBar()->showMessage(t("projectSaved"), 3000);
+        if (after) after(true);
+    });
+    saveWatcher_.setFuture(QtConcurrent::run([target, snapshot, expected, compatible] {
+        SaveResult result;
+        try { result.digest = writeProject(target, snapshot, expected, compatible); }
+        catch (...) { result.error = std::current_exception(); }
+        return result;
+    }));
     return true;
 }
 bool MainWindow::maybeSave() {
+    if (saving_ && currentTab_ >= 0 && documents_[currentTab_].key == saveTabKey_) {
+        QEventLoop loop;
+        const auto connection = connect(&saveWatcher_, &QFutureWatcher<SaveResult>::finished, &loop, &QEventLoop::quit);
+        loop.exec(QEventLoop::ExcludeUserInputEvents);
+        disconnect(connection);
+    }
     if (busy_)
         return false;
     canvas_->finishInlineText();
@@ -602,9 +665,9 @@ bool MainWindow::maybeSave() {
         return true;
     if (box.clickedButton() == saveButton) {
         QEventLoop loop;
-        const auto connection = connect(&io_, &QFutureWatcher<void>::finished, &loop, &QEventLoop::quit);
+        const auto connection = connect(&saveWatcher_, &QFutureWatcher<SaveResult>::finished, &loop, &QEventLoop::quit);
         if (save())
-            loop.exec();
+            loop.exec(QEventLoop::ExcludeUserInputEvents);
         disconnect(connection);
         return !document_.dirty();
     }
@@ -811,7 +874,28 @@ void MainWindow::showError(const QString &key, const QString &detail) {
     const QString translatedDetail = detail == "adjustments" || detail == "effects" ? t(detail) : detail;
     QMessageBox::warning(this, t("errorTitle"), t(key).replace("{detail}", translatedDetail));
 }
+bool MainWindow::prepareForUpdate(QStringList &reopen) {
+    if (busy_) return false;
+    const int previous = currentTab_;
+    stashTab();
+    for (int i = 0; i < documents_.size(); ++i) {
+        tabs_->setCurrentIndex(i);
+        if (!maybeSave()) return false;
+        if (!path_.isEmpty()) reopen.append(path_);
+    }
+    if (previous >= 0) tabs_->setCurrentIndex(previous);
+    return true;
+}
+void MainWindow::exitForUpdate() {
+    updateExitReady_ = true;
+    close();
+}
 void MainWindow::closeEvent(QCloseEvent *event) {
+    if (updateExitReady_) {
+        if (Preferences::load().rememberWindow) QSettings().setValue("geometry", saveGeometry());
+        event->accept();
+        return;
+    }
     if (busy_) {
         event->ignore();
         return;

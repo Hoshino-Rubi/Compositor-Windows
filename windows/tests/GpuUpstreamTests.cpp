@@ -223,7 +223,7 @@ class GpuUpstreamTests : public QObject {
             j["layers"] = layers;
         });
         QVERIFY(readProject(other).state.layers[0].metadata["shape"].toObject()["smoothing"].toBool());
-        manifest(other, [](QJsonObject &j) { j["version"] = 15; });
+        manifest(other, [](QJsonObject &j) { j["version"] = ProjectManifest::readable + 1; });
         QVERIFY(rejects("unsupportedVersion", [&] { readProject(other); }));
     }
     void patchMatchPreservesOutsideAndSixteenBitSamples() {

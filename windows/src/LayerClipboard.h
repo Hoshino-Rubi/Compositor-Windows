@@ -8,4 +8,5 @@ bool pasteLayers(Document &target, const QByteArray &data, const QString &parent
 bool moveLayers(Document &document, const QStringList &selected, const QString &parent, const QString &before);
 bool cutLayers(Document &source, const QStringList &selected);
 QString layerClipboardDocument(const QByteArray &data);
+State layersAsDocument(const QByteArray &data);
 } // namespace comp

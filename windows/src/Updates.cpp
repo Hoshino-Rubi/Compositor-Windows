@@ -1,5 +1,17 @@
 #include "Updates.h"
 #include "MainWindow.h"
+#include "UpdateInstaller.h"
+#include <QDir>
+#include <QFileInfo>
+#include <QProcess>
+#include <QJsonObject>
+#include <QUuid>
+#include <QFutureWatcher>
+#include <QtConcurrent>
+#ifdef Q_OS_WIN
+#define NOMINMAX
+#include <Windows.h>
+#endif
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QFileDialog>
@@ -11,6 +23,7 @@
 #include <QNetworkRequest>
 #include <QPointer>
 #include <QProgressDialog>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
@@ -34,6 +47,71 @@ QNetworkRequest request(const QUrl &url) {
     r.setTransferTimeout(15000);
     r.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     return r;
+}
+bool launchInstaller(MainWindow *window, const QString &jobPath) {
+#ifdef Q_OS_WIN
+    QStringList reopen;
+    if (!window->prepareForUpdate(reopen)) return false;
+    auto job = readUpdateJob(jobPath);
+    job["reopen"] = QJsonArray::fromStringList(reopen);
+    job["failureMessage"] = window->localization()->text("updateInstallFailure");
+    QSaveFile file(jobPath);
+    const auto bytes = QJsonDocument(job).toJson();
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+        throw std::runtime_error("Cannot save update restart information.");
+    const auto name = "Local\\Compositor-Update-" + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const auto cancelName = name + "-cancel";
+    const auto wide = [](const QString &s) { return reinterpret_cast<LPCWSTR>(s.utf16()); };
+    HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, wide(name));
+    HANDLE cancel = CreateEventW(nullptr, TRUE, FALSE, wide(cancelName));
+    if (!ready || !cancel) {
+        if (ready) CloseHandle(ready);
+        if (cancel) CloseHandle(cancel);
+        throw std::runtime_error("Cannot create updater handshake.");
+    }
+    const auto control = QFileInfo(jobPath).absolutePath() + "/control";
+    QProcess helper;
+    helper.setProgram(control + "/CompositorUpdater.exe");
+    helper.setArguments({"--apply-update", jobPath, QString::number(QCoreApplication::applicationPid()), name});
+    helper.setWorkingDirectory(control);
+    helper.setProcessChannelMode(QProcess::ForwardedChannels);
+    const bool started = helper.startDetached();
+    const bool prepared = started && WaitForSingleObject(ready, 10000) == WAIT_OBJECT_0;
+    if (!prepared) SetEvent(cancel);
+    CloseHandle(ready); CloseHandle(cancel);
+    if (!prepared) throw std::runtime_error("The updater did not become ready; the application was not closed.");
+    window->exitForUpdate();
+    return true;
+#else
+    Q_UNUSED(window); Q_UNUSED(jobPath);
+    return false;
+#endif
+}
+void installDownload(MainWindow *window, const UpdateInfo &info, const QString &path) {
+    auto progress = new QProgressDialog(window->localization()->text("updatePreparing"), {}, 0, 0, window);
+    progress->setWindowModality(Qt::ApplicationModal);
+    progress->setCancelButton(nullptr);
+    progress->show();
+    struct Prepared { QString job, error; };
+    auto *watcher = new QFutureWatcher<Prepared>(window);
+    QObject::connect(watcher, &QFutureWatcher<Prepared>::finished, window, [window, watcher, progress] {
+        progress->close(); progress->deleteLater();
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        if (!result.error.isEmpty()) { window->showError("updateFailure", result.error); return; }
+        try {
+            if (!launchInstaller(window, result.job)) discardPreparedUpdate(result.job);
+        } catch (const std::exception &e) {
+            window->showError("updateFailure", QString::fromUtf8(e.what()));
+        }
+    });
+    const auto installation = QCoreApplication::applicationDirPath();
+    watcher->setFuture(QtConcurrent::run([info, path, installation] {
+        Prepared result;
+        try { result.job = prepareUpdateArchive(path, info.size, info.sha256, installation); }
+        catch (const std::exception &e) { result.error = QString::fromUtf8(e.what()); }
+        return result;
+    }));
 }
 void download(MainWindow *window, const UpdateInfo &info) {
     auto t = [window](const QString &key) { return window->localization()->text(key); };
@@ -85,8 +163,12 @@ void download(MainWindow *window, const UpdateInfo &info) {
             const bool valid =
                 error == QNetworkReply::NoError && *count == info.size && hash->result().toHex() == info.sha256;
             if (valid && file->commit()) {
-                QMessageBox::information(window, window->localization()->text("downloadUpdate"),
-                                         window->localization()->text("updateDownloadComplete").arg(path));
+                QMessageBox question(QMessageBox::Information, window->localization()->text("downloadUpdate"),
+                    window->localization()->text("updateReadyToInstall").arg(path), QMessageBox::NoButton, window);
+                auto *install = question.addButton(window->localization()->text("installAndRestart"), QMessageBox::AcceptRole);
+                question.addButton(window->localization()->text("installLater"), QMessageBox::RejectRole);
+                question.exec();
+                if (question.clickedButton() == install) installDownload(window, info, path);
             } else {
                 file->cancelWriting();
                 if (error != QNetworkReply::OperationCanceledError || !failure->isEmpty())

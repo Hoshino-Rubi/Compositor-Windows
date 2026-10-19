@@ -15,6 +15,7 @@
 #include <QMessageBox>
 namespace comp {
 void MainWindow::insertImported(const QString &name, const QImage &image, bool openAsDocument) {
+    if (image.isNull()) throw Error("imageError");
     if (openAsDocument || !document_.hasDocument()) {
         State s;
         s.id = newId();
@@ -56,6 +57,15 @@ void MainWindow::importNext(QStringList paths, bool openAsDocument) {
                   }
                   importNext(paths, openAsDocument);
               });
+        return;
+    }
+    if (QFileInfo(path).isDir() && suffix == "comp") {
+        auto loaded = std::make_shared<LoadedProject>();
+        runIO([loaded, path] { *loaded = readProject(path); }, [this, loaded, path, paths, openAsDocument] {
+            adoptDocument(loaded->state, QFileInfo(path).completeBaseName(), path, loaded->digest, true);
+            remember(path);
+            importNext(paths, openAsDocument);
+        });
         return;
     }
     if (isRawPath(path)) {

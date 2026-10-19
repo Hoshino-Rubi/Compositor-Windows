@@ -290,7 +290,7 @@ void MainWindow::transformDialog(bool distort) {
 void MainWindow::watchProjects() {
     if (!Preferences::load().autoReload)
         return;
-    if (busy_ || checkingProjects_ || canvas_->editingText() || QApplication::activeModalWidget() ||
+    if (busy_ || saving_ || checkingProjects_ || canvas_->editingText() || QApplication::activeModalWidget() ||
         documents_.isEmpty())
         return;
     watchPaths_.clear();
@@ -323,8 +323,9 @@ void MainWindow::watchProjects() {
         checkingProjects_ = false;
         return;
     }
+    const auto generation = watchGeneration_;
     disconnect(&projectWatcher_, nullptr, this, nullptr);
-    connect(&projectWatcher_, &QFutureWatcher<QVector<LoadedProject>>::finished, this, [this, paths, stamps] {
+    connect(&projectWatcher_, &QFutureWatcher<QVector<LoadedProject>>::finished, this, [this, paths, stamps, generation] {
         checkingProjects_ = false;
         QVector<LoadedProject> loaded;
         try {
@@ -332,7 +333,7 @@ void MainWindow::watchProjects() {
         } catch (...) {
             return;
         }
-        if (busy_ || !Preferences::load().autoReload)
+        if (busy_ || saving_ || generation != watchGeneration_ || !Preferences::load().autoReload)
             return;
         for (int p = 0; p < paths.size() && p < loaded.size(); ++p) {
             if (loaded[p].state.id.isEmpty())
@@ -358,6 +359,7 @@ void MainWindow::watchProjects() {
                 if (i == currentTab_) {
                     canvas_->cancelGesture();
                     diskDigest_ = loaded[p].digest;
+                    compatibilityMode_ = loaded[p].state.metadata.value("windowsCompatibility").toBool();
                     document_.reset(loaded[p].state, true);
                     stashTab();
                 } else {
@@ -365,6 +367,7 @@ void MainWindow::watchProjects() {
                     document.reset(loaded[p].state, true);
                     tab.session = document.session();
                     tab.digest = loaded[p].digest;
+                    tab.compatibility = loaded[p].state.metadata.value("windowsCompatibility").toBool();
                 }
                 watchStamps_[paths[p]] = stamps[paths[p]];
                 changedProjects_.remove(paths[p]);

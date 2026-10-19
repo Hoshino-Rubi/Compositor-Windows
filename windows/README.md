@@ -1,14 +1,30 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.5.2 (stable)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.5.3 (stable)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the stable [0.5.2 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.2), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
+Download the stable [0.5.3 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.3), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.5.2-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.5.3-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.5.3 — Workflow and project compatibility
+
+- Save/Save As offers **Compatibility mode**, off by default. Standard masks are 8-bit for upstream; lossless 16-bit copies are retained inside the project for Windows reopening. Changed external masks take precedence. Native 16-bit-mask saves use Windows format v15; compatible saves keep upstream v11–v14.
+- Paste images or copied image files on the welcome page to create documents. Drop images/projects on the tab bar's empty area to create tabs; drop layers there to fit a new canvas to their transformed bounds.
+- Middle-drag the layer list without changing selection. Drag numeric labels to adjust values (Shift: fine, Ctrl: coarse, Escape: cancel). Drag with the Zoom tool to zoom; the plus/minus cursor follows direction immediately.
+- Save a snapshot while editing and tab switching continue. Later edits remain unsaved, and completion updates the correct document.
+- View → CMYK Profiles lists installed Windows profiles and imported copies. Choose/load profiles and remove inactive imported copies without modifying system profiles.
+- Verified downloads offer **Install and Restart**. A native helper waits for the editor to exit, replaces package files with rollback on detected failure, and reopens saved projects. It requires a writable portable installation and parent directory, does not elevate, retains a sibling recovery directory and does not remove unrelated files. Close other instances first. The application remains unsigned.
+- Eight-language coverage. See [0.5.3 release notes](releases/0.5.3.md).
+
+Copy the entire .comp folder to retain 16-bit sidecar data. A macOS re-save may remove that extension; keep the Windows original if exact 16-bit values matter. This release does not make RAW, Vision, Core Image or Metal output identical.
+
+## Historical releases
+
+The sections below describe capabilities and limits at each release, not the current build.
 
 ## Version 0.5.2 — HDR, print color and editing tools
 
@@ -214,7 +230,7 @@ Use Open Image (`Ctrl+O`) for a new image document, Open Project (`Ctrl+Shift+O`
 
 ## Compatibility
 
-Reads supported `.comp` versions 1–14, including EXR assets and smooth corners. Writes v11 for 8-bit, v12 for 16-bit, v13 for HDR and v14 for smooth corners. Integer working depth is inferred when absent; HDR layers retain floating-point pixels. Untouched PNG bytes and non-rendering metadata survive round trips. Font/color runs remain editable; text reflows with Windows fonts. Pixel editing rasterizes text/shapes. Selection and history are session-only.
+Reads supported `.comp` versions 1–15, including EXR assets and smooth corners. Writes v11 for 8-bit, v12 for 16-bit, v13 for HDR and v14 for smooth corners; native 16-bit masks require v15. Compatibility mode writes upstream-readable masks and retains a separately versioned lossless Windows copy. Integer working depth is inferred when absent; HDR layers retain floating-point pixels. Untouched PNG bytes and non-rendering metadata survive round trips. Font/color runs remain editable; text reflows with Windows fonts. Pixel editing rasterizes text/shapes. Selection and history are session-only.
 
 PSD/PSB import supports 8-bit and 16-bit RGB, plus 8-bit CMYK converted through its embedded or explicitly selected ICC profile. 32-bit PSD remains unsupported. Editing uses integer sRGB for 8/16-bit layers and floating-point extended-range sRGB for HDR layers. Complex Photoshop objects, text warps and effects use raster fallbacks or conversion notices; PSD export is not provided.
 Camera Raw matches this application's controls, not Adobe's proprietary plugin or lens database. Windows object selection uses local U2Netp foreground inference and connected components, which can differ from macOS Vision.

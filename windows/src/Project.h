@@ -10,8 +10,9 @@
 #include <stdexcept>
 namespace comp {
 struct ProjectManifest {
-    static constexpr int current = 14;
-    static constexpr int readable = 14;
+    static constexpr int current = 15;
+    static constexpr int readable = 15;
+    static constexpr int maskPrecisionVersion = 1;
     static constexpr int eightBit = 11;
 };
 qint64 documentCapacity(qint64 memoryDivisor, qint64 minimum, qint64 maximum);
@@ -73,7 +74,8 @@ QStringList blendModes();
 void validateState(const State &state);
 LoadedProject readProject(const QString &directory);
 QByteArray projectDigest(const QString &directory);
-QByteArray writeProject(const QString &directory, const State &state, const QByteArray &expectedDigest = {});
+QByteArray writeProject(const QString &directory, const State &state, const QByteArray &expectedDigest = {},
+                        bool compatibilityMode = false);
 QImage readImage(const QString &path);
 QByteArray pngBytes(const QImage &image, double resolution = 72);
 } // namespace comp

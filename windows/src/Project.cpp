@@ -248,6 +248,11 @@ LoadedProject readProject(const QString &directory) {
     require(s.bitDepth == 8 || s.bitDepth == 16);
     require(v >= 12 || !m.contains("bitDepth") || m["bitDepth"] == 8);
     s.metadata = m;
+    const auto precision = m.value("windowsMaskPrecision").toObject();
+    if (m.contains("windowsMaskPrecision"))
+        require(v >= 12 && precision.value("version") == ProjectManifest::maskPrecisionVersion &&
+                precision.value("masks").isObject());
+    const auto preciseMasks = precision.value("masks").toObject();
     if (!m["activeLayerID"].isNull() && !m["activeLayerID"].isUndefined())
         s.active = canonicalId(m["activeLayerID"]);
     if (m.contains("guides")) {
@@ -308,6 +313,23 @@ LoadedProject readProject(const QString &directory) {
                 safeRead(directory, "images/" + l.id + ".mask.png", (v >= 12 ? 1024ll : 512ll) * 1024 * 1024);
             hash.addData(l.originalMaskPng);
             l.mask = decodePng(l.originalMaskPng, maskPixels, true);
+            const auto precise = preciseMasks.value(l.id).toObject();
+            if (!precise.isEmpty() &&
+                precise.value("previewSHA256").toString().toLatin1() ==
+                    QCryptographicHash::hash(l.originalMaskPng, QCryptographicHash::Sha256).toHex()) {
+                // Never resurrect stale precision over a mask edited by another application.
+                require(precise.value("file") == "windows/masks/" + l.id + ".png");
+                const auto original = safeRead(directory, precise.value("file").toString(), 1024ll * 1024 * 1024);
+                require(precise.value("sha256").toString().toLatin1() ==
+                        QCryptographicHash::hash(original, QCryptographicHash::Sha256).toHex(), "missingAsset");
+                qint64 budget = 0;
+                const auto mask = decodePng(original, budget, true);
+                require(mask.size() == l.mask.size() && wideImage(mask), "missingAsset");
+                hash.addData(original);
+                l.mask = mask;
+                l.originalMaskPng = original;
+                s.bitDepth = 16;
+            }
             l.maskEnabled = j["maskEnabled"].toBool(true);
             l.maskLinked = j["maskLinked"].toBool(true);
             if (j.contains("maskPlacement"))
@@ -402,7 +424,7 @@ QImage readImage(const QString &path) {
     image.setColorSpace(QColorSpace::SRgb);
     return image.convertToFormat(pixelFormat(image));
 }
-QByteArray writeProject(const QString &directory, const State &s, const QByteArray &expectedDigest) {
+QByteArray writeProject(const QString &directory, const State &s, const QByteArray &expectedDigest, bool compatibilityMode) {
     validateState(s);
     const QFileInfo target(directory);
     require(target.suffix().compare("comp", Qt::CaseInsensitive) == 0 && !target.isSymLink(), "invalidProject");
@@ -426,6 +448,13 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
         manifest.remove("bitDepth");
     for (const auto &layer : s.layers)
         if (layer.metadata["shape"].toObject()["smoothing"].toBool()) manifest["version"] = 14;
+    if (!compatibilityMode && std::any_of(s.layers.cbegin(), s.layers.cend(),
+        [](const Layer &layer) { return wideImage(layer.mask); }))
+        manifest["version"] = ProjectManifest::current;
+    manifest.remove("windowsMaskPrecision");
+    manifest.remove("windowsCompatibility");
+    if (compatibilityMode) manifest["windowsCompatibility"] = true;
+    QJsonObject preciseMasks;
     manifest["colorSpace"] = "sRGB";
     manifest["documentID"] = s.id;
     manifest["width"] = s.size.width();
@@ -469,8 +498,21 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
                 encoded.append(bytes);
             }
             if (!l.mask.isNull()) {
-                const auto bytes = l.originalMaskPng.isEmpty() ? pngBytes(maskImage(l.mask, s.bitDepth), s.resolution)
+                QByteArray bytes = l.originalMaskPng.isEmpty() ? pngBytes(maskImage(l.mask, s.bitDepth), s.resolution)
                                                                : l.originalMaskPng;
+                QByteArray precise;
+                if (compatibilityMode && wideImage(l.mask)) {
+                    // Keep the lossless mask separately; upstream only sees the ordinary 8-bit PNG.
+                    precise = pngBytes(maskImage(l.mask, 16), s.resolution);
+                    bytes = pngBytes(maskImage(l.mask, 8), s.resolution);
+                    require(QDir().mkpath(stage + "/windows/masks"), "fileError");
+                    const QString asset = "windows/masks/" + l.id + ".png";
+                    write(asset, precise);
+                    preciseMasks[l.id] = QJsonObject{
+                        {"file", asset},
+                        {"previewSHA256", QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex())},
+                        {"sha256", QString::fromLatin1(QCryptographicHash::hash(precise, QCryptographicHash::Sha256).toHex())}};
+                }
                 j["maskFile"] = l.id + ".mask.png";
                 j["maskEnabled"] = l.maskEnabled;
                 j["maskLinked"] = l.maskLinked;
@@ -478,9 +520,13 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
                     j["maskPlacement"] = l.maskPlacement.json();
                 write("images/" + l.id + ".mask.png", bytes);
                 encoded.append(bytes);
+                if (!precise.isEmpty()) encoded.append(precise);
             }
             records.append(j);
         }
+        if (!preciseMasks.isEmpty())
+            manifest["windowsMaskPrecision"] = QJsonObject{
+                {"version", ProjectManifest::maskPrecisionVersion}, {"masks", preciseMasks}};
         manifest["layers"] = records;
         const auto json = QJsonDocument(manifest).toJson();
         require(json.size() <= 4 * 1024 * 1024, "tooLarge");

@@ -1,4 +1,4 @@
-# Compositor project format, versions 1–14
+# Compositor project format, upstream versions 1–14 and Windows version 15
 
 A `.comp` file is a macOS document package containing `manifest.json` and an `images/` directory of `<layer UUID>.png` assets.
 
@@ -59,10 +59,32 @@ Version 14 adds optional `smoothing` to a layer’s `shape` style. True draws re
 
 ## Native Windows format notes
 
-Windows 0.5.2 reads supported projects through v14. Integer depth can be inferred from PNG assets when the upstream manifest omits `bitDepth`. EXR assets are floating-point HDR layers; Smooth Corners uses the upstream v14 shape metadata. Older versions cannot declare these rendering features. Untouched PNG and EXR assets retain their original encoded bytes.
+Windows 0.5.3 reads supported projects through v15 (including previous Windows v12–v14 files with 16-bit masks). Integer depth can be inferred from PNG assets when the upstream manifest omits `bitDepth`. EXR assets are floating-point HDR layers; Smooth Corners uses the upstream v14 shape metadata. Older versions cannot declare these rendering features. Untouched PNG and EXR assets retain their original encoded bytes.
 
 Saving selects the minimum required version: v11 for 8-bit integer documents, v12 for 16-bit integer documents, v13 when HDR/EXR layers are present, or v14 when a shape uses smoothing. The Windows `bitDepth: 16` property denotes the integer working precision; individual HDR images remain floats, identified by their `.exr` asset. `windowsLayerBitDepth` optionally keeps a layer at 8 or 16 bits during later edits; the actual PNG itself carries that precision, so older readers need not interpret the extension to display it. CMYK PSD imports can retain the embedded profile as base64 `windowsCMYKProfile` metadata. Pixel assets remain RGB; proofing is a view setting and does not alter the stored image colors.
 
-Windows supports native 16-bit grayscale masks; upstream macOS currently accepts only 8-bit PNG masks. Cross-platform readability is therefore not universal. Keep a backup and convert to 8-bit when targeting older readers.
+### Windows v15 and compatible mask storage
+
+Version 15 explicitly identifies a native Windows save containing 16-bit grayscale masks. Their maskFile remains <UUID>.mask.png with 16-bit grayscale PNG samples. Saves without high-depth masks still use the minimum v11–v14 needed by other features. Upstream 1.5.3 and Windows 0.5.2 or earlier reject v15; older v12–v14 Windows projects remain readable.
+
+**Compatibility mode** in Save/Save As defaults off for new documents. Its successful choice is retained per document and remembered when reopening a compatible save. Ordinary Save uses that document's last successful mode; Save As changes it.
+
+Compatible saves keep the upstream manifest at v11–v14, never v15, and store **8-bit grayscale** in every standard images/<UUID>.mask.png. Image-layer precision is unchanged. Lossless 16-bit masks are stored in windows/masks/<UUID>.png. The top-level optional extension uses this independently versioned structure:
+
+    "windowsCompatibility": true,
+    "windowsMaskPrecision": {
+      "version": 1,
+      "masks": {
+        "<UUID>": {
+          "file": "windows/masks/<UUID>.png",
+          "previewSHA256": "<SHA-256 of standard 8-bit mask PNG bytes>",
+          "sha256": "<SHA-256 of lossless 16-bit mask PNG bytes>"
+        }
+      }
+    }
+
+Upstream ignores this extension; standard render data remains compatible. Windows checks fixed paths, byte digests, grayscale type, dimensions and precision before restoring a high-depth mask. It restores only when the standard PNG still matches its recorded hash. If another editor changes/re-encodes that PNG, the standard mask wins and is promoted to a 16-bit editing buffer without inventing lost precision. A matching standard mask with a missing/corrupt precision asset produces an explicit error, not silent quantization. Saving does not alter the live document, selections or undo state.
+
+Copy the **whole .comp directory**, including windows/, to retain lossless precision. Upstream saving may discard unknown metadata/sidecar directories; exact original 16-bit samples cannot be promised after an upstream re-save. Keep the Windows original when making round trips. This mode resolves mask-depth compatibility; it does not promise identical fonts, renderers or every application-specific feature.
 
 The separate Windows layer-clipboard format remains v1 for integer assets and uses v2 when HDR layers are included. A v2 image record uses `imageEncoding: "exr"`; `image` contains base64 EXR bytes. Existing transform, mask and metadata fields are unchanged. Older Windows clipboard readers reject v2 instead of treating EXR bytes as PNG.
