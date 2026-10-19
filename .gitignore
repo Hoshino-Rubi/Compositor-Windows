@@ -31,3 +31,5 @@ windows/dist/
 windows/test-results/
 windows/resources/app.ico
 aqtinstall.log
+# Local HDR plans and agent handoffs: HDR_FULL_PLAN.md, HDR_EDITING_PLAN.md, HDR_LIGHT_PLAN.md
+/HDR_*.md
