@@ -5,6 +5,8 @@ extern "C" {
 }
 namespace comp::rawtables {
 inline constexpr int Size = 17, Grid = 33;
+int beforeShadowsCount(const QJsonObject &settings);
+void applyShadows(QImage &image, double amount, double scale);
 bool measuredCurve(const QJsonObject &curve);
 QVector<CameraRawStage> stages(const QJsonObject &settings, const QImage &image);
 QVector<CameraRawStage> stagesWithStatistics(const QJsonObject &settings, const double brightness[3]);

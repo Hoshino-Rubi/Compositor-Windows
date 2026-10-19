@@ -229,11 +229,19 @@ QImage cameraRaw(const QImage &source, const QJsonObject &settings, double scale
         return result;
     auto *pixels = result.bits();
     const int w = result.width(), h = result.height(), stride = result.bytesPerLine();
-    auto composed = rawtables::compose(rawtables::stages(s, result));
+    const auto lightStages = rawtables::stages(s, result);
+    const double shadows = s["enableLight"].toBool(true) ? value(s, "shadows") : 0;
+    const int split = shadows != 0 ? rawtables::beforeShadowsCount(s) : 0;
+    auto composed = rawtables::compose(lightStages.mid(split));
     const auto calibration = s["calibration"].toObject();
     if (!clipping && !s["sharpenMask"].toBool() && s["enableCalibration"].toBool(true))
         adjust_camera_raw_calibration(pixels, w, h, stride, value(calibration, "shadowTint"), 0, 0, 0, 0, 0, 0,
                                       int(value(calibration, "process", 6)));
+    if (shadows != 0) {
+        const auto before = rawtables::compose(lightStages.mid(0, split));
+        if (!before.isEmpty()) adjust_camera_raw(pixels, w, h, stride, before.constData(), rawtables::Grid, 0);
+        rawtables::applyShadows(result, shadows, scale);
+    }
     if (clipping)
         adjust_camera_raw(pixels, w, h, stride, composed.isEmpty() ? nullptr : composed.constData(), rawtables::Grid,
                           clipping);

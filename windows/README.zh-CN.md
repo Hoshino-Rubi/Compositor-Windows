@@ -1,13 +1,25 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.5.0（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.5.1（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.0) 下载正式版便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.1) 下载正式版便携包。
 
-解压 `Compositor-0.5.0-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.5.1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.5.1 — 同步上游 1.5.3
+
+合并从 `3081719` 到 **`365b5745eda537f984f3d5bed1e53c361dbc9c91`（Compositor 1.5.3）**的全部 **58 个上游提交**，保留原始 Git 历史和 Windows 分支。
+
+- 内容识别修复与填充更新为多尺度 PatchMatch，支持原生 8／16 位。16 位通过浮点工作区保留细分值，不先降成 8 位图像。
+- Camera Raw 使用新的区域自适应阴影算法和系数，在正确的颜色处理阶段之间执行。启用该新阶段时整次请求走 CPU，等待匹配的 GPU 实现验证，不重新启用较慢的实验路线。其余 0.5.0 加速策略保留；每个 Camera Raw 分区可单独重置。
+- 文件菜单新增“导入图像文件夹”，按名称导入当前目录中的受支持文件，不递归子目录。RAW 与分层 PSD 仍走原有导入流程；保留 HIF／HEIF 支持，更新上游应用图标。
+- 读取支持范围内的 v12–v14 PNG 项目，即使原版没有写入 Windows 专用 `bitDepth` 字段也可识别位深；高位深资产将文档提升为 16 位，未修改的原始 PNG 字节保留。HDR／EXR 与平滑圆角形状会明确拒绝。仍按 8 位 v11、16 位 v12 保存。
+- 文件夹相关新文案和支持版本范围同步八种语言。
+
+**范围说明：**合入 Swift／Metal 源码不等于自动完成 Windows 功能移植。本补丁不新增 HDR／EXR、CMYK 软打样及导入／导出、渐进模糊、高斯模糊保持透明度、平滑圆角、新 macOS RAW 显影选项或原生分辨率 Metal Camera Raw 预览。验证与边界见[发布说明](releases/0.5.1.md)。程序仍未签名，更新仍手动安装。
 
 ## 0.5.0 — 性能整合正式版
 
@@ -21,7 +33,7 @@ C++20 / Qt 6 Widgets，版本 **0.5.0（正式版）**。保留原版 Swift / Ap
 
 ## 历史 alpha 版本
 
-以下记录描述各批次发布时的范围与默认设置，并非 0.5.0 的现行设置；较慢 GPU 编辑的实验开关已撤下。
+以下记录描述各批次发布时的范围与默认设置，并非 0.5.1 的现行设置；较慢 GPU 编辑的实验开关已撤下。
 
 ## 0.4.1a9 — 状态化修饰与参考渲染流程（预发布）
 
@@ -210,7 +222,7 @@ Windows 原生端同步适配：
 
 ## 兼容范围
 
-读取 `.comp` version 1–12；8 位文档写入 version 11，16 位文档写入 version 12。未触碰的 PNG 字节及未知非渲染元数据保留。文字保留 fontRuns/colorRuns；Windows 缺少的字体可能替代，重新编辑会按 Windows 字体排版。像素滤镜/绘画/自由扭曲会栅格化文字和形状。选区与历史为会话状态。
+读取支持范围内的 PNG `.comp` version 1–14，必要时从 PNG 推断位深；HDR／EXR 和平滑圆角形状会明确拒绝。8 位文档写入 version 11，16 位文档写入 version 12。未触碰的 PNG 字节及未知非渲染元数据保留。文字保留 fontRuns/colorRuns；Windows 缺少的字体可能替代，重新编辑会按 Windows 字体排版。像素滤镜/绘画/自由扭曲会栅格化文字和形状。选区与历史为会话状态。
 
 PSD/PSB 支持 8 位及 16 位 RGB，超出原版的 8 位范围；暂不支持 CMYK 和 32 位 PSD。编辑使用整数 sRGB，不是浮点／HDR 管线。Photoshop 智能对象、复杂路径/文字变形与部分效果保留栅格后备或给出转换报告，不承诺 Photoshop 所有结构都可继续编辑。导入不是 PSD 导出。
 Camera Raw 对应本项目原版的功能，不是 Adobe 插件；镜头配置使用原版通用校正内核，不带 Adobe 相机/镜头数据库。

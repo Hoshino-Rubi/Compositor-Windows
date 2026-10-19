@@ -34,6 +34,10 @@ bool GpuProcessor::prefersCpu(const QJsonObject &settings, int clipping) {
     const auto kind = settings["kind"].toString();
     if (kind == "Dither")
         return std::clamp(settings["style"].toInt(), 0, 9) <= 1;
+    // Adaptive Shadows is a spatial pass, not the old one-dimensional brightness table.
+    // Keep this request entirely on the verified CPU path until a matching GPU kernel exists.
+    if (kind == "Camera Raw" && settings["enableLight"].toBool(true) &&
+        normalizedCameraRaw(settings)["shadows"].toDouble() != 0) return true;
     if (kind != "Camera Raw" || clipping || settings["sharpenMask"].toBool() ||
         !settings["enableDetail"].toBool(true))
         return false;

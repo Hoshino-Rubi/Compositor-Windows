@@ -154,6 +154,8 @@ void validateState(const State &s) {
             require(!l.group);
             validateAdjustment(l.metadata["adjustment"].toObject());
         }
+        if (l.metadata["shape"].toObject()["smoothing"].toBool())
+            throw Error("unsupportedFeature", "Smooth rectangle corners");
         const auto effects = l.metadata["effects"].toObject();
         validateEffects(effects);
 
@@ -234,7 +236,7 @@ LoadedProject readProject(const QString &directory) {
     require(m["format"] == "com.compositor.project" && m["colorSpace"] == "sRGB");
     const double v = m["version"].toDouble(-1);
     require(v == std::floor(v));
-    if (v < 1 || v > ProjectManifest::current)
+    if (v < 1 || v > ProjectManifest::readable)
         throw Error("unsupportedVersion", QString::number(v));
     require(m["layers"].isArray() && m["width"].isDouble() && m["height"].isDouble());
     State s;
@@ -242,10 +244,9 @@ LoadedProject readProject(const QString &directory) {
     s.size = {m["width"].toInt(), m["height"].toInt()};
     require(m["width"].toDouble() == s.size.width() && m["height"].toDouble() == s.size.height());
     s.resolution = m["resolution"].toDouble(72);
-    s.bitDepth = v == 12 ? m["bitDepth"].toInt(0) : 8;
+    s.bitDepth = v >= 12 ? m["bitDepth"].toInt(8) : 8;
     require(s.bitDepth == 8 || s.bitDepth == 16);
-    require(v != 12 || s.bitDepth == 16);
-    require(v == 12 || !m.contains("bitDepth") || m["bitDepth"] == 8);
+    require(v >= 12 || !m.contains("bitDepth") || m["bitDepth"] == 8);
     s.metadata = m;
     if (!m["activeLayerID"].isNull() && !m["activeLayerID"].isUndefined())
         s.active = canonicalId(m["activeLayerID"]);
@@ -267,6 +268,8 @@ LoadedProject readProject(const QString &directory) {
         const auto j = entry.toObject();
         Layer l;
         l.metadata = j;
+        if (j["shape"].toObject()["smoothing"].toBool())
+            throw Error("unsupportedFeature", "Smooth rectangle corners");
         l.id = canonicalId(j["id"]);
         l.name = j["name"].toString();
         require(j["isVisible"].isBool());
@@ -290,9 +293,11 @@ LoadedProject readProject(const QString &directory) {
         if (j.contains("effects"))
             validateEffects(j["effects"].toObject());
         if (j.contains("imageFile") && !j["imageFile"].isNull()) {
+            if (j["imageFile"].toString().endsWith(".exr", Qt::CaseInsensitive))
+                throw Error("unsupportedFeature", "OpenEXR/HDR layers");
             require(j["imageFile"].toString() == l.id + ".png");
             l.originalPng =
-                safeRead(directory, "images/" + l.id + ".png", (s.bitDepth == 16 ? 1024ll : 512ll) * 1024 * 1024);
+                safeRead(directory, "images/" + l.id + ".png", (v >= 12 ? 1024ll : 512ll) * 1024 * 1024);
             hash.addData(l.originalPng);
             l.image = decodePng(l.originalPng, pixels, false);
         }
@@ -300,7 +305,7 @@ LoadedProject readProject(const QString &directory) {
         if (j.contains("maskFile") && !j["maskFile"].isNull()) {
             require(j["maskFile"].toString() == l.id + ".mask.png" && v >= (l.group ? 6 : 4));
             l.originalMaskPng =
-                safeRead(directory, "images/" + l.id + ".mask.png", (s.bitDepth == 16 ? 1024ll : 512ll) * 1024 * 1024);
+                safeRead(directory, "images/" + l.id + ".mask.png", (v >= 12 ? 1024ll : 512ll) * 1024 * 1024);
             hash.addData(l.originalMaskPng);
             l.mask = decodePng(l.originalMaskPng, maskPixels, true);
             l.maskEnabled = j["maskEnabled"].toBool(true);
@@ -319,8 +324,11 @@ LoadedProject readProject(const QString &directory) {
             require(l.opacity == 1);
         s.layers.append(l);
     }
-    for (const auto &l : s.layers)
-        require(v == 12 || (!wideImage(l.image) && !wideImage(l.mask)));
+    for (const auto &l : s.layers) {
+        const bool highDepth = wideImage(l.image) || wideImage(l.mask);
+        require(v >= 12 || !highDepth);
+        if (highDepth) s.bitDepth = 16;
+    }
     normalizePrecision(s);
     validateState(s);
     return {s, hash.result()};

@@ -1,14 +1,26 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.5.0 (stable)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.5.1 (stable)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the stable [0.5.0 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.0), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
+Download the stable [0.5.1 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.1), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.5.0-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.5.1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.5.1 — Upstream 1.5.3 integration
+
+Merged all **58 upstream commits** since `3081719` through **`365b5745eda537f984f3d5bed1e53c361dbc9c91` (Compositor 1.5.3)**, preserving the original Git history and the Windows branch.
+
+- Native 8/16-bit Content-Aware healing and fill now use upstream multi-scale PatchMatch. The 16-bit port retains fractional samples in the float workspace and does not quantize to an 8-bit image.
+- Camera Raw uses the new adaptive Shadows coefficients and spatial pass, in the correct order between the preceding and following color stages. Requests using this new stage use CPU processing until a matching GPU implementation is verified. Other validated 0.5.0 acceleration policies remain intact. Each Camera Raw section has a Reset button.
+- File → Import image folder imports supported files from one folder, sorted by name without recursing. Existing RAW and layered PSD import dialogs/workflows still apply. HIF/HEIF support remains available; the upstream app icon is updated.
+- Reads supported PNG-based v12–v14 projects even without the Windows-specific `bitDepth` field. High-depth assets promote the native document to 16-bit; untouched PNG bytes are preserved. HDR/EXR assets and smoothed-corner shapes are rejected explicitly. Saves remain v11 (8-bit) or v12 (16-bit).
+- New folder messages and the supported-format range are updated in all eight languages.
+
+**Scope:** merging Swift/Metal sources does not automatically port their UI or rendering. HDR/EXR, CMYK proofing/import/export, Progressive Blur, Gaussian Preserve Transparency, smooth corners, new macOS RAW-develop controls and the native-resolution Metal Camera Raw preview changes are not added to the Windows UI in this patch. See [release notes](releases/0.5.1.md) for verification and retained limits. The application remains unsigned; updates install manually.
 
 ## Version 0.5.0 — Stable performance release
 
@@ -22,7 +34,7 @@ See [0.5.0 release notes](releases/0.5.0.md) for measurements, validation and li
 
 ## Historical alpha releases
 
-The following records describe their original scope and defaults, not the current 0.5.0 settings. In particular, slower experimental GPU editing switches are no longer available.
+The following records describe their original scope and defaults, not the current 0.5.1 settings. In particular, slower experimental GPU editing switches are no longer available.
 
 ## Version 0.4.1a9 — Stateful retouch and reference workflows (pre-release)
 
@@ -192,7 +204,7 @@ Use Open Image (`Ctrl+O`) for a new image document, Open Project (`Ctrl+Shift+O`
 
 ## Compatibility
 
-Reads `.comp` versions 1–12. Writes version 11 for 8-bit documents and version 12 for 16-bit documents. Untouched PNG bytes and non-rendering metadata survive round trips. Font/color runs remain editable; text reflows with Windows fonts. Pixel editing rasterizes text/shapes. Selection and history are session-only.
+Reads supported PNG-based `.comp` versions 1–14, inferring depth from PNG assets when needed. HDR/EXR and smoothed-corner shapes are explicitly rejected. Writes version 11 for 8-bit documents and version 12 for 16-bit documents. Untouched PNG bytes and non-rendering metadata survive round trips. Font/color runs remain editable; text reflows with Windows fonts. Pixel editing rasterizes text/shapes. Selection and history are session-only.
 
 PSD/PSB import supports 8-bit and 16-bit RGB, extending the upstream 8-bit scope. CMYK and 32-bit PSD remain unsupported. Editing uses integer sRGB, not a floating-point/HDR pipeline. Complex Photoshop objects, text warps and effects use raster fallbacks or conversion notices; PSD export is not provided.
 Camera Raw matches this application's controls, not Adobe's proprietary plugin or lens database. Windows object selection uses local U2Netp foreground inference and connected components, which can differ from macOS Vision.

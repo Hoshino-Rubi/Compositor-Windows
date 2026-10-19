@@ -6,6 +6,7 @@ struct ImportResult {
     QStringList notices;
 };
 ImportResult readPhotoshop(const QString &path, qint64 pixelBudget = MaxSourcePixels);
+QStringList imageFilesInFolder(const QString &directory);
 bool isRawPath(const QString &path);
 struct RawFrame {
     QImage linear;

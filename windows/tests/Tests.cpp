@@ -266,9 +266,18 @@ class Tests : public QObject {
         bool parity=true;
         for(int depth:{8,16}) {
             const auto source=blurFixture({97,83},depth).layers[0].image;
-            QJsonObject raw{{"kind","Camera Raw"},{"exposure",1.3},{"shadows",-29}};
-            for(int clip:{1,2}){const auto actual=filterGpuImage(source,raw,1,clip);QVERIFY2(!actual.isNull(),qPrintable(gpuPreviewStatus()));
-                const int delta=sampleDifference(actual,cameraRaw(source,raw,1,clip));qInfo()<<"RAW_CLIP"<<depth<<clip<<delta;parity &= delta<=(depth==8?257:1);}
+            for (bool shadows : {false, true}) {
+                QJsonObject raw{{"kind","Camera Raw"},{"exposure",1.3},{"shadows",shadows ? -29 : 0}};
+                for (int clip : {1,2}) {
+                    resetGpuPreviewMetrics();
+                    const auto actual = filteredAccelerated(source,raw,1,clip);
+                    QVERIFY2(!actual.isNull(),qPrintable(gpuPreviewStatus()));
+                    QCOMPARE(gpuPreviewMetrics().processingDispatches > 0, !shadows);
+                    const int delta=sampleDifference(actual,cameraRaw(source,raw,1,clip));
+                    qInfo()<<"RAW_CLIP"<<depth<<clip<<shadows<<delta;
+                    parity &= delta <= (shadows ? 0 : (depth==8?257:1));
+                }
+            }
             for(bool colorize:{false,true})for(bool invert:{false,true}){
                 QJsonObject values{{"Master",QJsonObject{{"hue",21},{"saturation",13},{"lightness",-9}}},{"Reds",QJsonObject{{"hue",73},{"saturation",45},{"lightness",17}}},{"Blues",QJsonObject{{"hue",-91},{"saturation",-35},{"lightness",-27}}}};
                 QJsonObject settings{{"kind","Hue/Saturation"},{"hsvSettings",QJsonObject{{"colorize",colorize},{"invertRange",invert},{"range","Reds"},{"adjustments",values}}}};
@@ -677,7 +686,7 @@ class Tests : public QObject {
         bool parity=true;
         for(int depth:{8,16}) for(int i=0;i<cases.size();++i) {
             auto input=blurFixture({97,83},depth).layers[0].image;auto s=cases[i].toObject();s["kind"]="Camera Raw";
-            const bool cpuRoute=s["detail"].toObject()["noiseLuminance"].toDouble()>0;
+            const bool cpuRoute=s["detail"].toObject()["noiseLuminance"].toDouble()>0 || (s["enableLight"].toBool(true) && s["shadows"].toDouble()!=0);
             resetGpuPreviewMetrics();
             const auto gpu=filterGpuImage(input,s);
             if(cpuRoute)QVERIFY(gpu.isNull());else QVERIFY2(!gpu.isNull(),qPrintable(gpuPreviewStatus()));
@@ -2016,8 +2025,8 @@ class Tests : public QObject {
                                  healing.bytesPerLine() / 2, 1, 0, 0),
                  0);
         QCOMPARE(pixel64(healing, 24, 15), pixel64(image, 24, 15));
-        QCOMPARE(wide::content_fill(reinterpret_cast<quint16 *>(healing.bits()), healing.bytesPerLine() / 2,
-                                    reinterpret_cast<const uint8_t *>(coverage.constData()), 48, 48, 32),
+        QCOMPARE(wide::patch_fill(reinterpret_cast<quint16 *>(healing.bits()), healing.bytesPerLine() / 2,
+                                    reinterpret_cast<const uint8_t *>(coverage.constData()), 48, 48, 32, 0),
                  1);
         QCOMPARE(pixel64(healing, 24, 15), pixel64(image, 24, 15));
     }
@@ -2543,7 +2552,7 @@ class Tests : public QObject {
         QVERIFY(rejects("unsupportedFeature", [&] { readProject(effectPath); }));
         const QString future = directory.path() + "/future.comp";
         writeProject(future, s);
-        rewrite(future, [](QJsonObject &j) { j["version"] = 13; });
+        rewrite(future, [](QJsonObject &j) { j["version"] = ProjectManifest::readable + 1; });
         QVERIFY(rejects("unsupportedVersion", [&] { readProject(future); }));
     }
     void rejectsCycles() {

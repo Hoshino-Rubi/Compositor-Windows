@@ -1,6 +1,7 @@
 #include "Pixels.h"
 #include "Importers.h"
 #include <QFile>
+#include <QDir>
 #include <QFileInfo>
 #include <QPainter>
 #include <QColorSpace>
@@ -31,6 +32,19 @@ bool isRawPath(const QString &path) {
                        "fff", "gpr", "iiq", "k25", "kdc", "mdc", "mef", "mos", "mrw", "nef", "nrw", "obm", "orf", "pef",
                        "ptx", "pxn", "r3d", "raf", "raw", "rw2", "rwl", "rwz", "sr2", "srf", "srw", "x3f"}
         .contains(QFileInfo(path).suffix().toLower());
+}
+QStringList imageFilesInFolder(const QString &directory) {
+    const QFileInfo folder(directory);
+    if (!folder.isDir() || folder.suffix().compare("comp", Qt::CaseInsensitive) == 0) return {};
+    const QStringList extensions{"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "svg", "svgz", "heic", "heif", "hif", "psd", "psb"};
+    QStringList paths;
+    const auto entries = QDir(directory).entryInfoList(QDir::Files | QDir::Readable | QDir::NoSymLinks, QDir::Name | QDir::IgnoreCase);
+    for (const auto &entry : entries) {
+        if (!extensions.contains(entry.suffix().toLower()) && !isRawPath(entry.filePath())) continue;
+        if (paths.size() >= MaxLayers) throw Error("tooLarge");
+        paths.append(entry.absoluteFilePath());
+    }
+    return paths;
 }
 RawFrame decodeRaw(const QString &path) {
     auto bytes = fileBytes(path);

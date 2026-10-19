@@ -59,4 +59,6 @@ Version 14 adds optional `smoothing` to a layer’s `shape` style. True draws re
 
 ## Native Windows format notes
 
-The Windows port has a separate native integer 8/16-bit document model. Windows 0.5.0 writes v11 for 8-bit documents and v12 with an explicit `bitDepth: 16` for 16-bit documents; color images and grayscale masks retain their native precision. Untouched encoded assets and non-rendering metadata are preserved. The upstream v12 format instead infers per-layer depth from its PNGs and retains 8-bit masks. Upstream v13 HDR and v14 shape smoothing require explicit Windows support; a source merge alone does not implement these rendering features.
+Windows 0.5.1 reads supported PNG-based projects through v14. In v12–v14 it accepts the upstream manifest without a `bitDepth` property and infers native depth from decoded PNG assets. If any image or mask is 16-bit, the Windows document uses 16-bit working pixels; untouched original PNG bytes remain intact. v1–v11 still reject high-depth assets. HDR/EXR assets and `shape.smoothing: true` are explicitly rejected rather than silently flattened or reinterpreted.
+
+Windows saves remain v11 for 8-bit documents and v12 with explicit `bitDepth: 16` for 16-bit documents. Windows supports native 16-bit grayscale masks; upstream currently accepts only 8-bit PNG masks. Therefore reading upstream PNG projects does not guarantee that every Windows 16-bit project can be opened by macOS. Keep a copy and convert to 8-bit for older readers. No floating-point/HDR or CMYK pipeline is added by this compatibility update.

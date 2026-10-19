@@ -1,4 +1,5 @@
 #include "Pixels.h"
+#include "Importers.h"
 #include "MainWindow.h"
 #include "Updates.h"
 #include "Export.h"
@@ -151,6 +152,14 @@ void MainWindow::buildActions() {
     add("save", "Ctrl+S", [this] { save(); });
     add("saveAs", "Ctrl+Shift+S", [this] { save(true); });
     add("import", "Ctrl+I", [this] { importImages(); });
+    add("importFolder", {}, [this] {
+        if (busy_) return;
+        const auto directory = QFileDialog::getExistingDirectory(this, t("importFolder"));
+        if (directory.isEmpty()) return;
+        const auto paths = imageFilesInFolder(directory);
+        if (paths.isEmpty()) { showError("noImportableImages"); return; }
+        importImages(paths);
+    });
     add("export", "Ctrl+Shift+E", [this] { exportImage(); });
     add("undo", "Ctrl+Z", [this] { document_.undo(); });
     add("redo", "Ctrl+Shift+Z", [this] { document_.redo(); });

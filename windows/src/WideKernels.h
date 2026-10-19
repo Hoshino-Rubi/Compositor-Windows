@@ -41,6 +41,13 @@ void camera_raw_statistics(const uint16_t *rgba, size_t width, size_t height, si
 void adjust_camera_raw(uint16_t *rgba, size_t width, size_t height, size_t stride, const float *table, int grid,
                        int clipping);
 
+int camera_raw_lookup_is_valid(const float *table, int grid);
+
+void camera_raw_repair_lookup(uint16_t *result, const uint16_t *source, const uint8_t *uncertain,
+                               size_t width, size_t height, size_t stride, const float *table, int grid);
+
+void adjust_camera_raw_shadows(uint16_t *rgba, size_t width, size_t height, size_t stride, const float *coefficients,
+                               int xCount, float xLow, float xStep, int kCount, float kLow, float kStep);
 void adjust_camera_raw_clip_overlay(uint16_t *rgba, size_t width, size_t height, size_t stride, int shadows, int highlights);
 
 void adjust_camera_raw_curve_color(uint16_t *rgba, size_t width, size_t height, size_t stride,
@@ -95,6 +102,7 @@ void noise_add_at(uint16_t *rgba, size_t width, size_t height, size_t stride,
                   int64_t origin_x, int64_t origin_y);
 int scanlines_apply(uint16_t *rgba, size_t width, size_t height, size_t stride, const ScanlinesParams *params);
 void dither_glow(uint16_t *rgba, const uint16_t *glow, size_t width, size_t height, size_t stride, float amount);int spot_heal(uint16_t *, const uint8_t *, size_t, size_t, size_t, float, int, uint32_t);
-int content_fill(uint16_t *, size_t, const uint8_t *, size_t, int, int);
+int patch_fill(uint16_t *, size_t, const uint8_t *, size_t, int, int, uint32_t);
+void heal_membrane(float *, const uint8_t *, long, long, int);
 
 }

@@ -5,8 +5,10 @@
 #include <QResource>
 #include <QtEndian>
 #include <cmath>
+#include <bit>
 static void initRawTables() {
     Q_INIT_RESOURCE(rawtables);
+    Q_INIT_RESOURCE(rawshadows);
 }
 namespace comp::rawtables {
 static constexpr int Entries = Size * Size * Size * 3, Count = 763;
@@ -101,7 +103,7 @@ bool measuredCurve(const QJsonObject &c) {
 QVector<CameraRawStage> stages(const QJsonObject &s, const QImage &image) {
     const auto light=s["enableLight"].toBool(true)?s:QJsonObject();
     double brightness[]{.5, .5, .5};
-    if (v(light, "contrast") || v(light, "highlights") || v(light, "shadows"))
+    if (v(light, "contrast") || v(light, "highlights"))
         if (wideImage(image))
             wide::camera_raw_statistics(reinterpret_cast<const quint16 *>(image.constBits()), image.width(), image.height(), image.bytesPerLine() / 2, brightness);
         else
@@ -127,8 +129,7 @@ QVector<CameraRawStage> stagesWithStatistics(const QJsonObject &s, const double 
         out.append(adaptive(138, v(light, "contrast"), brightness[0] * 255));
     if (v(light, "highlights"))
         out.append(adaptive(187, v(light, "highlights"), brightness[2] * 255));
-    if (v(light, "shadows"))
-        out.append(adaptive(236, v(light, "shadows"), brightness[1] * 255));
+
     if (v(light, "whites"))
         out.append(stage(102, v(light, "whites"), -100, 25, 9));
     if (v(light, "blacks"))
@@ -147,6 +148,53 @@ QVector<CameraRawStage> stagesWithStatistics(const QJsonObject &s, const double 
         }
     }
     return out;
+}
+int beforeShadowsCount(const QJsonObject &s) {
+    const auto cal = s["enableCalibration"].toBool(true) ? s["calibration"].toObject() : QJsonObject();
+    const auto light = s["enableLight"].toBool(true) ? s : QJsonObject();
+    const auto color = s["enableColor"].toBool(true) ? s : QJsonObject();
+    int count = 0;
+    for (const auto *key : {"redHue", "redSaturation", "greenHue", "greenSaturation", "blueHue", "blueSaturation"})
+        count += v(cal, key) != 0;
+    return count + (v(light, "exposure") != 0) + (v(color, "temperature") != 0 || v(color, "tint") != 0) +
+           (v(light, "contrast") != 0) + (v(light, "highlights") != 0);
+}
+void applyShadows(QImage &image, double amount, double scale) {
+    if (amount == 0 || image.isNull()) return;
+    static const QByteArray bytes = [] {
+        initRawTables();
+        QFile file(":/raw/CameraRawShadows.bin");
+        if (!file.open(QIODevice::ReadOnly)) throw Error("fileError", "CameraRawShadows.bin");
+        return file.readAll();
+    }();
+    if (bytes.size() < 34 || bytes.left(4) != "CRS2") throw Error("invalidProject", "Camera Raw shadows");
+    auto word = [&](int at) { return qFromLittleEndian<quint16>(bytes.constData() + at); };
+    auto real = [&](int at) { return std::bit_cast<float>(qFromLittleEndian<quint32>(bytes.constData() + at)); };
+    const int sets = word(4), amounts = word(6), columns = word(8), rows = word(10), terms = word(12);
+    const qint64 per = qint64(columns) * rows * terms;
+    if (sets != 2 || amounts < 1 || columns < 2 || rows < 1 || terms != 3 ||
+        bytes.size() != 34 + amounts * 4 + sets * amounts * per * 4)
+        throw Error("invalidProject", "Camera Raw shadows payload");
+    QVector<QPair<double, int>> points{{0, -1}};
+    for (int i = 0; i < amounts; ++i) points.append({real(34 + i * 4), i});
+    std::sort(points.begin(), points.end());
+    amount = std::clamp(amount, points.front().first, points.back().first);
+    int index = 0;
+    while (index < points.size() - 2 && amount > points[index + 1].first) ++index;
+    const float mix = float((amount - points[index].first) / (points[index + 1].first - points[index].first));
+    const int set = std::max(image.width(), image.height()) / (scale > 0 ? scale : 1) >= real(14) ? 1 : 0;
+    auto coefficient = [&](int amountIndex, int element) {
+        return amountIndex < 0 ? 0.f : real(int(34 + amounts * 4 + ((set * amounts + amountIndex) * per + element) * 4));
+    };
+    QVector<float> values(per);
+    for (int i = 0; i < values.size(); ++i)
+        values[i] = coefficient(points[index].second, i) * (1 - mix) + coefficient(points[index + 1].second, i) * mix;
+    if (wideImage(image))
+        wide::adjust_camera_raw_shadows(reinterpret_cast<quint16 *>(image.bits()), image.width(), image.height(),
+                                       image.bytesPerLine() / 2, values.constData(), columns, real(18), real(22), rows, real(26), real(30));
+    else
+        adjust_camera_raw_shadows(image.bits(), image.width(), image.height(), image.bytesPerLine(), values.constData(),
+                                  columns, real(18), real(22), rows, real(26), real(30));
 }
 QVector<CameraRawStage> mixer(const QJsonObject &s) {
     QVector<CameraRawStage> out;

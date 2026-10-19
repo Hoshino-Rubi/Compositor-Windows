@@ -11,6 +11,7 @@
 namespace comp {
 struct ProjectManifest {
     static constexpr int current = 12;
+    static constexpr int readable = 14;
     static constexpr int eightBit = 11;
 };
 qint64 documentCapacity(qint64 memoryDivisor, qint64 minimum, qint64 maximum);

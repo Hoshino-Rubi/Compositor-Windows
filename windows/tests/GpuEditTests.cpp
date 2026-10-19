@@ -1,6 +1,7 @@
 #include "Document.h"
 #include "Canvas.h"
 #include "GpuHeal.h"
+#include "LegacyHeal.h"
 #include "GpuPaint.h"
 #include "GpuPaintStroke.h"
 #include "GpuPreview.h"
@@ -411,10 +412,10 @@ void cpuHeal(QImage &image, const QImage &coverage, float opacity, int mode, uin
         std::memcpy(packed.data() + y * mask.width(), mask.constScanLine(y), size_t(mask.width()));
     const auto *coverageBytes = reinterpret_cast<const uint8_t *>(packed.constData());
     if (depth == 16) {
-        wide::spot_heal(reinterpret_cast<quint16 *>(image.bits()), coverageBytes, size_t(image.width()),
+        legacy_heal::spot_heal(reinterpret_cast<quint16 *>(image.bits()), coverageBytes, size_t(image.width()),
                         size_t(image.height()), size_t(image.bytesPerLine() / 2), opacity, mode, seed);
     } else {
-        spot_heal(image.bits(), coverageBytes, size_t(image.width()), size_t(image.height()),
+        legacy_spot_heal(image.bits(), coverageBytes, size_t(image.width()), size_t(image.height()),
                   size_t(image.bytesPerLine()), opacity, mode, seed);
     }
 }
@@ -441,7 +442,7 @@ QImage healFixture(QSize size, int depth) {
 QImage healCoverage(QSize size, int depth, bool partial) {
     Q_UNUSED(depth);
     // The healing bridge intentionally accepts a compact 8-bit coverage mask
-    // for both native image depths; wide::spot_heal uses the same mask.
+    // for both native image depths; the frozen wide reference uses the same mask.
     QImage coverage(size, QImage::Format_Grayscale8);
     coverage.fill(0);
     const int maximum = 255;
@@ -929,7 +930,7 @@ class GpuEditTests : public QObject {
                     QSKIP(qPrintable(failure));
                 }
                 const auto delta = difference(actual, expected, depth);
-                qInfo() << "HEAL_REFERENCE spot_heal/wide::spot_heal" << "depth" << depth << "mode" << mode
+                qInfo() << "HEAL_REFERENCE legacy pre-PatchMatch GPU oracle" << "depth" << depth << "mode" << mode
                         << "maxNativeDelta" << delta.maximum << "meanNativeDelta" << delta.mean << "dispatches"
                         << gpuPreviewMetrics().processingDispatches << "readbacks" << gpuPreviewMetrics().readbacks
                         << "algorithmOrder" << "GPU dispatch then alpha clamp vs CPU membrane then blend";

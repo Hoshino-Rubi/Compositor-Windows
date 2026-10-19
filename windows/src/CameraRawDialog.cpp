@@ -314,6 +314,7 @@ void MainWindow::cameraRawDialog() {
         waiting = true;
         debounce.start();
     };
+    QHash<QString, QPushButton *> sectionResets;
     auto page = [&](QString key) {
         auto *scroll = new QScrollArea;
         scroll->setWidgetResizable(true);
@@ -321,6 +322,10 @@ void MainWindow::cameraRawDialog() {
         auto *form = new QFormLayout(widget);
         form->setContentsMargins(12, 12, 12, 12);
         form->setSpacing(10);
+        auto *sectionReset = new QPushButton(t("reset"));
+        sectionReset->setObjectName("rawReset_" + key);
+        sectionResets[key] = sectionReset;
+        form->addRow(sectionReset);
         scroll->setWidget(widget);
         tabs->addTab(scroll, t("raw." + key));
         sectionChoice->addItem(t("raw." + key));
@@ -696,6 +701,15 @@ void MainWindow::cameraRawDialog() {
         shadow.setChecked(settings["shadowClip"].toBool());
         schedule();
     };
+    for (auto it = sectionResets.cbegin(); it != sectionResets.cend(); ++it) {
+        connect(it.value(), &QPushButton::clicked, &dialog, [&, section = it.key()] {
+            settings = resetCameraRawSection(settings, section);
+            if (section == "mixer" || section == "pointColor") {
+                QSignalBlocker block(&pointChoice); pointChoice.setCurrentIndex(0);
+            }
+            restoreControls();
+        });
+    }
     const QJsonObject initial = settings;
     connect(&reset, &QPushButton::clicked, &dialog, [&] {
         settings = initial;

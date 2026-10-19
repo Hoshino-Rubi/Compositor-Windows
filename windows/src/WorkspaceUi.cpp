@@ -133,7 +133,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
                 m->addAction(actions_[a]);
         return m;
     };
-    auto *fileMenu = menu("file", {"new", "open", "openProject", "import", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
+    auto *fileMenu = menu("file", {"new", "open", "openProject", "import", "importFolder", "", "save", "saveAs", "export", "", "closeDocument", "quit"});
     auto *recentMenu = new QMenu(fileMenu);
     recentMenu->setObjectName("recentMenu");
     fileMenu->insertMenu(actions_["import"], recentMenu);

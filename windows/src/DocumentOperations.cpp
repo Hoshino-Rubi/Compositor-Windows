@@ -10,7 +10,7 @@
 #include <QSet>
 #include <cmath>
 extern "C" {
-#include "ContentFill.h"
+#include "PatchPixels.h"
 }
 
 namespace comp {
@@ -523,11 +523,11 @@ void Document::contentFill() {
         p.setTransform(l.placement.matrix(rgba.size()).inverted());
         p.fillPath(s.selection, Qt::white);
         p.end();
-        int result = s.bitDepth == 16 ? wide::content_fill(reinterpret_cast<quint16 *>(rgba.bits()),
+        int result = s.bitDepth == 16 ? wide::patch_fill(reinterpret_cast<quint16 *>(rgba.bits()),
                                                            rgba.bytesPerLine() / 2, coverage.constBits(),
-                                                           coverage.bytesPerLine(), rgba.width(), rgba.height())
-                                      : content_fill(rgba.bits(), rgba.bytesPerLine(), coverage.constBits(),
-                                                     coverage.bytesPerLine(), rgba.width(), rgba.height());
+                                                           coverage.bytesPerLine(), rgba.width(), rgba.height(), 0)
+                                      : patch_fill(rgba.bits(), rgba.bytesPerLine(), coverage.constBits(),
+                                                     coverage.bytesPerLine(), rgba.width(), rgba.height(), 0);
         if (result < 0)
             throw Error("tooLarge");
         if (result == 0)
