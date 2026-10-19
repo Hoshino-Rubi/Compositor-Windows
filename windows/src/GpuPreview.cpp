@@ -625,6 +625,10 @@ QImage effectsAccelerated(const QImage &source,const QJsonObject &settings,doubl
     return image.isNull()?applyEffects(source,settings,scale):image;
 }
 QImage filteredAccelerated(const QImage &source,const QJsonObject &settings,double scale,int clipping) {
+    // Small standalone motion-blur requests do not reliably amortize upload/readback.
+    // Resident adjustment layers keep their GPU path; no device/cache work is needed here.
+    if (settings["kind"] == "Motion Blur" && qint64(source.width()) * source.height() <= 256 * 1024)
+        return filtered(source, settings);
     auto result=filterGpuImage(source,settings,scale,clipping);
     if(!result.isNull())return result;
     return settings["kind"]=="Camera Raw"?cameraRaw(source,settings,scale,clipping):filtered(source,settings);

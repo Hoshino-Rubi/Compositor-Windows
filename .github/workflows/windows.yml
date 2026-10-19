@@ -38,7 +38,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Compositor-native-tests
-          path: windows/build-native/native-tests.xml
+          path: windows/build-native/*tests.xml
       - name: Package native portable app
         shell: pwsh
         run: ./windows/scripts/package.ps1 -QtDir "$env:QT_ROOT_DIR" -SkipBuild

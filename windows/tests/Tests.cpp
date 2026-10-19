@@ -591,6 +591,24 @@ class Tests : public QObject {
             QCOMPARE(m.processingDispatches, quint64(0));
         }
     }
+    void smallMotionBlurAvoidsTransfersAndPreservesReferencePixels() {
+        for (int depth : {8, 16}) {
+            for (const QSize size : {QSize(512, 384), QSize(512, 512)}) {
+                const auto source = blurFixture(size, depth).layers[0].image;
+                const auto original = source;
+                const QJsonObject settings{{"kind", "Motion Blur"}, {"motionAngle", 37}, {"motionDistance", 41}};
+                resetGpuPreviewMetrics();
+                QCOMPARE(filteredAccelerated(source, settings), filtered(source, settings));
+                QCOMPARE(source, original);
+                const auto metrics = gpuPreviewMetrics();
+                QCOMPARE(metrics.processingDispatches, quint64(0));
+                QCOMPARE(metrics.processingTextureAllocations, quint64(0));
+                QCOMPARE(metrics.processingUploads, quint64(0));
+                QCOMPARE(metrics.processingReadbackBytes, quint64(0));
+                QCOMPARE(metrics.readbacks, quint64(0));
+            }
+        }
+    }
     void gpuProcessingPerformanceReport() {
         if(!qEnvironmentVariableIntValue("COMPOSITOR_GPU_BENCHMARK"))QSKIP("Set COMPOSITOR_GPU_BENCHMARK=1 to measure processing.");
         for(int depth:{8,16})for(QSize size:{QSize(512,384),QSize(1024,768)}) {
@@ -603,7 +621,7 @@ class Tests : public QObject {
                 {{"kind","Scanlines"},{"displace",33},{"dots",45},{"glow",21}},
                 {{"kind","Motion Blur"},{"motionAngle",37},{"motionDistance",41}}};
             for(int index=0;index<cases.size();++index){
-                const auto &settings=cases[index];const bool cpuRoute=index<3;
+                const auto &settings=cases[index];const bool cpuRoute=index<3 || (index==5 && size.width()*size.height()<=256*1024);
                 const auto expected=filtered(source,settings);
                 QVERIFY(!filteredAccelerated(source,settings).isNull());
                 QVector<double> cpuTimes,automaticTimes;QImage actual;quint64 dispatches=0;

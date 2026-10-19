@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "Renderer.h"
+#include "Version.h"
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
@@ -17,7 +18,7 @@ int main(int argc, char **argv) {
     QImageReader::setAllocationLimit(int(std::max<qint64>(1024, (comp::MaxSourcePixels * 8 + 1048575) / 1048576)));
     QCoreApplication::setOrganizationName("Compositor");
     QCoreApplication::setApplicationName("Compositor");
-    QCoreApplication::setApplicationVersion("0.4.1a9");
+    QCoreApplication::setApplicationVersion(COMPOSITOR_VERSION);
     QApplication::setStyle("Fusion");
     QCommandLineParser parser;
     parser.setApplicationDescription("Compositor native Windows image editor");

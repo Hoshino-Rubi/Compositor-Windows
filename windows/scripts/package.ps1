@@ -9,11 +9,20 @@ $QtDir = [IO.Path]::GetFullPath($QtDir)
 if (-not $BuildDir) { $BuildDir = Join-Path $sourceRoot 'build-native' }
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
 if (-not $SkipBuild) { & (Join-Path $PSScriptRoot 'build.ps1') -QtDir $QtDir -BuildDir $BuildDir }
+$version = (Get-Content -LiteralPath (Join-Path $sourceRoot 'VERSION') -Raw).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+(?:a\d+(?:p\d+)?)?$') { throw 'Invalid Windows release version.' }
+$executable = Join-Path $BuildDir 'Release/Compositor.exe'
+$metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($executable)
+if ($metadata.ProductVersion -ne $version -or $metadata.FileVersion -ne $version) {
+    throw "Built application version does not match $version. Rebuild before packaging."
+}
+$releaseNotes = Join-Path $sourceRoot "releases/$version.md"
+if (-not (Test-Path -LiteralPath $releaseNotes)) { throw "Missing release notes for $version." }
 $distributionRoot = Join-Path $sourceRoot 'dist'
 # A fresh staging directory prevents old plugins from leaking into a release.
-$stage = Join-Path $distributionRoot ('Compositor-0.4.1a9-win-x64-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+$stage = Join-Path $distributionRoot ("Compositor-$version-win-x64-" + [guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $BuildDir 'Release/Compositor.exe') -Destination $stage
+Copy-Item -LiteralPath $executable -Destination $stage
 $env:PATH = (Join-Path $QtDir 'bin') + [IO.Path]::PathSeparator + $env:PATH
 $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio/Installer/vswhere.exe'
 if (Test-Path -LiteralPath $vswhere) {
@@ -54,8 +63,8 @@ foreach ($module in 'qtbase','qtimageformats','qtsvg') {
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'README.zh-CN.md') -Destination (Join-Path $stage 'README.zh-CN.md')
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'README.md') -Destination (Join-Path $stage 'README.md')
 New-Item -ItemType Directory -Path (Join-Path $stage 'releases') -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $sourceRoot 'releases/0.4.1a9.md') -Destination (Join-Path $stage 'releases/0.4.1a9.md')
-$archive = Join-Path $distributionRoot 'Compositor-0.4.1a9-win-x64.zip'
+Copy-Item -LiteralPath $releaseNotes -Destination (Join-Path $stage "releases/$version.md")
+$archive = Join-Path $distributionRoot "Compositor-$version-win-x64.zip"
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'dependencies.lock.json') -Destination $stage
 Compress-Archive -LiteralPath $stage -DestinationPath $archive -CompressionLevel Optimal -Force
 Write-Output "Application: $(Join-Path $stage 'Compositor.exe')"

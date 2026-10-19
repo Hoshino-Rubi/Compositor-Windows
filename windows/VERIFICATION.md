@@ -1,3 +1,22 @@
+# Windows 0.5.0 stable release verification
+
+Windows x64 / MSVC 2022 / Qt 6.8.3, October 19, 2026 (Asia/Taipei). This stable promotion is explicitly approved; `windows-v0.5.0` replaces 0.4.0 as Latest.
+
+- Native Release and independently extracted portable builds each passed **207 tests**, skipped **one** optional HEIC-alpha fixture and failed **zero**. Portable testing uses only the extracted runtime and Windows system directories in PATH. Test executables/Qt6Test/offscreen plugin were added only to the validation extraction, never the release archive.
+
+- Reports: `windows/test-results/050-{suite}-{native|portable}-release.xml`; build logs `050-build-release.log` / `050-build-final.log`. Counts include initialization/cleanup. Suite counts: core 132 + one optional external HEIC-alpha fixture skipped; warp 11, edit 15, perspective 8, export 6, display 5, surface 5, texture 8, completion 17. Strict GPU runs require hardware dispatch rather than accepting silent fallback.
+- Native application dependency traversal excludes `compositor_gpu_experiments`. GPU paint/erase/clone/blur, healing and perspective implementations remain in a test-only static target for reference regressions; the application retains their CPU routes. Tests verify that stale experimental preferences cannot re-enable them. No rendering algorithm or project format was replaced during stable promotion.
+- Fresh end-to-end measurements found no reliable benefit for small standalone Motion Blur. At or below 256 KiPixels, automatic processing now uses the CPU before GPU initialization/upload/cache work. Native 8/16-bit tests at 512×384 and the 512×512 boundary verify exact CPU output, immutable input and zero allocation/upload/dispatch/readback; the 1024×768 benchmark still requires GPU dispatch. Resident Motion Blur adjustment layers keep their existing GPU pipeline.
+- Stateful retouch benchmarks now assert actual GPU work, no source upload after initialization, exactly six readback operations for six measured segments and final CPU-reference pixel parity. The 512×512/radius-160 warm median fixture is documented in `releases/0.5.0.md`; initialization, the first dab and UI presentation are excluded. Earlier edge/selection/mid-stroke failure replay, 16-bit large-coordinate precision, resource-budget/lifetime and detail-retention regressions pass unchanged.
+- Cached-source and dirty-region performance fixtures still verify reuse and report transfers/timing in the native XML. No universal per-device speedup or asynchronous/zero-copy editing claim is made. Native texture presentation avoids document readback for that display path, not all edit/export operations.
+- Stable-channel tests cover 0.4.0 → 0.5.0, alpha/alpha-patch → 0.5.0, exclusion of drafts and prereleases from stable offers, no downgrade/reoffer, and future stable-patch ordering. Existing URL/size/SHA-256 validation and Schannel availability tests pass. The deterministic release suite does not claim a fresh live unauthenticated GitHub download test.
+- `windows/VERSION` drives CMake, generated `Version.h`, CLI/application version, Windows PE file/product version and packaging. Executable metadata reads 0.5.0 with `IsPreRelease=false`; packaging was tested to reject an older a9 executable before staging an archive. Eight catalogs retain matching 621-key sets; no UI-string changes.
+- Authenticode status is **NotSigned**: no certificate was supplied, searched for or fabricated. Existing download integrity checks are not code signing. No multi-device/DPI manual interactive certification or computer-use session was performed.
+
+- Final ZIP: **27,426,986 bytes**, SHA-256 `b1932cd7cf24fe686040a325f835a67f7a363393f4f04fe6a92ee1ee8a2758c5`. Application SHA-256 `37d639a56255e069b289a2b4dd2f9e810449931230f19bdd554aef48bc04ff64` matches the tested native and portable executable. After portable validation, only the bundled release note was updated to record the result; a per-file archive manifest proves every other file is byte-identical to the tested package. Final notes match source; the ZIP contains no test binaries or test-only plugins.
+
+---
+
 # Windows 0.4.1a9 pre-release verification
 
 Windows x64 / MSVC 2022 / Qt 6.8.3, October 18, 2026 (Asia/Taipei). Pre-release only; stable Latest remains `windows-v0.4.0`.

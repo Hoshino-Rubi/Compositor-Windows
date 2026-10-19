@@ -1,13 +1,27 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.4.1a9（预发布）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.5.0（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a9) 下载便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.0) 下载正式版便携包。
 
-解压 `Compositor-0.4.1a9-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.5.0-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.5.0 — 性能整合正式版
+
+- 整合 a1–a9 已验证的实现：GPU 预览缓存／脏区域合成、原生纹理显示、调整层／效果／适用滤镜，以及 8／16 位状态化液化和涂抹。复用源图和传输资源，未变化帧跳过处理；合适的大笔刷只在首次上传源图，后续鼠标移动保留笔画状态。
+- 按端到端实测选择后端，而非强求全 GPU。普通画笔／橡皮／克隆／模糊、修复、透视、顺序亮度降噪、Atkinson／Floyd–Steinberg 使用 CPU。不超过 256 KiPixels 的独立动态模糊也走 CPU，避免传输开销；已驻留 GPU 的调整层不受影响。退役 GPU 编辑模块仅供回归测试，不再作为应用链接依赖；旧实验设置不能启用它们。
+- 保留 CPU 参考预览、平移时的整图参考缓存和安全分块导出。默认导出仍为 CPU，GPU 导出需明确选择；硬件不支持、尺寸过大或预算不足时回退 CPU。
+- 包含保持比例的对象选择和自愿开启的更新检查，下载验证大小及 SHA-256，稳定版只接收更新的稳定版本。仍手动安装；保留 8／16 位编辑、选区、撤销、八种语言和原 `.comp` 格式。
+- 单一版本源统一界面／命令行、Windows 文件属性及便携包名称，打包时拒绝旧版本程序。**0.5.0 取代 0.4.0，成为稳定版 Latest。**
+
+实测、验证和边界见 [0.5.0 发布说明](releases/0.5.0.md)。不承诺所有 GPU 都更快，也不宣称 GPU／Qt／Metal 逐像素完全一致。未提供正式证书，因此程序仍未签名；全局大图滤镜仍可能分配较大临时空间，未进行多设备人工认证。
+
+## 历史 alpha 版本
+
+以下记录描述各批次发布时的范围与默认设置，并非 0.5.0 的现行设置；较慢 GPU 编辑的实验开关已撤下。
 
 ## 0.4.1a9 — 状态化修饰与参考渲染流程（预发布）
 

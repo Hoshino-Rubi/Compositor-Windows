@@ -1,14 +1,28 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.4.1a9 (pre-release)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.5.0 (stable)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the alpha from [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.4.1a9). The stable [latest release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest) remains 0.4.0.
+Download the stable [0.5.0 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.0), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.4.1a9-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.5.0-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.5.0 — Stable performance release
+
+- Consolidates the tested a1–a9 work: cached/dirty-region GPU compositing, native texture presentation, accelerated adjustments/effects/eligible filters, and stateful 8/16-bit Liquify/Smudge. Source and transfer resources are reused; unchanged frames skip processing. Large supported retouch gestures upload the source once and retain state across pointer events.
+- Backend choice follows measured end-to-end results, not a requirement to use the GPU everywhere. Ordinary paint/erase/clone/blur, healing, perspective, sequential luminance denoising and Atkinson/Floyd–Steinberg use the CPU. Standalone Motion Blur at or below 256 KiPixels also avoids GPU transfer overhead; resident adjustment layers are unaffected. Retired GPU editing implementations are built only for regression tests, not linked as application dependencies; old experimental preferences cannot enable them.
+- CPU reference preview, cached full-image reference previews while panning, and safe tiled exports remain available. CPU export is still the default; GPU export requires an explicit choice. Unsupported hardware, excessive dimensions or insufficient memory retain CPU fallback.
+- Includes aspect-preserving object selection and opt-in update checks with verified downloads. Stable installations accept only newer stable releases; installation remains manual. Native 8/16-bit editing, selections, undo and the eight languages are preserved; `.comp` versions are unchanged.
+- One release version now drives the UI/CLI, Windows executable properties and archive name. Packaging rejects a stale executable. **0.5.0 replaces 0.4.0 as the stable Latest release.**
+
+See [0.5.0 release notes](releases/0.5.0.md) for measurements, validation and limits. This is not universal GPU/Metal pixel parity or a speed promise on every device. The executable remains unsigned pending a supplied signing certificate; global-image filters can still need large intermediate allocations. No multi-device manual certification is claimed.
+
+## Historical alpha releases
+
+The following records describe their original scope and defaults, not the current 0.5.0 settings. In particular, slower experimental GPU editing switches are no longer available.
 
 ## Version 0.4.1a9 — Stateful retouch and reference workflows (pre-release)
 

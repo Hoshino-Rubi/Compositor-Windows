@@ -1,1 +1,30 @@
+#include <winver.h>
+#include "Version.h"
 IDI_ICON1 ICON "app.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION COMPOSITOR_VERSION_TUPLE
+ PRODUCTVERSION COMPOSITOR_VERSION_TUPLE
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS COMPOSITOR_VERSION_FLAGS
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Compositor for Windows\0"
+            VALUE "FileVersion", COMPOSITOR_VERSION "\0"
+            VALUE "InternalName", "Compositor\0"
+            VALUE "OriginalFilename", "Compositor.exe\0"
+            VALUE "ProductName", "Compositor for Windows\0"
+            VALUE "ProductVersion", COMPOSITOR_VERSION "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

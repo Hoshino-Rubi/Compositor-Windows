@@ -380,6 +380,29 @@ class CompletionTests : public QObject {
         bad["assets"] = QJsonArray{asset};
         QVERIFY(!findUpdate(QJsonDocument(QJsonArray{bad}).toJson(), "0.4.1a8"));
     }
+    void updatesPromoteAlphaToStableAndStayOnStableChannel() {
+        auto draft = release("0.7.0", false);
+        draft["draft"] = true;
+        const auto published = QJsonDocument(QJsonArray{
+            draft, release("0.6.0", true), release("0.5.1a1"), release("0.5.0", false),
+            release("0.4.1a9"), release("0.4.0", false)}).toJson();
+        // A stable installation must never be offered a later experimental build.
+        const auto stable = findUpdate(published, "0.4.0");
+        QVERIFY(stable);
+        QCOMPARE(stable->version, QString("0.5.0"));
+        QCOMPARE(stable->filename, QString("Compositor-0.5.0-win-x64.zip"));
+        QVERIFY(!findUpdate(published, "0.5.0"));
+        const auto promotion = QJsonDocument(QJsonArray{release("0.5.0", false), release("0.4.1a9")}).toJson();
+        for (const QString current : {"0.4.1a9", "0.4.1a100p1", "0.5.0a1"}) {
+            const auto update = findUpdate(promotion, current);
+            QVERIFY(update);
+            QCOMPARE(update->version, QString("0.5.0"));
+        }
+        const auto patch = QJsonDocument(QJsonArray{release("0.6.0a1"), release("0.5.1", false)}).toJson();
+        const auto update = findUpdate(patch, "0.5.0");
+        QVERIFY(update);
+        QCOMPARE(update->version, QString("0.5.1"));
+    }
     void updateTlsBackendAndLiveMetadata() {
 #ifdef Q_OS_WIN
         QVERIFY(QSslSocket::availableBackends().contains("schannel"));
@@ -412,12 +435,14 @@ class CompletionTests : public QObject {
             for (bool smudge : {false, true}) {
                 auto original = fixture({512, 512}, depth);
                 QVector<qint64> timings[2];
+                QImage results[2];
                 for (int cpu = 0; cpu < 2; ++cpu)
                     for (int run = 0; run < 3; ++run) {
                         Env disabled("COMPOSITOR_DISABLE_GPU", cpu ? "1" : "0");
                         QImage image = original;
                         RetouchStroke stroke(original, 160, .3, .7, smudge);
                         stroke.append(image, {{160, 256}, {163, 256}});
+                        resetGpuPreviewMetrics();
                         QElapsedTimer timer;
                         timer.start();
                         for (int segment = 0; segment < 6; ++segment) {
@@ -427,7 +452,17 @@ class CompletionTests : public QObject {
                             stroke.append(image, points);
                         }
                         timings[cpu].append(timer.nsecsElapsed());
+                        const auto metrics = gpuPreviewMetrics();
+                        if (cpu) {
+                            QCOMPARE(metrics.processingDispatches, quint64(0));
+                        } else if (qEnvironmentVariableIntValue("COMPOSITOR_REQUIRE_GPU")) {
+                            QVERIFY(metrics.processingDispatches > 0);
+                            QCOMPARE(metrics.processingUploadedBytes, quint64(0));
+                            QCOMPARE(metrics.nativeReadbackOperations, quint64(6));
+                        }
+                        results[cpu] = image;
                     }
+                QVERIFY(difference(results[0], results[1]) <= (depth == 8 ? 257 : 16));
                 for (auto &v : timings)
                     std::sort(v.begin(), v.end());
                 qInfo() << "STROKE_BENCHMARK" << depth << smudge << "gpuNs" << timings[0][1] << "cpuNs"
