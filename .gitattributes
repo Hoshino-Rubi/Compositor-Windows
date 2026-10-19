@@ -1,0 +1,3 @@
+
+# Preserve hash-pinned upstream codec bytes, including original whitespace.
+windows/third_party/tinyexr/* -text -whitespace

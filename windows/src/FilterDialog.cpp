@@ -18,6 +18,7 @@
 #include <QSignalBlocker>
 namespace comp {
 void MainWindow::filterDialog(const QString &kind, bool adjustment, QString editLayer) {
+    if (kind == "Progressive Blur") { progressiveBlurDialog(); return; }
     if (kind == "Camera Raw") {
         cameraRawDialog();
         return;
@@ -67,7 +68,8 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         form->addRow(t(label.isEmpty() ? key : label), box);
     };
     QComboBox ditherStyle, ditherColors, pixelShape;
-    QCheckBox lightOnDark(t("lightOnDark"));
+    QCheckBox lightOnDark(t("lightOnDark")), preserveTransparency(t("preserveTransparency"));
+    preserveTransparency.setChecked(original["preserveTransparency"].toBool());
     QLineEdit characters;
     QPushButton vignetteColor(t("color")), darkColor(t("dark")), lightColor(t("white"));
     QColor vignette = Qt::black, dark = Qt::black, light = Qt::white;
@@ -145,8 +147,10 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         field("black", 0, 0, 255, "outputBlack");
         field("midpoint", 128, 0, 255);
         field("white", 255, 0, 255, "outputWhite");
-    } else if (kind == "Gaussian Blur")
-        field("blurRadius", original["blurRadius"].toDouble(10), .1, 250, "radius");
+    } else if (kind == "Gaussian Blur") {
+        field("blurRadius", original["blurRadius"].toDouble(5), .1, 250, "radius");
+        if (!adjustment && editLayer.isEmpty()) form->addRow(&preserveTransparency);
+    }
     else if (kind == "Motion Blur") {
         field("motionDistance", original["motionDistance"].toDouble(10), 1, 2000, "distance");
         field("motionAngle", original["motionAngle"].toDouble(), -90, 90, "rotation");
@@ -322,6 +326,7 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         }
         QJsonObject settings = original;
         settings["kind"] = kind;
+        if (kind == "Gaussian Blur" && !adjustment && editLayer.isEmpty()) settings["preserveTransparency"] = preserveTransparency.isChecked();
         if (kind == "Hue/Saturation")
             settings["hsvSettings"] = hsv;
         if (kind == "Levels") {
@@ -485,6 +490,7 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
     connect(&ditherStyle, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
     connect(&ditherColors, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
     connect(&pixelShape, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
+    connect(&preserveTransparency, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
     connect(&lightOnDark, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
     connect(&characters, &QLineEdit::textChanged, &dialog, [&] { debounce.start(); });
     for (auto [button, value] : {std::pair{&vignetteColor, &vignette}, std::pair{&darkColor, &dark},

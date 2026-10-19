@@ -1,6 +1,7 @@
 #include "Pixels.h"
 #include "Importers.h"
 #include "MainWindow.h"
+#include "Cmyk.h"
 #include "Updates.h"
 #include "Export.h"
 #include "Renderer.h"
@@ -628,7 +629,12 @@ void MainWindow::exportImage() {
     QComboBox format;
     format.addItem("PNG", "png");
     format.addItem("JPEG", "jpeg");
+    format.addItem("TIFF", "tiff");
+    if (hasHdr(document_.state())) format.addItem("OpenEXR", "exr");
     format.addItem("PDF", "pdf");
+    QCheckBox cmyk(t("cmykExport"));
+    cmyk.setObjectName("cmykExport");
+    cmyk.setToolTip(t("cmykProfileHint"));
     QComboBox renderer;
     renderer.setObjectName("exportRenderer");
     renderer.addItem(t("exportRendererCpu"), int(ExportRenderer::ReferenceCpu));
@@ -643,6 +649,7 @@ void MainWindow::exportImage() {
     QCheckBox aspect(t("keepAspect"));
     aspect.setChecked(true);
     form->addRow(t("format"), &format);
+    form->addRow(&cmyk);
     form->addRow(t("exportRenderer"), &renderer);
     form->addRow(t("width"), &width);
     form->addRow(t("height"), &height);
@@ -662,6 +669,7 @@ void MainWindow::exportImage() {
     auto image = comp::render(document_.state(), document_.state().size.scaled(540, 280, Qt::KeepAspectRatio));
     auto update = [&] {
         quality.setEnabled(format.currentData() == "jpeg");
+        cmyk.setEnabled(format.currentData() != "png" && format.currentData() != "exr");
         QImage tile(16, 16, QImage::Format_RGB32);
         tile.fill(QColor("#dddddd"));
         {
@@ -676,8 +684,13 @@ void MainWindow::exportImage() {
         p.setRenderHint(QPainter::SmoothPixmapTransform);
         p.drawImage(picture.rect(), image);
         p.end();
+        if(cmyk.isEnabled() && cmyk.isChecked()) {
+            try{picture=cmykProof(picture,chosenCmykProfile());}
+            catch(const Error &e){preview->setText(t(e.key));return;}
+        }
         preview->setPixmap(QPixmap::fromImage(picture));
     };
+    connect(&cmyk,&QCheckBox::toggled,&dialog,[&]{update();});
     const double ratio = double(document_.state().size.width()) / document_.state().size.height();
     connect(&width, qOverload<int>(&QSpinBox::valueChanged), &dialog, [&](int v) {
         if (aspect.isChecked()) {
@@ -708,6 +721,9 @@ void MainWindow::exportImage() {
             showError("invalidSize");
             return;
         }
+        if (cmyk.isEnabled() && cmyk.isChecked()) {
+            try { validateCmykProfile(chosenCmykProfile()); } catch (const Error &e) { showError(e.key,e.detail); return; }
+        }
         dialog.accept();
     });
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
@@ -721,8 +737,9 @@ void MainWindow::exportImage() {
         return;
     const State snapshot = document_.state();
     runIO([snapshot, file, encoding, size = QSize(width.value(), height.value()),
-           q = quality.value(), selectedRenderer = ExportRenderer(renderer.currentData().toInt())] {
-              exportDocument(snapshot, file, encoding, size, q, selectedRenderer);
+           q = quality.value(), selectedRenderer = ExportRenderer(renderer.currentData().toInt()),
+           profile = cmyk.isEnabled() && cmyk.isChecked() ? chosenCmykProfile() : QByteArray()] {
+              exportDocument(snapshot, file, encoding, size, q, selectedRenderer, profile);
           },
           [this] { statusBar()->showMessage(t("exported"), 3000); });
 }

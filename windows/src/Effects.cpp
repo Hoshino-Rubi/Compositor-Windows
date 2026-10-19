@@ -55,6 +55,7 @@ static QImage shifted(const QImage &source, QPointF offset) {
     return image;
 }
 QImage applyEffects(const QImage &source, const QJsonObject &effects, double scale) {
+    if (hdrImage(source)) return hdrThrough(source,[&](const QImage &normal){return applyEffects(normal,effects,scale);});
     if (wideImage(source))
         return applyEffects16(source, effects, scale);
     if (effects.isEmpty())

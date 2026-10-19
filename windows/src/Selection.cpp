@@ -165,6 +165,16 @@ void constrainSelection(const State &state, const Placement &placement, const QI
     if (!state.selectionActive)
         return;
     const auto coverage = selectionCoverage(state, after.size(), placement);
+    if (hdrImage(before) || hdrImage(after)) {
+        after=after.convertToFormat(QImage::Format_RGBA32FPx4_Premultiplied);
+        const auto original=before.convertToFormat(QImage::Format_RGBA32FPx4_Premultiplied);
+        const auto mask=coverage.convertToFormat(QImage::Format_RGBA64_Premultiplied);
+        for(int y=0;y<after.height();++y){auto *out=reinterpret_cast<FloatPixel *>(after.scanLine(y));
+            const auto *base=reinterpret_cast<const FloatPixel *>(original.constScanLine(y));const auto *m=reinterpret_cast<const QRgba64 *>(mask.constScanLine(y));
+            for(int x=0;x<after.width();++x){const float a=m[x].alpha()/65535.f,b=1-a;
+                out[x]={out[x].r*a+base[x].r*b,out[x].g*a+base[x].g*b,out[x].b*a+base[x].b*b,out[x].a*a+base[x].a*b};}}
+        return;
+    }
     if (state.bitDepth == 16) {
         after = after.convertToFormat(pixelFormat(16));
         const auto original = before.convertToFormat(pixelFormat(16));

@@ -1,7 +1,12 @@
 #include "MainWindow.h"
 #include "Importers.h"
+#include "Cmyk.h"
 #include <QtConcurrent>
 #include <QFileInfo>
+#include <QFileDialog>
+#include <QFile>
+#include <QCheckBox>
+#include <QScrollArea>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -44,6 +49,8 @@ void MainWindow::importNext(QStringList paths, bool openAsDocument) {
                       accepted = message.exec() == QMessageBox::Ok;
                   }
                   if (accepted) {
+                      if (result->state.metadata.contains("windowsCMYKProfile"))
+                          chooseCmykProfile(QByteArray::fromBase64(result->state.metadata["windowsCMYKProfile"].toString().toLatin1()));
                       adoptDocument(result->state, QFileInfo(path).completeBaseName());
                       remember(path);
                   }
@@ -98,42 +105,92 @@ void MainWindow::importRaw(const QString &path, QStringList remaining, bool open
               form->addRow(t("rawTemperature"), &temperature);
               form->addRow(t("tint"), &tint);
               form->addRow(t("rawBoost"), &boost);
+              QDoubleSpinBox noise; noise.setRange(0,100); noise.setObjectName("rawDecodeNoise");
+              QCheckBox recovery(t("rawHighlightRecovery")), lens(t("rawLensCorrection"));
+              recovery.setObjectName("rawHighlightRecovery"); lens.setEnabled(false);
+              QByteArray lensProfile;
+              QPushButton loadLens(t("rawLoadLensProfile"));
+              form->addRow(t("rawDecodeNoise"), &noise); form->addRow(&recovery);form->addRow(&lens);form->addRow(&loadLens);
+              QLabel lensNote(t("rawLensProfileHint"));lensNote.setWordWrap(true);form->addRow(&lensNote);
+              bool openCameraRaw=false;
               QLabel note(t("rawDevelopNote"));
               note.setWordWrap(true);
               form->addRow(&note);
-              body->addLayout(form);
+              auto *controls=new QWidget;controls->setLayout(form);
+              auto *scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setMinimumWidth(300);scroll->setWidget(controls);body->addWidget(scroll);
               outer->addLayout(body);
               auto *buttons =
                   new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Reset);
+              auto *rawButton=buttons->addButton(t("cameraRaw"),QDialogButtonBox::ActionRole);
+              connect(rawButton,&QPushButton::clicked,&dialog,[&]{openCameraRaw=true;dialog.accept();});
               outer->addWidget(buttons);
               connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
               connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
               auto update = [&] {
-                  preview.setPixmap(QPixmap::fromImage(developRaw(*frame, exposure.value(), temperature.value(),
-                                                                  tint.value(), boost.value(), 700))
-                                        .scaled(preview.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                  auto developed = *frame;
+                  if(lens.isChecked())developed.linear=correctRawLens(frame->linear,lensProfile,frame->focal);
+                  preview.setPixmap(QPixmap::fromImage(developRaw(developed,exposure.value(),temperature.value(),tint.value(),boost.value(),700))
+                                      .scaled(preview.size(),Qt::KeepAspectRatio,Qt::SmoothTransformation));
               };
+              QFutureWatcher<RawFrame> decodeWatcher;QTimer decodeTimer;decodeTimer.setSingleShot(true);decodeTimer.setInterval(180);
+              bool pending=false,closing=false;
+              auto decodeStart=[&] {
+                  if(closing)return;if(decodeWatcher.isRunning()){pending=true;return;}
+                  pending=false;buttons->button(QDialogButtonBox::Ok)->setEnabled(false);rawButton->setEnabled(false);
+                  decodeWatcher.setFuture(QtConcurrent::run([bytes=frame->encoded,n=noise.value(),h=recovery.isChecked()]{return decodeRawBytes(bytes,n,h);}));
+              };
+              connect(&decodeTimer,&QTimer::timeout,&dialog,decodeStart);
+              connect(&decodeWatcher,&QFutureWatcher<RawFrame>::finished,&dialog,[&]{
+                  if(closing)return;
+                  try{*frame=decodeWatcher.result();update();buttons->button(QDialogButtonBox::Ok)->setEnabled(true);rawButton->setEnabled(true);}
+                  catch(const Error &e){showError(e.key,e.detail);}
+                  if(pending){decodeTimer.stop();decodeStart();}
+              });
+              auto requestDecode=[&]{pending=true;buttons->button(QDialogButtonBox::Ok)->setEnabled(false);rawButton->setEnabled(false);decodeTimer.start();};
+              connect(&noise,qOverload<double>(&QDoubleSpinBox::valueChanged),&dialog,requestDecode);
+              connect(&recovery,&QCheckBox::toggled,&dialog,requestDecode);
+              connect(&lens,&QCheckBox::toggled,&dialog,[&]{invoke(update);});
+              connect(&loadLens,&QPushButton::clicked,&dialog,[&]{
+                  const auto path=QFileDialog::getOpenFileName(&dialog,t("rawLoadLensProfile"),{},"Lensfun XML (*.xml)");if(path.isEmpty())return;
+                  invoke([&]{QFile file(path);if(!file.open(QIODevice::ReadOnly))throw Error("fileError");if(file.size()>4*1024*1024)throw Error("tooLarge");
+                      auto profile=file.readAll();correctRawLens(frame->linear.scaled(32,32,Qt::KeepAspectRatio),profile,frame->focal);
+                      lensProfile=profile;lens.setEnabled(true);lens.setChecked(true);update();});
+              });
               for (auto *box : {&exposure, &temperature, &tint, &boost})
                   connect(box, qOverload<double>(&QDoubleSpinBox::valueChanged), &dialog, [&] { update(); });
               connect(buttons->button(QDialogButtonBox::Reset), &QPushButton::clicked, &dialog, [&] {
                   exposure.setValue(0);
                   temperature.setValue(6500);
                   tint.setValue(0);
-                  boost.setValue(1);
+                  boost.setValue(1);noise.setValue(0);recovery.setChecked(false);lens.setChecked(false);
               });
               update();
-              if (dialog.exec() != QDialog::Accepted) {
+              const bool accepted=dialog.exec()==QDialog::Accepted;
+              closing=true;decodeTimer.stop();decodeWatcher.waitForFinished();
+              if (!accepted) {
                   importNext(remaining, openAsDocument);
                   return;
               }
               double e = exposure.value(), temp = temperature.value(), ti = tint.value(), b = boost.value();
+              if(lens.isChecked())frame->linear=correctRawLens(frame->linear,lensProfile,frame->focal);
               auto image = std::make_shared<QImage>();
               runIO([frame, image, e, temp, ti, b] { *image = developRaw(*frame, e, temp, ti, b); },
-                    [this, image, path, remaining, openAsDocument] {
+                    [this, image, path, remaining, openAsDocument, openCameraRaw] {
                         invoke([&] {
                             insertImported(QFileInfo(path).completeBaseName(), *image, openAsDocument);
                             if (openAsDocument) remember(path);
                         });
+                        if (openCameraRaw) {
+                            cameraRawDialog();
+                            if (busy_) {
+                                auto applied = std::move(completion_);
+                                completion_ = [this, applied = std::move(applied), remaining, openAsDocument] {
+                                    if (applied) applied();
+                                    importNext(remaining, openAsDocument);
+                                };
+                                return;
+                            }
+                        }
                         importNext(remaining, openAsDocument);
                     });
           });

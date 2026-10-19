@@ -1,4 +1,5 @@
 #include "Pixels.h"
+#include "Cmyk.h"
 #include "Importers.h"
 #include <QFile>
 #include <QFileInfo>
@@ -809,7 +810,7 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
     int compositeChannels = r.u16();
     int height = int(r.u32()), width = int(r.u32());
     int depth = r.u16(), mode = r.u16();
-    if ((depth != 8 && depth != 16) || mode != 3)
+    if ((depth != 8 && depth != 16) || (mode != 3 && mode != 4) || (mode == 4 && depth != 8))
         throw Error("psdMode");
     State state;
     state.id = newId();
@@ -818,6 +819,7 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
     validateState(state);
     r.skip(r.u32());
     QColorSpace sourceSpace(QColorSpace::SRgb);
+    QByteArray cmykProfile = mode == 4 ? chosenCmykProfile() : QByteArray();
     auto resources = r.section(r.u32());
     while (resources.data.size() - resources.pos >= 12) {
         if (resources.bytes(4) != "8BIM")
@@ -832,14 +834,31 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
         if (id == 1005 && length >= 4)
             state.resolution = std::clamp(payload.u32() / 65536., 1., 9600.);
         if (id == 1039) {
-            const auto profile = QColorSpace::fromIccProfile(payload.data);
-            if (!profile.isValid() || profile.colorModel() != QColorSpace::ColorModel::Rgb)
-                throw Error("psdProfile");
-            sourceSpace = profile;
+            if (mode == 4) { validateCmykProfile(payload.data); cmykProfile = payload.data; }
+            else {
+                const auto profile = QColorSpace::fromIccProfile(payload.data);
+                if (!profile.isValid() || profile.colorModel() != QColorSpace::ColorModel::Rgb) throw Error("psdProfile");
+                sourceSpace = profile;
+            }
         }
         if (length % 2)
             resources.skip(1);
     }
+    if (mode == 4) {
+        validateCmykProfile(cmykProfile);
+        state.metadata["windowsCMYKProfile"] = QString::fromLatin1(cmykProfile.toBase64());
+    }
+    auto fromInks = [&](QImage inks, const QByteArray &alpha) {
+        QImage rgb = cmykToRgb(inks, cmykProfile);
+        if (!alpha.isEmpty()) for (int y=0;y<rgb.height();++y) {
+            auto *row = reinterpret_cast<QRgba64 *>(rgb.scanLine(y));
+            for(int x=0;x<rgb.width();++x) {
+                const quint16 a=quint8(alpha[y*rgb.width()+x])*257;
+                const auto c=row[x]; row[x]=QRgba64::fromRgba64(c.red(),c.green(),c.blue(),a).premultiplied();
+            }
+        }
+        return rgb.convertToFormat(pixelFormat(depth));
+    };
     auto section = r.section(psb ? r.u64() : r.u32());
     QVector<Record> records;
     QStringList notices;
@@ -970,7 +989,7 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
                     bool isMask = channel.first == -2;
                     const QRect original = isMask ? rec.originalMaskBounds : rec.originalBounds;
                     const QRect clipped = isMask ? rec.maskBounds : rec.bounds;
-                    if (!QList<int>{-2, -1, 0, 1, 2}.contains(channel.first) || original.isEmpty() || clipped.isEmpty())
+                    if (!(mode == 4 ? QList<int>{-2,-1,0,1,2,3} : QList<int>{-2,-1,0,1,2}).contains(channel.first) || original.isEmpty() || clipped.isEmpty())
                         continue;
                     if (isMask) {
                         maskBudget += qint64(clipped.width()) * clipped.height();
@@ -997,6 +1016,13 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
                                 reinterpret_cast<QRgb *>(image.scanLine(y))[x] =
                                     qPremultiply(qRgba(channel(0, 0), channel(1, 0), channel(2, 0), channel(-1, 255)));
                         }
+                    }
+                    if (mode == 4) {
+                        QImage inks(image.size(),QImage::Format_CMYK8888);
+                        if(inks.isNull())throw Error("tooLarge");
+                        for(int y=0;y<inks.height();++y)for(int x=0;x<inks.width();++x)for(int c=0;c<4;++c)
+                            inks.scanLine(y)[x*4+c]=quint8(255-(planes.contains(c)?quint8(planes[c][y*inks.width()+x]):255));
+                        image=fromInks(inks,planes.value(-1));
                     }
                     rec.layer.image = image;
                     rec.layer.placement.origin = rec.bounds.topLeft();
@@ -1049,13 +1075,13 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
     if (records.isEmpty()) {
         int compression = r.u16();
         const qint64 pixels = qint64(width) * height, planeBytes = pixels * (depth / 8);
-        if (compositeChannels < 3 || compositeChannels > 56)
+        if (compositeChannels < (mode == 4 ? 4 : 3) || compositeChannels > 56)
             throw Error("psdCorrupt");
         QVector<QByteArray> planes;
         if (compression == 0) {
             for (int c = 0; c < compositeChannels; ++c) {
                 auto bytes = r.bytes(planeBytes);
-                if (c < 4)
+                if (c < (mode == 4 ? 5 : 4))
                     planes.append(bytes);
             }
         } else if (compression == 1) {
@@ -1075,7 +1101,7 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
                 }
                 for (int y = 0; y < height; ++y)
                     payload += r.bytes(lengths[c * height + y]);
-                if (c < 4) {
+                if (c < (mode == 4 ? 5 : 4)) {
                     Reader channel{QByteArray::fromHex("0001") + payload};
                     planes.append(plane(channel, width, height, psb, depth));
                 }
@@ -1091,7 +1117,7 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
                            reinterpret_cast<const Bytef *>(payload.constData()), uLong(payload.size())) != Z_OK ||
                 length != total)
                 throw Error("psdCorrupt");
-            for (int c = 0; c < std::min(compositeChannels, 4); ++c) {
+            for (int c = 0; c < std::min(compositeChannels, mode == 4 ? 5 : 4); ++c) {
                 auto bytes = decoded.mid(c * planeBytes, planeBytes);
                 if (compression == 3)
                     undoPrediction(bytes, width, height, depth);
@@ -1119,6 +1145,12 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
                     reinterpret_cast<QRgb *>(l.image.scanLine(y))[x] =
                         qPremultiply(qRgba(channel(0), channel(1), channel(2), channel(3)));
             }
+        if (mode == 4) {
+            QImage inks(l.image.size(),QImage::Format_CMYK8888);if(inks.isNull())throw Error("tooLarge");
+            for(int y=0;y<height;++y)for(int x=0;x<width;++x)for(int c=0;c<4;++c)
+                inks.scanLine(y)[x*4+c]=quint8(255-quint8(planes[c][y*width+x]));
+            l.image=fromInks(inks,planes.size()>4?planes[4]:QByteArray());
+        }
         state.layers.append(l);
     } else {
         // PSD files normally store the topmost record first; recognize bottom-first section markers as well.

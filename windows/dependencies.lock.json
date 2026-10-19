@@ -4,5 +4,15 @@
   "onnxUrl": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.22.1/microsoft.ml.onnxruntime.1.22.1.nupkg",
   "onnxSha256": "7b091e012dcfef2f9cc965f2252041101b1840c748ffbc1c18ba047bd6508b1c",
   "modelUrl": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx",
-  "modelSha256": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8"
+  "modelSha256": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
+  "tinyexr": {
+    "repository": "syoyo/tinyexr",
+    "commit": "010383f267cba709568319fabe5c13b4b2c3188e",
+    "files": {
+      "tinyexr.h": "b1d33ca1350d64e2b9a199614991cffd45d7982ff3d68f107020a1230bde38ec",
+      "exr_reader.hh": "9e0bfef0487b9c3082165b2a637c75ef91d9fcc4aa55a5f32eb97f77db19f99b",
+      "streamreader.hh": "81f2d1502930ca9ca9957e7607c2a7924d3ef2fe4b08b1a4001245dc6d3fefb6",
+      "LICENSE": "b90388aaadc2b6f77a5c01278697a2a0539eab471a3befc6a081728becdc3390"
+    }
+  }
 }

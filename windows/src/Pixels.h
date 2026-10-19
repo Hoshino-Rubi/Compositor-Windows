@@ -1,5 +1,6 @@
 #pragma once
 #include "Project.h"
+#include "Hdr.h"
 #include <QColorSpace>
 #include <algorithm>
 #include <cmath>
@@ -11,7 +12,7 @@ inline QImage::Format pixelFormat(int depth) {
     return depth == 16 ? QImage::Format_RGBA64_Premultiplied : QImage::Format_ARGB32_Premultiplied;
 }
 inline QImage::Format pixelFormat(const QImage &image) {
-    return pixelFormat(wideImage(image) ? 16 : 8);
+    return hdrImage(image) ? QImage::Format_RGBA32FPx4_Premultiplied : pixelFormat(wideImage(image) ? 16 : 8);
 }
 inline QImage::Format maskFormat(int depth) {
     return depth == 16 ? QImage::Format_Grayscale16 : QImage::Format_Grayscale8;
@@ -108,8 +109,8 @@ inline void normalizePrecision(State &state) {
     if (state.bitDepth != 16)
         return;
     for (auto &l : state.layers) {
-        if (!l.image.isNull())
-            l.image = l.image.convertToFormat(pixelFormat(16));
+        if (!l.image.isNull() && !hdrImage(l.image))
+            l.image = l.image.convertToFormat(pixelFormat(l.metadata.value("windowsLayerBitDepth").toInt(16)));
         if (!l.mask.isNull())
             l.mask = maskImage(l.mask, 16);
     }

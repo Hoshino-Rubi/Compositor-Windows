@@ -99,6 +99,7 @@ class MainWindow : public QMainWindow {
     void maskMenu();
     void effectsDialog();
     void cameraRawDialog();
+    void progressiveBlurDialog();
     void selectSubject(QPoint point = QPoint(-1, -1), bool removeBackground = false);
     void backgroundDialog(QImage mask, QImage source, QString layerId, QString documentId);
     void shortcutsDialog();

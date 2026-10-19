@@ -218,6 +218,7 @@ static QImage geometry(const QImage &source, QJsonObject settings) {
     return out;
 }
 QImage cameraRaw(const QImage &source, const QJsonObject &settings, double scale, int clipping) {
+    if (hdrImage(source)) return hdrThrough(source,[&](const QImage &normal){return cameraRaw(normal,settings,scale,clipping);});
     if (wideImage(source))
         return cameraRaw16(source, settings, scale, clipping);
     const auto s = normalizedCameraRaw(settings);

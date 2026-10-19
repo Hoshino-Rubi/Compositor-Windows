@@ -1,5 +1,8 @@
 #include "Pixels.h"
 #include "MainWindow.h"
+#include "Cmyk.h"
+#include <QFileDialog>
+#include <QFile>
 #include <QSettings>
 #include "Renderer.h"
 #include "Icons.h"
@@ -139,12 +142,31 @@ void MainWindow::buildEditingActions() {
     add("applyMask", "", [this] { document_.maskAction("applyMask"); });
     add("deleteMask", "", [this] { document_.maskAction("deleteMask"); });
     add("clipMask", "", [this] { document_.maskAction("clipMask"); });
+    add("loadCmykProfile", "", [this] {
+        const auto path = QFileDialog::getOpenFileName(this,t("loadCmykProfile"),{},"ICC (*.icc *.icm)");
+        if(path.isEmpty())return;QFile file(path);if(!file.open(QIODevice::ReadOnly))throw Error("fileError");
+        if(file.size()>4*1024*1024)throw Error("tooLarge");chooseCmykProfile(file.readAll());
+        canvas_->setCmykProof(actions_["cmykProof"]->isChecked(),actions_["cmykGamut"]->isChecked());
+    });
+    for (const auto &key : {QString("cmykProof"),QString("cmykGamut")}) {
+        add(key,"",[this,key] {
+            try {canvas_->setCmykProof(actions_["cmykProof"]->isChecked(),actions_["cmykGamut"]->isChecked());}
+            catch(...) {actions_[key]->setChecked(false);throw;}
+        });actions_[key]->setCheckable(true);
+    }
+    for (int depth : {8,16}) add(depth==16?"layerDepth16":"layerDepth8","",[this,depth] {
+        const int index=document_.state().index(document_.state().active);
+        const bool hdr=index>=0 && hdrImage(document_.state().layers[index].image);
+        if((depth==8 || hdr) && QMessageBox::question(this,t("bitDepth"),t(hdr?"hdrConvertWarning":"reduceDepth"),QMessageBox::Ok|QMessageBox::Cancel,QMessageBox::Cancel)!=QMessageBox::Ok)return;
+        document_.setLayerBitDepth(depth);
+    });
     auto *depthGroup = new QActionGroup(this);
     for (int depth : {8, 16}) {
         const QString key = depth == 16 ? "depth16" : "depth8";
         add(key, "", [this, depth] {
-            if (depth == 8 && document_.state().bitDepth == 16 &&
-                QMessageBox::question(this, t("bitDepth"), t("reduceDepth"), QMessageBox::Ok | QMessageBox::Cancel,
+            const bool hdr=hasHdr(document_.state());
+            if ((hdr || (depth == 8 && document_.state().bitDepth == 16)) &&
+                QMessageBox::question(this, t("bitDepth"), t(hdr ? "hdrConvertWarning" : "reduceDepth"), QMessageBox::Ok | QMessageBox::Cancel,
                                       QMessageBox::Cancel) != QMessageBox::Ok) {
                 refreshSelection();
                 return;
@@ -247,7 +269,7 @@ void MainWindow::buildEditingActions() {
                                                              {"bloom", "Bloom / Glow"},
                                                              {"dither", "Dither"},
                                                              {"tonalContrast", "Tonal Contrast"},
-                                                             {"lensCorrection", "Lens Correction"}}) {
+                                                             {"lensCorrection", "Lens Correction"}, {"progressiveBlur", "Progressive Blur"}}) {
         const QString key = "filter." + entry.first;
         add(key, "", [this, kind = entry.second] { filterDialog(kind, false); });
     }

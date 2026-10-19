@@ -28,6 +28,9 @@ QByteArray decodeBytes(const QJsonValue &value) {
 QImage decodeImage(const QJsonObject &record, const char *field, QByteArray &original, qint64 &budget) {
     if (!record.contains(field)) return {};
     original = decodeBytes(record.value(field));
+    if (QString::fromLatin1(field)=="image" && record["imageEncoding"]=="exr") {
+        auto image=readExr(original);budget+=qint64(image.width())*image.height();if(budget>MaxSourcePixels)throw Error("tooLarge");return image;
+    }
     QBuffer buffer(&original);
     buffer.open(QIODevice::ReadOnly);
     QImageReader reader(&buffer, "png");
@@ -43,7 +46,7 @@ QJsonObject header(const QByteArray &data) {
     if (data.isEmpty() || data.size() > 950 * 1024 * 1024) throw Error("tooLarge");
     const auto json = QJsonDocument::fromJson(data);
     if (!json.isObject() || json.object().value("format") != "com.compositor.layers" ||
-        json.object().value("version") != 1) throw Error("invalidProject");
+        (json.object().value("version") != 1 && json.object().value("version") != 2)) throw Error("invalidProject");
     return json.object();
 }
 } // namespace
@@ -59,15 +62,17 @@ QByteArray encodeLayers(const State &source, const QStringList &selected) {
                            {"maskEnabled", layer.maskEnabled}, {"maskLinked", layer.maskLinked},
                            {"maskPlacement", layer.maskPlacement.json()}, {"maskSource", layer.maskSource},
                            {"metadata", layer.metadata}};
-        if (!layer.image.isNull())
-            record["image"] = QString::fromLatin1(layer.originalPng.isEmpty() ? pngBytes(layer.image, source.resolution).toBase64()
-                                                                           : layer.originalPng.toBase64());
+        if (!layer.image.isNull()) {
+            const bool hdr=hdrImage(layer.image);
+            if(hdr)record["imageEncoding"]="exr";
+            record["image"]=QString::fromLatin1((layer.originalPng.isEmpty()?(hdr?exrBytes(layer.image):pngBytes(layer.image,source.resolution)):layer.originalPng).toBase64());
+        }
         if (!layer.mask.isNull())
             record["mask"] = QString::fromLatin1(layer.originalMaskPng.isEmpty() ? pngBytes(maskImage(layer.mask, source.bitDepth), source.resolution).toBase64()
                                                                                : layer.originalMaskPng.toBase64());
         entries.append(record);
     }
-    return QJsonDocument(QJsonObject{{"format", "com.compositor.layers"}, {"version", 1},
+    return QJsonDocument(QJsonObject{{"format", "com.compositor.layers"}, {"version", hasHdr(source)?2:1},
                                      {"document", source.id}, {"bitDepth", source.bitDepth},
                                      {"layers", entries}}).toJson(QJsonDocument::Compact);
 }

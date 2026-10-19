@@ -65,6 +65,7 @@ class Canvas : public QWidget {
         lineName_ = std::move(line);
     }
     void setReferencePreview(bool enabled);
+    void setCmykProof(bool enabled, bool gamut);
     void setGuides(bool visible) {
         guides_ = visible;
         update();
@@ -78,6 +79,7 @@ class Canvas : public QWidget {
     void setBackgroundColor(QColor value) { background_ = value; }
     void setTransparentGradient(bool value) { transparentGradient_ = value; }
     void setCornerRadius(double value) { cornerRadius_ = value; }
+    void setSmoothCorners(bool value) { smoothCorners_ = value; }
     void setRulers(bool value) {
         rulers_ = value;
         update();
@@ -154,6 +156,8 @@ class Canvas : public QWidget {
     bool dragging_ = false, panning_ = false, space_ = false, maskTarget_ = false, guides_ = true, resizing_ = false;
     State start_;
     QRectF draftRect_;
+    QByteArray cmykProfile_;
+    bool cmykProof_ = false, cmykGamut_ = false;
     bool nativePresentation_ = false, gpuPresentationFailed_ = false, referencePreview_ = false;
     std::unique_ptr<GpuCanvasPresenter> gpuPresenter_;
     QImage preview_;
@@ -172,6 +176,7 @@ class Canvas : public QWidget {
     bool isBrush() const;
     void finishHealing();
     QPainterPath healingPath_;
+    bool smoothCorners_ = false;
     double hardness_ = 1, cornerRadius_ = 0, cropRatio_ = 0;
     int selectionMode_ = 0, gestureSelectionMode_ = 0, tolerance_ = 32, gridSpacing_ = 100;
     bool ellipseSelection_ = false, contiguous_ = true, radial_ = false, transparentGradient_ = true;

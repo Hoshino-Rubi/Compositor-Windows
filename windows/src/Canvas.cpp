@@ -1,4 +1,6 @@
 #include "WideKernels.h"
+#include "SpatialFilters.h"
+#include "Cmyk.h"
 #include "Pixels.h"
 #include "Canvas.h"
 #include "Renderer.h"
@@ -103,16 +105,34 @@ void Canvas::startRender() {
     runningGeneration_ = generation_;
     const QRect visible = QRectF(documentPoint(QPointF()), documentPoint(QPointF(width(), height()))).toAlignedRect();
     const bool detailed = zoom_ * devicePixelRatioF() >= 1 && target != state.size;
-    const auto previous = frame_;
-    const bool reference = referencePreview_;
+    auto previous = frame_;
+    if(!previous.unproofedOverview.isNull()) {
+        previous.overview=previous.unproofedOverview;previous.tiles=previous.unproofedTiles;
+        previous.unproofedOverview={};previous.unproofedTiles.clear();
+    }
+    const bool reference = referencePreview_ || cmykProof_ || cmykGamut_;
+    const QByteArray profile = cmykProof_ || cmykGamut_ ? cmykProfile_ : QByteArray();
+    const bool gamut = cmykGamut_;
     const auto revision = contentRevision_;
     renderCancelled_ = std::make_shared<std::atomic_bool>(false);
     const auto cancelled = renderCancelled_;
     const bool preferGpu = QGuiApplication::platformName() == "windows" && !gpuPresentationFailed_ &&
                            !qEnvironmentVariableIntValue("COMPOSITOR_DISABLE_GPU");
-    watcher_.setFuture(QtConcurrent::run([state, target, visible, detailed, revision, previous, cancelled, preferGpu, reference] {
-        return renderCanvasPreview(state, visible, target, detailed, revision, previous, cancelled, preferGpu, reference);
+    watcher_.setFuture(QtConcurrent::run([state, target, visible, detailed, revision, previous, cancelled, preferGpu, reference, profile, gamut] {
+        auto frame = renderCanvasPreview(state, visible, target, detailed, revision, previous, cancelled, preferGpu, reference);
+        if (!profile.isEmpty()) {
+            frame.unproofedOverview=frame.overview;frame.unproofedTiles=frame.tiles;
+            frame.overview = cmykProof(frame.overview,profile,gamut);
+            for(auto &tile : frame.tiles) tile.image = cmykProof(tile.image,profile,gamut);
+        }
+        return frame;
     }));
+}
+void Canvas::setCmykProof(bool enabled, bool gamut) {
+    const auto profile = chosenCmykProfile();
+    if(enabled || gamut)validateCmykProfile(profile);
+    cmykProfile_ = profile; cmykProof_ = enabled; cmykGamut_ = gamut;
+    ++contentRevision_; frame_ = {}; scheduleRender();
 }
 void Canvas::setReferencePreview(bool enabled) {
     if (referencePreview_ == enabled) return;
@@ -621,7 +641,7 @@ void Canvas::mousePressEvent(QMouseEvent *e) {
             else if (tool_ == Tool::Clone) {
                 if (cloneSampleAll_) {
                     QImage merged = comp::render(document_->state());
-                    QImage sampled(retouchSource_.size(), pixelFormat(document_->state().bitDepth));
+                    QImage sampled(retouchSource_.size(), pixelFormat(merged));
                     if (sampled.isNull()) throw Error("tooLarge");
                     sampled.fill(Qt::transparent);
                     QPainter painter(&sampled);
@@ -1007,7 +1027,7 @@ void Canvas::finishShape() {
         } else if (tool_ == Tool::Ellipse)
             p.drawEllipse(QRectF(QPointF(0, 0), rect.size()));
         else
-            p.drawRoundedRect(QRectF(image.rect()), cornerRadius_, cornerRadius_);
+            p.drawPath(roundedShapePath(QRectF(image.rect()), cornerRadius_, smoothCorners_));
     }
     document_->edit([&](State &s) {
         Layer l;
@@ -1022,6 +1042,7 @@ void Canvas::finishShape() {
         QJsonObject shape{{"kind", tool_ == Tool::Ellipse ? "Ellipse" : tool_ == Tool::Line ? "Line" : "Rectangle"},
                           {"red", color_.redF()}, {"green", color_.greenF()}, {"blue", color_.blueF()},
                           {"cornerRadius", cornerRadius_}};
+        if (tool_ == Tool::Rectangle && smoothCorners_ && cornerRadius_ > 0) shape["smoothing"] = true;
         if (tool_ == Tool::Line) {
             auto fraction = [&](QPointF point) {
                 return QJsonObject{{"x", (point.x() - rect.x()) / rect.width()},
@@ -1042,7 +1063,8 @@ void Canvas::finishHealing() {
     if (i < 0)
         return;
     auto &l = s.layers[i];
-    auto image = l.image.convertToFormat(s.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
+    auto process = [&](const QImage &source) {
+    auto image = source.convertToFormat(s.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
                                                           : QImage::Format_RGBA8888_Premultiplied);
     QImage mask(image.size(), QImage::Format_Grayscale8);
     mask.fill(Qt::black);
@@ -1062,7 +1084,9 @@ void Canvas::finishHealing() {
                          : spot_heal(image.bits(), coverageBytes, image.width(), image.height(), image.bytesPerLine(),
                                      float(flow_), healingMode_, 0);
     if (healResult < 0) throw Error("tooLarge");
-    auto healed = image.convertToFormat(pixelFormat(s.bitDepth));
+    return image.convertToFormat(pixelFormat(s.bitDepth));
+    };
+    auto healed = hdrImage(l.image) ? hdrThrough(l.image,process) : process(l.image);
     if (!s.selectionMask.isNull())
         constrainSelection(s, l.placement, l.image, healed);
     l.image = healed;
@@ -1094,7 +1118,7 @@ void Canvas::finishGradient() {
                 l.maskPlacement.size = s.size;
             }
         }
-        target = target.convertToFormat(pixelFormat(s.bitDepth));
+        target = target.convertToFormat(hdrImage(target) ? pixelFormat(target) : pixelFormat(s.bitDepth));
         QColor first = color_, second = background_;
         if (transparentGradient_) {
             second = first;

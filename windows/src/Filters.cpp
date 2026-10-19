@@ -1,3 +1,4 @@
+#include "SpatialFilters.h"
 #include "WideProcessing.h"
 #include "Pixels.h"
 #include "Filters.h"
@@ -13,6 +14,7 @@ extern "C" {
 
 namespace comp {
 QImage blurImage(const QImage &source, double radius) {
+    if (hdrImage(source)) return hdrBlur(source, radius);
     if (wideImage(source))
         return blurImage16(source, radius);
     if (source.isNull() || radius <= 0)
@@ -66,6 +68,7 @@ bool supportedAdjustment(const QJsonObject &s) {
     return true;
 }
 void validateAdjustment(const QJsonObject &settings) {
+    if (settings["preserveTransparency"].toBool()) throw Error("unsupportedFeature", "Preserve Transparency is a destructive filter option");
     if (!supportedAdjustment(settings))
         throw Error("unsupportedFeature", "adjustments");
     auto number = [](const QJsonObject &o, const QString &key, double low, double high) {
@@ -170,6 +173,10 @@ void validateAdjustment(const QJsonObject &settings) {
             number(gradient[end].toObject(), key, 0, 1);
 }
 QImage filtered(const QImage &source, const QJsonObject &settings) {
+    if (hdrImage(source)) return hdrFiltered(source, settings);
+    if (settings["kind"] == "Progressive Blur") return progressiveBlur(source, settings);
+    if (settings["kind"] == "Gaussian Blur" && settings["preserveTransparency"].toBool())
+        return blurPreservingTransparency(source, settings["blurRadius"].toDouble(5));
     if (isStandaloneFilter(settings["kind"].toString()))
         return standaloneFilter(source, settings);
     if (wideImage(source))

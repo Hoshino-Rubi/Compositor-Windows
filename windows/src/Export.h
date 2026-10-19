@@ -11,5 +11,5 @@ QImage renderExportImage(const State &state, QSize size,
 
 void exportDocument(const State &state, const QString &path, const QByteArray &format, QSize size,
                     int quality = 92,
-                    ExportRenderer renderer = ExportRenderer::ReferenceCpu);
+                    ExportRenderer renderer = ExportRenderer::ReferenceCpu, const QByteArray &cmykProfile = {});
 }

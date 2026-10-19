@@ -154,8 +154,8 @@ void validateState(const State &s) {
             require(!l.group);
             validateAdjustment(l.metadata["adjustment"].toObject());
         }
-        if (l.metadata["shape"].toObject()["smoothing"].toBool())
-            throw Error("unsupportedFeature", "Smooth rectangle corners");
+        if(l.metadata.contains("windowsLayerBitDepth"))
+            require(l.metadata.value("windowsLayerBitDepth")==8 || l.metadata.value("windowsLayerBitDepth")==16);
         const auto effects = l.metadata["effects"].toObject();
         validateEffects(effects);
 
@@ -268,8 +268,7 @@ LoadedProject readProject(const QString &directory) {
         const auto j = entry.toObject();
         Layer l;
         l.metadata = j;
-        if (j["shape"].toObject()["smoothing"].toBool())
-            throw Error("unsupportedFeature", "Smooth rectangle corners");
+        require(v >= 14 || !j["shape"].toObject()["smoothing"].toBool());
         l.id = canonicalId(j["id"]);
         l.name = j["name"].toString();
         require(j["isVisible"].isBool());
@@ -293,13 +292,14 @@ LoadedProject readProject(const QString &directory) {
         if (j.contains("effects"))
             validateEffects(j["effects"].toObject());
         if (j.contains("imageFile") && !j["imageFile"].isNull()) {
-            if (j["imageFile"].toString().endsWith(".exr", Qt::CaseInsensitive))
-                throw Error("unsupportedFeature", "OpenEXR/HDR layers");
-            require(j["imageFile"].toString() == l.id + ".png");
-            l.originalPng =
-                safeRead(directory, "images/" + l.id + ".png", (v >= 12 ? 1024ll : 512ll) * 1024 * 1024);
+            const bool hdr = j["imageFile"].toString().endsWith(".exr", Qt::CaseInsensitive);
+            const QString extension = hdr ? ".exr" : ".png";
+            require(!hdr || v >= 13);
+            require(j["imageFile"].toString() == l.id + extension);
+            l.originalPng = safeRead(directory,"images/" + l.id + extension,(v>=12?1024ll:512ll)*1024*1024);
             hash.addData(l.originalPng);
-            l.image = decodePng(l.originalPng, pixels, false);
+            if (hdr) { l.image = readExr(l.originalPng); pixels += qint64(l.image.width())*l.image.height(); require(pixels<=MaxSourcePixels,"tooLarge"); }
+            else l.image = decodePng(l.originalPng,pixels,false);
         }
         l.maskPlacement = l.placement;
         if (j.contains("maskFile") && !j["maskFile"].isNull()) {
@@ -349,6 +349,11 @@ QByteArray pngBytes(const QImage &image, double resolution) {
     return data;
 }
 QImage readImage(const QString &path) {
+    const QString extension = QFileInfo(path).suffix().toLower();
+    if (extension == "exr" || extension == "hdr" || extension == "rgbe") {
+        QFile file(path); require(file.open(QIODevice::ReadOnly),"fileError"); require(file.size()<=1024ll*1024*1024,"tooLarge");
+        return extension == "exr" ? readExr(file.readAll()) : readRadiance(file.readAll());
+    }
     const QString suffix = QFileInfo(path).suffix().toLower();
     if (suffix == "svg" || suffix == "svgz")
         return readSvg(path);
@@ -414,11 +419,13 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
     require(QDir().mkpath(stage + "/images"), "fileError");
     QJsonObject manifest = s.metadata;
     manifest["format"] = "com.compositor.project";
-    manifest["version"] = s.bitDepth == 16 ? ProjectManifest::current : ProjectManifest::eightBit;
+    manifest["version"] = hasHdr(s) ? 13 : s.bitDepth == 16 ? 12 : ProjectManifest::eightBit;
     if (s.bitDepth == 16)
         manifest["bitDepth"] = 16;
     else
         manifest.remove("bitDepth");
+    for (const auto &layer : s.layers)
+        if (layer.metadata["shape"].toObject()["smoothing"].toBool()) manifest["version"] = 14;
     manifest["colorSpace"] = "sRGB";
     manifest["documentID"] = s.id;
     manifest["width"] = s.size.width();
@@ -454,9 +461,11 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
             if (!l.maskSource.isEmpty())
                 j["maskSourceID"] = l.maskSource;
             if (!l.image.isNull()) {
-                const auto bytes = l.originalPng.isEmpty() ? pngBytes(l.image, s.resolution) : l.originalPng;
-                j["imageFile"] = l.id + ".png";
-                write("images/" + l.id + ".png", bytes);
+                const bool hdr = hdrImage(l.image);
+                const auto bytes = l.originalPng.isEmpty() ? (hdr ? exrBytes(l.image) : pngBytes(l.image,s.resolution)) : l.originalPng;
+                const QString asset = l.id + (hdr ? ".exr" : ".png");
+                j["imageFile"] = asset;
+                write("images/" + asset, bytes);
                 encoded.append(bytes);
             }
             if (!l.mask.isNull()) {

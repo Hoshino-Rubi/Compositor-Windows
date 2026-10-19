@@ -36,7 +36,7 @@ bool isRawPath(const QString &path) {
 QStringList imageFilesInFolder(const QString &directory) {
     const QFileInfo folder(directory);
     if (!folder.isDir() || folder.suffix().compare("comp", Qt::CaseInsensitive) == 0) return {};
-    const QStringList extensions{"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "svg", "svgz", "heic", "heif", "hif", "psd", "psb"};
+    const QStringList extensions{"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "svg", "svgz", "heic", "heif", "hif", "psd", "psb", "exr", "hdr", "rgbe"};
     QStringList paths;
     const auto entries = QDir(directory).entryInfoList(QDir::Files | QDir::Readable | QDir::NoSymLinks, QDir::Name | QDir::IgnoreCase);
     for (const auto &entry : entries) {
@@ -46,8 +46,11 @@ QStringList imageFilesInFolder(const QString &directory) {
     }
     return paths;
 }
-RawFrame decodeRaw(const QString &path) {
-    auto bytes = fileBytes(path);
+RawFrame decodeRaw(const QString &path, double noiseReduction, bool highlightRecovery) {
+    return decodeRawBytes(fileBytes(path),noiseReduction,highlightRecovery);
+}
+RawFrame decodeRawBytes(const QByteArray &input, double noiseReduction, bool highlightRecovery) {
+    auto bytes = input;
     LibRaw raw;
     int code = raw.open_buffer(bytes.data(), size_t(bytes.size()));
     if (code != LIBRAW_SUCCESS)
@@ -60,6 +63,8 @@ RawFrame decodeRaw(const QString &path) {
     raw.imgdata.params.gamm[0] = 1;
     raw.imgdata.params.gamm[1] = 1;
     raw.imgdata.params.user_qual = 3;
+    raw.imgdata.params.threshold = float(std::clamp(noiseReduction,0.,100.)*10);
+    raw.imgdata.params.highlight = highlightRecovery ? 9 : 0;
     if ((code = raw.unpack()) != LIBRAW_SUCCESS || (code = raw.dcraw_process()) != LIBRAW_SUCCESS)
         throw Error("rawError", QString::fromLatin1(libraw_strerror(code)));
     std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)> decoded(
@@ -79,7 +84,8 @@ RawFrame decodeRaw(const QString &path) {
             dst[x] = QRgba64::fromRgba64(p[0], p[1], p[2], 65535);
         }
     }
-    return {image, QString::fromLatin1(raw.imgdata.idata.make) + " " + QString::fromLatin1(raw.imgdata.idata.model)};
+    return {image, QString::fromLatin1(raw.imgdata.idata.make) + " " + QString::fromLatin1(raw.imgdata.idata.model),
+            QString::fromLatin1(raw.imgdata.lens.Lens),raw.imgdata.other.focal_len, input};
 }
 QImage developRaw(const RawFrame &frame, double exposure, double temperature, double tint, double boost, int limit,
                   int bitDepth) {

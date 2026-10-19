@@ -157,14 +157,14 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     menu("layer", {"addLayer",   "addGroup",   "groupSelection",  "ungroup",     "",           "duplicate", "merge",
                    "rename",     "editText",   "layerEffects",    "delete",      "",           "moveUp",    "moveDown",
                    "flipX",      "flipY",      "transformLayers", "freeDistort", "",           "addMask",   "hideMask",
-                   "invertMask", "enableMask", "linkMask",        "applyMask",   "deleteMask", "clipMask"});
+                   "invertMask", "enableMask", "linkMask",        "applyMask",   "deleteMask", "clipMask", "", "layerDepth8", "layerDepth16"});
     menu("select", {"selectSubject", "removeBackground", "selectAll", "deselect", "invertSelection", "selectPixels",
                     "selectMask", "expandSelection", "contractSelection", "featherSelection"});
     auto *adjust = menu("adjustments", {"filter.hsv", "filter.levels", "filter.curves", "filter.exposure",
                                         "filter.grayscale", "filter.invert", "filter.blur", "filter.motionBlur",
                                         "filter.noise", "filter.grain", "filter.colorBalance", "filter.gradientMap",
                                         "filter.cameraRaw", "filter.scanlines", "filter.vignette", "filter.bloom",
-                                         "filter.dither", "filter.tonalContrast", "filter.lensCorrection", "", "lastFilter"});
+                                         "filter.dither", "filter.tonalContrast", "filter.lensCorrection", "filter.progressiveBlur", "", "lastFilter"});
     auto *adjustLayer = adjust->addMenu("");
     adjustLayer->setObjectName("adjustmentLayerMenu");
     for (const auto &key : QStringList{"hsv", "levels", "curves", "exposure", "grayscale", "colorBalance",
@@ -172,7 +172,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
         adjustLayer->addAction(actions_["adjustment." + key]);
     auto *view = menu("view", {"fit", "actualSize", "zoomIn", "zoomOut", "", "showRulers", "showGuides", "showGrid", "snap",
                   "gridSettings", "addGuide", "clearGuides", "lockGuides", "pixelGrid", "transformControls",
-                  "", "toggleFullscreen", "searchCommands"});
+                  "", "loadCmykProfile", "cmykProof", "cmykGamut", "", "toggleFullscreen", "searchCommands"});
     auto *snapMenu = view->addMenu("");
     snapMenu->setObjectName("snapTargetsMenu");
     for (const auto &key : QStringList{"snapGuides", "snapGrid", "snapLayers", "snapBounds"})
@@ -392,6 +392,12 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     radius->setObjectName("cornerRadiusSpin");
     shape->addWidget(radius);
     connect(radius, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) { canvas_->setCornerRadius(v); });
+    auto *smoothing = new QCheckBox;
+    smoothing->setObjectName("smoothCorners");
+    shape->addWidget(smoothing);
+    connect(smoothing, &QCheckBox::toggled, canvas_, &Canvas::setSmoothCorners);
+    smoothing->setEnabled(radius->value() > 0);
+    connect(radius, qOverload<int>(&QSpinBox::valueChanged), smoothing, [smoothing](int value) { smoothing->setEnabled(value > 0); });
     label("lineWidth", shape)->setObjectName("lineWidthLabel");
     lineWidth_ = new QSpinBox;
     lineWidth_->setRange(1, 5000);
@@ -878,6 +884,8 @@ void MainWindow::setTool(Tool tool) {
     findChild<QLabel *>("blurRadiusLabel")->setVisible(tool == Tool::Blur && retouchMode_->currentIndex() == 0);
     lineWidth_->setVisible(tool == Tool::Line);
     findChild<QLabel *>("lineWidthLabel")->setVisible(tool == Tool::Line);
+    findChild<QCheckBox *>("smoothCorners")->setText(t("smoothCorners"));
+    findChild<QCheckBox *>("smoothCorners")->setVisible(tool == Tool::Rectangle);
     findChild<QLabel *>("cornerRadiusLabel")->setVisible(tool == Tool::Rectangle);
     findChild<QSpinBox *>("cornerRadiusSpin")->setVisible(tool == Tool::Rectangle);
     lassoMode_->setVisible(tool == Tool::Lasso);
@@ -1012,6 +1020,8 @@ void MainWindow::refreshSelection() {
     }
     actions_["lastFilter"]->setEnabled(!busy_ && pixels && !lastFilter_.isEmpty());
     actions_["layerEffects"]->setEnabled(!busy_ && active);
+    for (const auto &key : {"layerDepth8", "layerDepth16"})
+        actions_[key]->setEnabled(!busy_ && pixels && !s.layers[i].metadata.contains("adjustment") && !s.layers[i].metadata.contains("text"));
     actions_["ungroup"]->setEnabled(!busy_ && active && s.layers[i].group);
     actions_["editText"]->setEnabled(!busy_ && pixels && s.layers[i].metadata.contains("text"));
     for (auto *box : {x_, y_, width_, height_, rotation_})
@@ -1056,7 +1066,7 @@ void MainWindow::refreshSelection() {
                 pair.first->setValue(pair.second);
     }
     dimensions_->setText(doc ? QString::number(s.size.width()) + " × " + QString::number(s.size.height()) +
-                                   " px   ·   sRGB   ·   " + t(s.bitDepth == 16 ? "depth16" : "depth8")
+                                   " px   ·   sRGB   ·   " + (hasHdr(s) ? QString("HDR") : t(s.bitDepth == 16 ? "depth16" : "depth8"))
                              : "");
     status_->setText(busy_ ? t("busy") : doc ? t(document_.dirty() ? "unsaved" : "saved") : t("ready"));
     tabs_->setEnabled(!busy_);

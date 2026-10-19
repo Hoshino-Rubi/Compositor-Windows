@@ -609,9 +609,11 @@ QImage runGpuNative(const GpuNativeCallback &callback) {
 }
 
 QImage filterGpuImage(const QImage &source,const QJsonObject &settings,double scale,int clipping) {
+    if (hdrImage(source)) return {};
     return processGpuImage(source,settings,scale,clipping,false);
 }
 QImage effectsGpuImage(const QImage &source,const QJsonObject &settings,double scale) {
+    if (hdrImage(source)) return {};
     return processGpuImage(source,settings,scale,0,true);
 }
 QImage warpGpuImage(const QImage &source, const QVector<QPointF> &points, double radius, double hardness,
@@ -625,6 +627,8 @@ QImage effectsAccelerated(const QImage &source,const QJsonObject &settings,doubl
     return image.isNull()?applyEffects(source,settings,scale):image;
 }
 QImage filteredAccelerated(const QImage &source,const QJsonObject &settings,double scale,int clipping) {
+    if (hdrImage(source)) return settings["kind"] == "Camera Raw" ? cameraRaw(source,settings,scale,clipping) : filtered(source,settings);
+    if (settings["kind"] == "Progressive Blur" || settings["preserveTransparency"].toBool()) return filtered(source, settings);
     // Small standalone motion-blur requests do not reliably amortize upload/readback.
     // Resident adjustment layers keep their GPU path; no device/cache work is needed here.
     if (settings["kind"] == "Motion Blur" && qint64(source.width()) * source.height() <= 256 * 1024)
@@ -671,6 +675,7 @@ QImage renderGpuPreviewImpl(const State &state, QSize target, QPoint viewportOri
                             std::shared_ptr<GpuPreviewTexture> *textureOut = nullptr,
                             const QHash<QString, std::shared_ptr<GpuNativeTexture>> *sourceOverrides = nullptr) {
 #ifdef Q_OS_WIN
+    if (hasHdr(state)) { if(textureOut)*textureOut={}; return {}; }
     const bool textureOnly = textureOut != nullptr;
     if (textureOut) *textureOut = {};
     auto publishTexture = [&](const std::shared_ptr<GpuNativeTexture> &native) {

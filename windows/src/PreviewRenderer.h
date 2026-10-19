@@ -24,6 +24,9 @@ struct CanvasPreview {
     QSize canvasSize;
     // Retain the global-adjustment composite across pans of the same revision.
     QImage fullReference;
+    // View-only proofing keeps the unmodified composite for subsequent cache reuse.
+    QImage unproofedOverview;
+    QVector<PreviewTile> unproofedTiles;
 };
 QImage renderPreview(const State &state, QSize target = {}, QPoint viewportOrigin = {});
 QImage renderRegion(const State &state, QRect region, bool accelerated = false);

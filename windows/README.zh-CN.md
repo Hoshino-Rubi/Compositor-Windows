@@ -1,13 +1,23 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.5.1（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.5.2（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.1) 下载正式版便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.2) 下载正式版便携包。
 
-解压 `Compositor-0.5.1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.5.2-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.5.2 — HDR、印刷色彩与编辑工具
+
+- 浮点 HDR 图层、单部件 RGB(A) EXR／Radiance RGBE 导入、保留超白高光的编辑与合成，以及 EXR 导出。HDR 使用 CPU 参考路径；整数图像保留已有 GPU 分流策略。
+- 在“视图”加载 CMYK ICC 配置，可软打样、显示色域警告；支持 8 位 CMYK PSD/PSB 导入，以及嵌入配置的 CMYK JPEG／TIFF／PDF 导出。文档仍以 RGB 编辑，RGB TIFF 可保留整数精度。
+- 新增可拖端点的线性／径向渐进模糊、高斯模糊保持透明度、模糊边界扩展、内容识别向外填充和平滑圆角；可单独转换图层的 8／16 位。
+- RAW 新增 LibRaw 解码降噪、高光恢复、手动 Lensfun 畸变配置及直接进入 Camera Raw 的按钮。Camera Raw 参数预览以原图分辨率处理，不再先缩小源图。
+- 新文案覆盖八种语言。验证及明确边界见 [0.5.2 发布说明](releases/0.5.2.md)。
+
+**镜头校正边界：**需明确加载只包含一个匹配镜头的 Lensfun XML，按最接近的标定焦距校正；不是自动读取相机内嵌配置。不新增多部件／深度 EXR、32 位 PSD、PSD 导出、自动更新安装或代码签名。部分 macOS 交互差异仍存在。下方旧版本章节是历史记录。
 
 ## 0.5.1 — 同步上游 1.5.3
 
@@ -222,9 +232,9 @@ Windows 原生端同步适配：
 
 ## 兼容范围
 
-读取支持范围内的 PNG `.comp` version 1–14，必要时从 PNG 推断位深；HDR／EXR 和平滑圆角形状会明确拒绝。8 位文档写入 version 11，16 位文档写入 version 12。未触碰的 PNG 字节及未知非渲染元数据保留。文字保留 fontRuns/colorRuns；Windows 缺少的字体可能替代，重新编辑会按 Windows 字体排版。像素滤镜/绘画/自由扭曲会栅格化文字和形状。选区与历史为会话状态。
+读取支持范围内的 `.comp` version 1–14，包括 EXR 资产和平滑圆角；8 位、16 位、HDR、平滑圆角分别按所需的 v11／v12／v13／v14 保存。缺省时从 PNG 推断整数位深，HDR 图层保留浮点数据。未触碰的 PNG 字节及未知非渲染元数据保留。文字保留 fontRuns/colorRuns；Windows 缺少的字体可能替代，重新编辑会按 Windows 字体排版。像素滤镜/绘画/自由扭曲会栅格化文字和形状。选区与历史为会话状态。
 
-PSD/PSB 支持 8 位及 16 位 RGB，超出原版的 8 位范围；暂不支持 CMYK 和 32 位 PSD。编辑使用整数 sRGB，不是浮点／HDR 管线。Photoshop 智能对象、复杂路径/文字变形与部分效果保留栅格后备或给出转换报告，不承诺 Photoshop 所有结构都可继续编辑。导入不是 PSD 导出。
+PSD/PSB 支持 8 位及 16 位 RGB，以及通过嵌入或手动选定 ICC 配置转换的 8 位 CMYK；仍不支持 32 位 PSD。8／16 位图层使用整数 sRGB，HDR 图层使用浮点扩展范围 sRGB。Photoshop 智能对象、复杂路径/文字变形与部分效果保留栅格后备或给出转换报告，不承诺 Photoshop 所有结构都可继续编辑。导入不是 PSD 导出。
 Camera Raw 对应本项目原版的功能，不是 Adobe 插件；镜头配置使用原版通用校正内核，不带 Adobe 相机/镜头数据库。
 对象识别使用 Windows 本地模型，效果可能与 macOS Vision 不同；它对模型识别出的前景做连通区域选择，不能保证识别图中任意对象。
 CPU／Direct3D 预览合成、字体、几何插值、模糊与发光边缘可能与 Metal 输出不同，不宣称逐像素一致。GPU 预览与 CPU 输出仍存在舍入及边缘采样差异。可选 CPU 参考预览及默认导出使用 CPU；GPU 导出需显式选择，直接编辑保存实际处理后的像素。启动前设置 `COMPOSITOR_DISABLE_GPU=1` 可禁用 GPU 预览。

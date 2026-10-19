@@ -250,7 +250,7 @@ void MainWindow::cameraRawDialog() {
         return;
     const State original = document_.state();
     const QImage full = original.layers[index].image;
-    const QImage source = full.scaled(1000, 850, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    const QImage source = full;
     QJsonObject settings;
     QDialog dialog(this);
     dialog.setObjectName("cameraRawDialog");

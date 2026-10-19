@@ -110,12 +110,32 @@ void Document::trimHistory() {
     while (undo_.size() > 1 && memory() > 256ll * 1024 * 1024)
         undo_.removeFirst();
 }
+void Document::setLayerBitDepth(int depth) {
+    const int i = state_.index(state_.active);
+    if ((depth != 8 && depth != 16) || i < 0 || state_.layers[i].group || state_.layers[i].image.isNull()) return;
+    edit([&](State &s) {
+        auto &layer = s.layers[i];
+        if(depth==8 && wideImage(layer.image)) {
+            const auto source=layer.image.convertToFormat(QImage::Format_RGBA64);
+            QImage result(source.size(),QImage::Format_ARGB32_Premultiplied);if(result.isNull())throw Error("tooLarge");
+            for(int y=0;y<source.height();++y){const auto *in=reinterpret_cast<const QRgba64 *>(source.constScanLine(y));auto *out=reinterpret_cast<QRgb *>(result.scanLine(y));
+                for(int x=0;x<source.width();++x){quint32 hash=quint32(x)*0x9e3779b9u ^ quint32(y)*0x85ebca6bu;hash^=hash>>16;hash*=0x7feb352du;hash^=hash>>15;
+                    const double noise=(hash&65535)/65536.;auto quantize=[&](int v){return std::clamp(int(std::floor(v/257.+noise)),0,255);};
+                    out[x]=qPremultiply(qRgba(quantize(in[x].red()),quantize(in[x].green()),quantize(in[x].blue()),qRound(in[x].alpha()/257.)));}}
+            result.setColorSpace(QColorSpace::SRgb);layer.image=result;
+        } else layer.image = layer.image.convertToFormat(pixelFormat(depth));
+        layer.metadata["windowsLayerBitDepth"] = depth;
+        layer.originalPng.clear();
+        if (depth == 16) s.bitDepth = 16;
+    });
+}
 void Document::setBitDepth(int depth) {
-    if ((depth != 8 && depth != 16) || state_.bitDepth == depth)
+    if ((depth != 8 && depth != 16) || (state_.bitDepth == depth && !hasHdr(state_)))
         return;
     edit([&](State &s) {
         s.bitDepth = depth;
         for (auto &l : s.layers) {
+            l.metadata.remove("windowsLayerBitDepth");
             if (!l.image.isNull())
                 l.image = l.image.convertToFormat(pixelFormat(depth));
             if (!l.mask.isNull())

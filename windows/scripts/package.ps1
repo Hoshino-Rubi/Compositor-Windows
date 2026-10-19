@@ -53,6 +53,7 @@ Copy-Item -Path (Join-Path $sourceRoot 'resources/licenses/*') -Destination $lic
 foreach ($library in 'libraw','jasper','libjpeg-turbo','lcms','libheif','libde265','zlib') {
     Copy-Item -LiteralPath (Join-Path $native "share/$library/copyright") -Destination (Join-Path $licenses "$library-NOTICE.txt")
 }
+Copy-Item -LiteralPath (Join-Path $sourceRoot 'third_party/tinyexr/LICENSE') -Destination (Join-Path $licenses 'TinyEXR-BSD.txt')
 Copy-Item -LiteralPath (Join-Path $onnx 'LICENSE') -Destination (Join-Path $licenses 'ONNXRuntime-MIT.txt')
 Copy-Item -LiteralPath (Join-Path $onnx 'ThirdPartyNotices.txt') -Destination (Join-Path $licenses 'ONNXRuntime-ThirdPartyNotices.txt')
 # The SDK's SPDX records include the notices for Qt's bundled third-party libraries.

@@ -26,6 +26,7 @@ class Document : public QObject {
     void undo();
     void redo();
     void setBitDepth(int depth);
+    void setLayerBitDepth(int depth);
     void addLayer(const QString &name, const QImage &image = {}, bool group = false);
     void duplicate(const QString &name);
     void remove();

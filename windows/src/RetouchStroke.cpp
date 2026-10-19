@@ -15,6 +15,10 @@ struct Offset {
 Color read(const QImage &image, int x, int y, bool wide) {
     x = std::clamp(x, 0, image.width() - 1);
     y = std::clamp(y, 0, image.height() - 1);
+    if (hdrImage(image)) {
+        const auto p = reinterpret_cast<const FloatPixel *>(image.constScanLine(y))[x];
+        return {p.r*65535, p.g*65535, p.b*65535, p.a*65535};
+    }
     if (wide) {
         const auto p = reinterpret_cast<const QRgba64 *>(image.constScanLine(y))[x];
         return {float(p.red()), float(p.green()), float(p.blue()), float(p.alpha())};
@@ -35,6 +39,10 @@ Color sample(const QImage &image, double x, double y, bool wide) {
     return out;
 }
 void write(QImage &image, int x, int y, Color p, bool wide) {
+    if (hdrImage(image)) {
+        reinterpret_cast<FloatPixel *>(image.scanLine(y))[x] = {p[0]/65535,p[1]/65535,p[2]/65535,std::clamp(p[3]/65535,0.f,1.f)};
+        return;
+    }
     const int max = wide ? 65535 : 255;
     int c[4];
     for (int k = 0; k < 4; ++k)
@@ -158,6 +166,7 @@ RetouchStroke::RetouchStroke(const QImage &source, double radius, double hardnes
         throw Error("invalidSize");
     auto &s = *impl_;
     s.wide = wideImage(source);
+    s.cpu = hdrImage(source);
     s.original = source.convertToFormat(pixelFormat(source));
     s.radius = float(radius);
     s.hardness = float(std::clamp(hardness, 0., .98));

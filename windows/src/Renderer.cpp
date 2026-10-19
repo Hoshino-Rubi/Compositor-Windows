@@ -208,6 +208,7 @@ QImage renderMask(const Layer &l, QSize canvas, QSize target) {
     return result;
 }
 QImage layerSurface(const State &s, int index, QSize target) {
+    if (hasHdr(s)) return layerSurfaceHdr(s, index, target);
     if (s.bitDepth == 16)
         return layerSurface16(s, index, target);
     auto result = ownSurface(s, index, target);
@@ -223,6 +224,7 @@ QImage layerSurface(const State &s, int index, QSize target) {
     return result;
 }
 QImage render(const State &s, QSize target) {
+    if (hasHdr(s)) return renderHdr(s, target);
     if (s.bitDepth == 16)
         return render16(s, target.isValid() ? target : s.size);
     if (!target.isValid())

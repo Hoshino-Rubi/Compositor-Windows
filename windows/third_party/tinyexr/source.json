@@ -1,0 +1,10 @@
+{
+  "repository": "syoyo/tinyexr",
+  "commit": "010383f267cba709568319fabe5c13b4b2c3188e",
+  "files": {
+    "tinyexr.h": "b1d33ca1350d64e2b9a199614991cffd45d7982ff3d68f107020a1230bde38ec",
+    "exr_reader.hh": "9e0bfef0487b9c3082165b2a637c75ef91d9fcc4aa55a5f32eb97f77db19f99b",
+    "streamreader.hh": "81f2d1502930ca9ca9957e7607c2a7924d3ef2fe4b08b1a4001245dc6d3fefb6",
+    "LICENSE": "b90388aaadc2b6f77a5c01278697a2a0539eab471a3befc6a081728becdc3390"
+  }
+}

@@ -1,4 +1,5 @@
 #include "Export.h"
+#include "Cmyk.h"
 #include "GpuPreview.h"
 #include "Pixels.h"
 #include "PreviewRenderer.h"
@@ -222,20 +223,27 @@ QImage renderTiledExport(const State &state, QSize target, bool accelerated) {
 
 QImage renderExportImage(const State &state, QSize size, ExportRenderer renderer) {
     validateExportSize(size);
+    if (hasHdr(state)) return renderHdr(state, size);
     return renderTiledExport(state, size, renderer == ExportRenderer::AcceleratedGpu);
 }
 
 void exportDocument(const State &state, const QString &path, const QByteArray &format, QSize size, int quality,
-                    ExportRenderer renderer) {
+                    ExportRenderer renderer, const QByteArray &cmykProfile) {
     validateExportSize(size);
-    if (format != "png" && format != "jpeg" && format != "pdf")
+    if (format != "png" && format != "jpeg" && format != "pdf" && format != "tiff" && format != "exr")
         throw Error("unsupportedFeature", "export format");
     auto image = renderExportImage(state, size, renderer);
     // Encoding remains Qt's CPU path; only compositing above is accelerated.
     QSaveFile out(path);
     if (!out.open(QIODevice::WriteOnly))
         throw Error("fileError");
-    if (format == "pdf") {
+    if (format == "exr") {
+        const auto data = exrBytes(image);
+        if (out.write(data) != data.size()) throw Error("fileError");
+    } else if (!cmykProfile.isEmpty()) {
+        const auto data = encodeCmyk(image, cmykProfile, format, state.resolution, quality);
+        if (out.write(data) != data.size()) throw Error("fileError");
+    } else if (format == "pdf") {
         // One raster-composited page, sized by document DPI, with no printer margins.
         QPdfWriter pdf(&out);
         pdf.setResolution(qRound(state.resolution));
@@ -251,6 +259,7 @@ void exportDocument(const State &state, const QString &path, const QByteArray &f
         if (!painter.end())
             throw Error("fileError");
     } else {
+        if (hdrImage(image)) image=image.convertToFormat(QImage::Format_RGBA64_Premultiplied);
         if (format == "jpeg") {
             QImage white(size, QImage::Format_RGB32);
             white.fill(Qt::white);

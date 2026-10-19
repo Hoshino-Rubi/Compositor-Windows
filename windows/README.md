@@ -1,14 +1,24 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.5.1 (stable)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.5.2 (stable)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the stable [0.5.1 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.1), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
+Download the stable [0.5.2 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.2), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.5.1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.5.2-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.5.2 — HDR, print color and editing tools
+
+- Floating-point HDR layers, single-part RGB(A) EXR and Radiance RGBE import, highlight-preserving editing/compositing, and EXR export. HDR uses the reference CPU pipeline; integer-document GPU policies remain unchanged.
+- CMYK ICC profile loading, soft proof/gamut warning, 8-bit CMYK PSD/PSB import, and ICC-tagged CMYK JPEG/TIFF/PDF export. Editing remains RGB. RGB TIFF export retains integer precision.
+- Linear/radial Progressive Blur with draggable endpoints, Gaussian Preserve Transparency, expanded blur bounds and content-aware extension, upstream-style Smooth Corners, and independent 8/16-bit layer conversion.
+- LibRaw decoder noise reduction/highlight recovery, manual Lensfun distortion profiles, direct RAW-to-Camera-Raw handoff, and original-resolution Camera Raw processing previews.
+- New interface text is translated in all eight languages. See [0.5.2 release notes](releases/0.5.2.md) for tests and exact boundaries.
+
+Lens correction requires an explicitly selected, single-lens Lensfun XML and uses the nearest calibrated focal length; it is **not** automatic embedded-profile detection. Multipart/deep EXR, 32-bit PSD, PSD export, automatic update installation and code signing are not included. Some macOS interaction differences remain. Subsequent version sections are historical records.
 
 ## Version 0.5.1 — Upstream 1.5.3 integration
 
@@ -204,9 +214,9 @@ Use Open Image (`Ctrl+O`) for a new image document, Open Project (`Ctrl+Shift+O`
 
 ## Compatibility
 
-Reads supported PNG-based `.comp` versions 1–14, inferring depth from PNG assets when needed. HDR/EXR and smoothed-corner shapes are explicitly rejected. Writes version 11 for 8-bit documents and version 12 for 16-bit documents. Untouched PNG bytes and non-rendering metadata survive round trips. Font/color runs remain editable; text reflows with Windows fonts. Pixel editing rasterizes text/shapes. Selection and history are session-only.
+Reads supported `.comp` versions 1–14, including EXR assets and smooth corners. Writes v11 for 8-bit, v12 for 16-bit, v13 for HDR and v14 for smooth corners. Integer working depth is inferred when absent; HDR layers retain floating-point pixels. Untouched PNG bytes and non-rendering metadata survive round trips. Font/color runs remain editable; text reflows with Windows fonts. Pixel editing rasterizes text/shapes. Selection and history are session-only.
 
-PSD/PSB import supports 8-bit and 16-bit RGB, extending the upstream 8-bit scope. CMYK and 32-bit PSD remain unsupported. Editing uses integer sRGB, not a floating-point/HDR pipeline. Complex Photoshop objects, text warps and effects use raster fallbacks or conversion notices; PSD export is not provided.
+PSD/PSB import supports 8-bit and 16-bit RGB, plus 8-bit CMYK converted through its embedded or explicitly selected ICC profile. 32-bit PSD remains unsupported. Editing uses integer sRGB for 8/16-bit layers and floating-point extended-range sRGB for HDR layers. Complex Photoshop objects, text warps and effects use raster fallbacks or conversion notices; PSD export is not provided.
 Camera Raw matches this application's controls, not Adobe's proprietary plugin or lens database. Windows object selection uses local U2Netp foreground inference and connected components, which can differ from macOS Vision.
 CPU/Direct3D preview rendering, fonts, geometry interpolation and effect edges can differ from Metal; pixel-identical output is not claimed. GPU previews can differ from integer CPU output by rounding and edge-sampling behavior. Reference CPU preview and default export use the CPU renderer; GPU export is an explicit opt-in. Destructive edits save their resulting pixels. High-zoom tiles display source-resolution pixels; the overview is limited to 2560px per side. PSD layers cropped during import lose their off-canvas pixels. Set `COMPOSITOR_DISABLE_GPU=1` before launch to force CPU previews.
 
@@ -225,7 +235,7 @@ pwsh -File ./windows/scripts/package.ps1 -QtDir C:/Qt/6.8.3/msvc2022_64 -SkipBui
 
 The upstream pixel sources are translated at CMake configure time from Apple blocks to synchronous MSVC parallel loops without editing their math. If upstream changes `CameraRawTables.bin`, run `python windows/scripts/repack-camera-raw.py`; CMake rejects a stale packed resource. The generated Qt resource preserves the exact upstream table bytes.
 
-The 16-bit implementations share the original algorithms through checked-in C++ specializations. Normal builds do not require Python. After changing the corresponding source algorithms, regenerate them with `python windows/scripts/generate-wide-pixels.py` and `python windows/scripts/generate-wide-processing.py`; CMake checks their source hashes and rejects stale output. These scripts are development tools and are not part of the portable application.
+The 16-bit implementations share the original algorithms through checked-in C++ specializations. Normal builds do not require Python. The floating-point compositor is generated by `windows/scripts/generate-hdr-renderer.py` from the same scalar renderer; its source hash is checked at configure time. After changing the corresponding source algorithms, regenerate them with `python windows/scripts/generate-wide-pixels.py` and `python windows/scripts/generate-wide-processing.py`; CMake checks their source hashes and rejects stale output. These scripts are development tools and are not part of the portable application.
 
 Dependency revisions and download checksums are pinned in dependencies.lock.json and vcpkg.json. Setup needs network; application use is offline.
 The build runs Qt Test, covering native 16-bit precision, import/development, pixel output, Camera Raw, gestures/undo, selection, groups, model inference, document reload, translations and the original editing regressions.

@@ -1,4 +1,5 @@
 #include "WideProcessing.h"
+#include "RetouchStroke.h"
 #include "Pixels.h"
 #include "Warp.h"
 #include <QPainter>
@@ -19,6 +20,11 @@ static QRgb sample(const QImage &image, double x, double y) {
 }
 void warpDab(QImage &image, QPointF from, QPointF to, double radius, double hardness, double strength, bool smudge,
              const QPainterPath &selection) {
+    if (hdrImage(image)) {
+        QImage coverage;
+        if(!selection.isEmpty()) {coverage=QImage(image.size(),QImage::Format_Grayscale16);if(coverage.isNull())throw Error("tooLarge");coverage.fill(Qt::black);QPainter p(&coverage);p.fillPath(selection,Qt::white);}
+        RetouchStroke stroke(image,radius,hardness,strength,smudge,coverage);stroke.append(image,{from,to});return;
+    }
     if (wideImage(image))
         return warpDab16(image, from, to, radius, hardness, strength, smudge, selection);
     if (image.isNull() || radius < 1 || from == to)
@@ -58,7 +64,7 @@ void warpDab(QImage &image, QPointF from, QPointF to, double radius, double hard
     }
 }
 QImage perspectiveWarp(const QImage &image, const QPolygonF &destination) {
-    if (wideImage(image))
+    if (wideImage(image) && !hdrImage(image))
         return perspectiveWarp16(image, destination);
     QPolygonF source{QPointF(0, 0), QPointF(image.width(), 0), QPointF(image.width(), image.height()),
                      QPointF(0, image.height())};
@@ -69,7 +75,7 @@ QImage perspectiveWarp(const QImage &image, const QPolygonF &destination) {
     if (bounds.width() > MaxSide || bounds.height() > MaxSide ||
         qint64(bounds.width()) * bounds.height() > MaxSourcePixels)
         throw Error("tooLarge");
-    QImage result(bounds.size(), QImage::Format_ARGB32_Premultiplied);
+    QImage result(bounds.size(), pixelFormat(image));
     if (result.isNull())
         throw Error("tooLarge");
     result.fill(Qt::transparent);

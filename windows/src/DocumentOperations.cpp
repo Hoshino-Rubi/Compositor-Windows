@@ -1,3 +1,4 @@
+#include "SpatialFilters.h"
 #include "GpuPreview.h"
 #include "WideKernels.h"
 #include "Pixels.h"
@@ -94,7 +95,7 @@ static void makeRaster(Layer &l, const State &s, bool mask) {
         } else if (!l.maskLinked)
             l.maskPlacement = l.placement;
     }
-    image = image.convertToFormat(pixelFormat(s.bitDepth));
+    image = image.convertToFormat(hdrImage(image) ? pixelFormat(image) : pixelFormat(l.metadata.value("windowsLayerBitDepth").toInt(s.bitDepth)));
     if (mask)
         l.originalMaskPng.clear();
     else {
@@ -175,9 +176,22 @@ void Document::applyFilter(const QJsonObject &settings, bool mask) {
     edit([&](State &s) {
         auto &l = s.layers[index];
         makeRaster(l, s, mask);
+        QJsonObject processing = settings;
+        if (!mask) {
+            const auto oldSize=l.image.size();const auto oldMatrix=l.placement.matrix(oldSize);
+            prepareBlurBounds(l,s.size,settings);
+            if(settings["kind"]=="Progressive Blur" && oldSize!=l.image.size()) {
+                const auto map=oldMatrix*l.placement.matrix(l.image.size()).inverted();
+                for(const auto &which:{QString("Start"),QString("End")}) {
+                    const QString x="progressive"+which+"X",y="progressive"+which+"Y";
+                    const auto point=map.map(QPointF(settings[x].toDouble(which=="Start"?.25:.75)*oldSize.width(),settings[y].toDouble(.5)*oldSize.height()));
+                    processing[x]=point.x()/l.image.width();processing[y]=point.y()/l.image.height();
+                }
+            }
+        }
         auto &image = mask ? l.mask : l.image;
         const auto before = image;
-        auto output = filteredAccelerated(image, settings);
+        auto output = processing["kind"] == "Motion Blur" ? motionBlurClamped(image,processing) : filteredAccelerated(image, processing);
         if (!s.selectionMask.isNull()) {
             constrainSelection(s, mask && !l.maskLinked ? l.maskPlacement : l.placement, before, output);
             image = output;
@@ -238,7 +252,7 @@ void Document::maskAction(const QString &action) {
             }
         } else if (action == "applyMask" && !l.image.isNull()) {
             QImage alpha = renderMask(l, s.size, s.size);
-            QImage mapped(l.image.size(), pixelFormat(s.bitDepth));
+            QImage mapped(l.image.size(), pixelFormat(l.image));
             mapped.fill(Qt::transparent);
             {
                 QPainter p(&mapped);
@@ -515,7 +529,10 @@ void Document::contentFill() {
         return;
     edit([&](State &s) {
         auto &l = s.layers[i];
-        auto rgba = l.image.convertToFormat(s.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
+        const auto selectionBounds = l.placement.matrix(l.image.size()).inverted().map(s.selection).boundingRect().toAlignedRect();
+        expandLayerPixels(l, selectionBounds);
+        auto process = [&](const QImage &source) {
+        auto rgba = source.convertToFormat(s.bitDepth == 16 ? QImage::Format_RGBA64_Premultiplied
                                                              : QImage::Format_RGBA8888_Premultiplied);
         QImage coverage(rgba.size(), QImage::Format_Grayscale8);
         coverage.fill(Qt::black);
@@ -532,7 +549,9 @@ void Document::contentFill() {
             throw Error("tooLarge");
         if (result == 0)
             throw Error("noDonor");
-        auto resultImage = rgba.convertToFormat(pixelFormat(s.bitDepth));
+        return rgba.convertToFormat(pixelFormat(s.bitDepth));
+        };
+        auto resultImage = hdrImage(l.image) ? hdrThrough(l.image,process) : process(l.image);
         if (!s.selectionMask.isNull())
             constrainSelection(s, l.placement, l.image, resultImage);
         l.image = resultImage;

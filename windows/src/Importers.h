@@ -11,8 +11,13 @@ bool isRawPath(const QString &path);
 struct RawFrame {
     QImage linear;
     QString camera;
+    QString lens;
+    double focal = 0;
+    QByteArray encoded;
 };
-RawFrame decodeRaw(const QString &path);
+RawFrame decodeRaw(const QString &path, double noiseReduction = 0, bool highlightRecovery = false);
+RawFrame decodeRawBytes(const QByteArray &bytes, double noiseReduction, bool highlightRecovery);
+QImage correctRawLens(const QImage &image, const QByteArray &profile, double focal);
 QImage developRaw(const RawFrame &frame, double exposure = 0, double temperature = 6500, double tint = 0,
                   double boost = 1, int limit = 0, int bitDepth = 16);
 QImage readHeif(const QString &path);
