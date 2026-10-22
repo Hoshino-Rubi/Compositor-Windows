@@ -171,6 +171,9 @@ final class EditorSession {
     var viewport = CanvasViewport()
     var tool: NavigationTool = .move
     var collapsedGroupIDs: Set<UUID> = []
+    /// The Layers panel's search text and type filter (see LayerType). Panel state, not saved with the project.
+    var layerSearchText = ""
+    var layerTypeFilter: Set<LayerType> = []
     var cropRect: CGRect?
     var cropRatioChoice = "Free"
     var cropError: String?
@@ -191,6 +194,8 @@ final class EditorSession {
     @ObservationIgnored var brushAnchor: CGPoint?
     /// The pointer itself, so a smoothed stroke can catch up to it when the button is released.
     @ObservationIgnored var brushPointer: CGPoint?
+    /// The pen's latest pressure in this stroke; 1 for a mouse. Events that carry none (the release) keep it.
+    @ObservationIgnored var brushPressure: CGFloat = 1
     @ObservationIgnored var maskDistortPreviewCache: MaskDistortPreviewCache?
     /// The last rounded rectangle drawn for a transform in progress, by layer, with the size it was drawn at.
     @ObservationIgnored var shapeTransformPreviewCache: [UUID: (size: CGSize, image: CGImage)] = [:]
@@ -239,6 +244,9 @@ final class EditorSession {
     var shapeSmoothing = false
     /// A Line shape's thickness in document pixels.
     var shapeLineWidth: Double = 4
+    /// A Line shape's dash pattern and the finish on its ends (and on each dash).
+    var shapeLineStyle = ShapeLineStyle.solid
+    var shapeLineCap = ShapeLineCap.square
     /// The shape being dragged out with the Shape tool, before it becomes a layer.
     var shapeDraft: ShapeDraft?
     var selectionModeChoice = SelectionMode.replace
@@ -853,7 +861,7 @@ final class EditorSession {
         while !pendingImports.isEmpty {
           let request = pendingImports.removeFirst()
           let psdOnly = request.files.allSatisfy { PSDReader.matches($0.0) }
-          beginEdit(psdOnly ? "Import Photoshop File" : "Import Images")
+          beginEdit(psdOnly ? "Import Photoshop File" : "Import")
           // No document: the first successful image determines the canvas, regardless of drop point.
           let point = document == nil ? nil : request.point
           for (url, scoped) in request.files {
@@ -890,11 +898,28 @@ final class EditorSession {
                     let asset = try await ImageImporter.shared.decodeSVG(url, fitting: document?.size,
                                                                          remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
                     insert(asset, centeredAt: point)
+                } else if UTType(filenameExtension: url.pathExtension)?.conforms(to: .pdf) == true {
+                    // Every page, each its own layer with page 1 on top, fitted to the canvas. A new canvas is the
+                    // first page at 300 DPI, so it keeps the page's print size.
+                    let pages = try await ImageImporter.shared.decodePDF(url, fitting: document?.size,
+                                                                         remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
+                    if document == nil, let first = pages.first {
+                        document = CanvasDocument(width: first.image.width, height: first.image.height,
+                                                  resolution: ImageImporter.pdfResolution)
+                        viewport.fit(documentSize: document!.size)
+                    }
+                    for page in pages.reversed() { insert(page, centeredAt: point) }
                 } else if PSDReader.matches(url) {
                     beginPSDReading(title: "Open “\(url.lastPathComponent)”?", confirmTitle: "Import")
                     let imported: PSDImport
                     do {
                         let parsed = try await ImageImporter.shared.loadPhotoshop(url, remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
+                        // Artboards each open as a document of their own, in tabs the workspace makes.
+                        if let boards = parsed.artboards(), !boards.isEmpty, let opensArtboard {
+                            endPSDReading()
+                            for board in boards { await opensArtboard(board.document, board.name) }
+                            continue
+                        }
                         psdProfile = parsed.cmykProfile
                         // Only a background: Photoshop writes no layer records, just the merged image, so that is
                         // what comes in, as one layer.
@@ -936,7 +961,7 @@ final class EditorSession {
     }
 
     func insert(_ asset: ImportedImage, centeredAt point: CGPoint? = nil) {
-        beginEdit("Import Image")
+        beginEdit("Import")
         defer { endEdit() }
         if document == nil {
             document = CanvasDocument(width: asset.image.width, height: asset.image.height)
@@ -996,6 +1021,31 @@ final class EditorSession {
         let continuation = conversionContinuation
         conversionContinuation = nil
         continuation?.resume(returning: confirmed)
+    }
+
+    /// Opens each artboard of a Photoshop file as a document of its own; set by the workspace, which makes the tabs.
+    /// Without it (no workspace), a file with artboards imports as one canvas, as one without them does.
+    @ObservationIgnored var opensArtboard: ((PSDDocument, String) async -> Void)?
+
+    /// One Photoshop artboard's layers as this tab's document, after the conversion report when there's anything in it.
+    func importArtboard(_ parsed: PSDDocument, named name: String) async {
+        do {
+            beginPSDReading(title: "Open “\(name)”?", confirmTitle: "Import")
+            let imported: PSDImport
+            do {
+                let assets = try await ImageImporter.shared.photoshopAssets(parsed)
+                imported = try PSDDocumentBuilder.makeImport(parsed, assets: assets)
+            } catch {
+                endPSDReading()
+                throw error
+            }
+            guard await finishPSDReading(imported.conversions) else { return }
+            let startsDocument = document == nil
+            try insertPhotoshop(imported, named: name)
+            if startsDocument, let profile = parsed.cmykProfile { proofProfile = CMYK.adopt(profile) }
+        } catch {
+            importError = [importError, "\(name): \(error.localizedDescription)"].compactMap { $0 }.joined(separator: "\n\n")
+        }
     }
 
     func insertPhotoshop(_ imported: PSDImport, named: String, centeredAt point: CGPoint? = nil) throws {
@@ -1068,7 +1118,7 @@ final class EditorSession {
 
     func fit() {
         guard let document else { return }
-        viewport.fit(documentSize: document.size)
+        viewport.fit(documentSize: document.size, enlarging: true)
     }
 
     func zoom(to value: CGFloat, anchor: CGPoint? = nil) {

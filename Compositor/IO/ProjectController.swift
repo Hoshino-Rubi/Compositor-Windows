@@ -72,7 +72,7 @@ final class ProjectController {
                 sheet.styleMask = [.titled, .fullSizeContentView]
                 sheet.title = "Export As"
                 sheet.contentViewController = NSHostingController(rootView: ExportAsSheet(
-                    raster: raster, deepRaster: deepRaster, hdrRaster: hdrRaster, session: session,
+                    raster: raster, deepRaster: deepRaster, hdrRaster: hdrRaster, snapshot: snapshot, session: session,
                     format: start ?? lastExportFormat) { chosen in
                     window.endSheet(sheet)
                     sheet.orderOut(nil)
@@ -126,7 +126,7 @@ final class ProjectController {
         guard let options, let snapshot = session.projectSnapshot() else { return }
         do {
             let resized = try await CanvasResizer.shared.resize(snapshot, to: options)
-            session.applyDocumentSize(resized, actionName: "Canvas Size")
+            session.applyDocumentSize(resized, actionName: "Canvas Size", keepingZoom: true)
         } catch { await showError("Couldn’t change canvas size", error: error) }
     }
 
@@ -416,9 +416,11 @@ final class ProjectController {
 /// What File › Export As… writes.
 enum ExportFormat: String, CaseIterable {
     case png = "PNG", jpeg = "JPEG", tiff = "TIFF", pdf = "PDF", exr = "EXR"
+    /// Layers packed into a PNG's red, green, blue and alpha, for game textures (see `ChannelPack`).
+    case channelPack = "Channel Pack"
     var type: UTType {
         switch self {
-        case .png: .png
+        case .png, .channelPack: .png
         case .jpeg: .jpeg
         case .tiff: .tiff
         case .pdf: .pdf
