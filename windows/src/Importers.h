@@ -4,7 +4,9 @@ namespace comp {
 struct ImportResult {
     State state;
     QStringList notices;
+    QVector<QPair<QString, State>> artboards;
 };
+QVector<QPair<QString, State>> photoshopArtboards(const State &state);
 ImportResult readPhotoshop(const QString &path, qint64 pixelBudget = MaxSourcePixels);
 QStringList imageFilesInFolder(const QString &directory);
 bool isRawPath(const QString &path);

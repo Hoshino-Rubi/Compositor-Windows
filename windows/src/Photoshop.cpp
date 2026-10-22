@@ -2,6 +2,7 @@
 #include "Cmyk.h"
 #include "Importers.h"
 #include <QFile>
+#include <QSet>
 #include <QFileInfo>
 #include <QPainter>
 #include <QColorTransform>
@@ -950,6 +951,17 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
                         Reader folder{payload};
                         rec.section = int(folder.u32());
                     }
+                    if (key == "artb" || key == "artd" || key == "abdd") {
+                        Reader board{payload};
+                        if (board.u32() != 16) throw Error("psdCorrupt");
+                        const auto rect = descriptor(board)["artboardRect"].toObject();
+                        const double left = rect["Left"].toDouble(), top = rect["Top "].toDouble();
+                        const double right = rect["Rght"].toDouble(), bottom = rect["Btom"].toDouble();
+                        if (rect.size() < 4 || !std::isfinite(left) || !std::isfinite(top) || !std::isfinite(right) || !std::isfinite(bottom) ||
+                            std::abs(left) > 1e6 || std::abs(top) > 1e6 || right <= left || bottom <= top ||
+                            right - left > MaxSide || bottom - top > MaxSide) throw Error("psdCorrupt");
+                        rec.layer.metadata["windowsPSDArtboard"] = QJsonArray{left, top, right, bottom};
+                    }
                     if (key == "iOpa" && !payload.isEmpty())
                         rec.layer.opacity *= quint8(payload[0]) / 255.;
                 }
@@ -1235,6 +1247,38 @@ ImportResult readPhotoshop(const QString &path, qint64 pixelBudget) {
     }
     notices.removeDuplicates();
     validateState(state);
-    return {state, notices};
+    return {state, notices, photoshopArtboards(state)};
+}
+QVector<QPair<QString, State>> photoshopArtboards(const State &source) {
+    QVector<QPair<QString, State>> result;
+    QSet<QString> boards;
+    for (const auto &layer : source.layers)
+        if (layer.group && layer.metadata["windowsPSDArtboard"].isArray()) boards.insert(layer.id);
+    for (const auto &board : source.layers) {
+        if (!boards.contains(board.id)) continue;
+        const auto a = board.metadata["windowsPSDArtboard"].toArray();
+        if (a.size() != 4) throw Error("psdCorrupt");
+        const auto rect = QRectF(QPointF(a[0].toDouble(), a[1].toDouble()), QPointF(a[2].toDouble(), a[3].toDouble())).toAlignedRect();
+        State state = source; state.id = newId(); state.size = rect.size(); state.layers.clear(); state.active.clear();
+        for (const auto &layer : source.layers) {
+            QString parent = layer.parent;
+            while (!parent.isEmpty() && !boards.contains(parent)) {
+                const int index = source.index(parent); parent = index >= 0 ? source.layers[index].parent : QString();
+            }
+            if (parent != board.id) continue;
+            Layer moved = layer;
+            if (moved.parent == board.id) moved.parent.clear();
+            moved.placement.origin -= rect.topLeft(); moved.maskPlacement.origin -= rect.topLeft();
+            if (moved.group) { moved.placement.origin = {}; moved.placement.size = state.size; }
+            moved.metadata.remove("windowsPSDArtboard");
+            state.layers.append(moved);
+        }
+        QSet<QString> retained;
+        for (const auto &layer : state.layers) retained.insert(layer.id);
+        for (auto &layer : state.layers) if (!retained.contains(layer.maskSource)) layer.maskSource.clear();
+        if (!state.layers.isEmpty()) state.active = state.layers.last().id;
+        validateState(state); result.append({board.name, state});
+    }
+    return result;
 }
 } // namespace comp

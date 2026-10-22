@@ -164,11 +164,11 @@ QPointF Canvas::documentPoint(QPointF view) const {
 QPointF Canvas::viewPoint(QPointF document) const {
     return offset_ + document * zoom_;
 }
-void Canvas::fit() {
+void Canvas::fit(bool allowUpscale) {
     if (!document_->hasDocument())
         return;
     const auto size = document_->state().size;
-    zoom_ = std::clamp(std::min(double(width() - 96) / size.width(), double(height() - 96) / size.height()), .02, 16.);
+    zoom_ = std::clamp(std::min(double(width() - 96) / size.width(), double(height() - 96) / size.height()), .02, allowUpscale ? 16. : 1.);
     offset_ = {(width() - size.width() * zoom_) / 2, (height() - size.height() * zoom_) / 2};
     emit zoomChanged(zoom_);
     scheduleRender();
@@ -316,8 +316,8 @@ void Canvas::paintEvent(QPaintEvent *) {
             p.drawEllipse(draftRect_);
         else if (tool_ == Tool::Line) {
             p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(color_, lineWidth_, Qt::SolidLine, Qt::RoundCap));
-            p.drawLine(anchor_, last_);
+            strokeShapeLine(p, linePixelPoint(anchor_, lineWidth_), linePixelPoint(last_, lineWidth_),
+                            lineWidth_, lineStyle_, lineCap_, color_);
         } else
             p.drawRect(draftRect_);
     }
@@ -1028,8 +1028,8 @@ void Canvas::mouseMoveEvent(QMouseEvent *e) {
 }
 void Canvas::finishShape() {
     const QRect rect = tool_ == Tool::Line
-                           ? QRectF(anchor_, last_).normalized().adjusted(-lineWidth_ / 2. - 1, -lineWidth_ / 2. - 1,
-                                                                          lineWidth_ / 2. + 1, lineWidth_ / 2. + 1).toAlignedRect()
+                           ? QRectF(anchor_, last_).normalized().adjusted(-lineWidth_ * .707107 - 2, -lineWidth_ * .707107 - 2,
+                                                                          lineWidth_ * .707107 + 2, lineWidth_ * .707107 + 2).toAlignedRect()
                            : draftRect_.toAlignedRect();
     if (rect.width() < 1 || rect.height() < 1)
         return;
@@ -1047,8 +1047,8 @@ void Canvas::finishShape() {
         p.setBrush(color_);
         if (tool_ == Tool::Line) {
             p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(color_, lineWidth_, Qt::SolidLine, Qt::RoundCap));
-            p.drawLine(anchor_ - rect.topLeft(), last_ - rect.topLeft());
+            strokeShapeLine(p, linePixelPoint(anchor_, lineWidth_) - rect.topLeft(),
+                            linePixelPoint(last_, lineWidth_) - rect.topLeft(), lineWidth_, lineStyle_, lineCap_, color_);
         } else if (tool_ == Tool::Ellipse)
             p.drawEllipse(QRectF(QPointF(0, 0), rect.size()));
         else
@@ -1070,10 +1070,12 @@ void Canvas::finishShape() {
         if (tool_ == Tool::Rectangle && smoothCorners_ && cornerRadius_ > 0) shape["smoothing"] = true;
         if (tool_ == Tool::Line) {
             auto fraction = [&](QPointF point) {
-                return QJsonObject{{"x", (point.x() - rect.x()) / rect.width()},
-                                   {"y", (point.y() - rect.y()) / rect.height()}};
+                point = linePixelPoint(point, lineWidth_);
+                return QJsonArray{(point.x() - rect.x()) / rect.width(), (point.y() - rect.y()) / rect.height()};
             };
             shape["lineWidth"] = lineWidth_;
+            shape["lineStyle"] = lineStyle_;
+            shape["lineCap"] = lineCap_;
             shape["start"] = fraction(anchor_);
             shape["end"] = fraction(last_);
         }

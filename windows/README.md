@@ -1,14 +1,28 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.5.3p1 (stable patch)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.5.4 (stable)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the stable [0.5.3p1 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.3p1), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
+Download the stable [0.5.4 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.4), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.5.3p1-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.5.4-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.5.4 — Upstream integration and layer workflows
+
+Merged **46 upstream commits** through `551a35fc06fb8429fed3b99b175e31681875f580` (October 22, 2026 UTC), including Compositor 1.5.5 and subsequent layer-search/zoom fixes.
+
+- Search layers by name and filter by type or selection; matching folders include their contents, and parents remain visible for context.
+- Progressive Blur, Bloom / Glow and RGB Split are editable adjustment layers. RGB Split also has a standalone Linear/Radial spectral filter with streak controls. New filter layers use the reference CPU path, retain 8/16-bit/HDR precision and support masks/blend modes; large spectral effects can be slow.
+- Line shapes offer Solid, Dotted, Dashed and Long Dash styles with Square/Round caps. Pixel-aligned one-pixel lines and dots, shared preview/final geometry, and upstream-compatible line metadata.
+- Export As offers Channel Pack: choose a layer/group or black/white for each RGBA channel. RGB is retained even where packed alpha is zero. Image → Split Channels produces four grayscale layers with undo and native precision.
+- Photoshop artboards open in separate tabs at their own bounds. Font family autocomplete now searches within names. Image Size/Canvas Size preserve zoom, and automatic image fitting does not enlarge past 100%.
+- Reads upstream v15/v16 projects and legacy Windows 16-bit masks. New native high-depth-mask saves use Windows **v17**, avoiding the upstream v15 line-style version. Compatibility mode writes upstream v11–v16 as required, with standard 8-bit masks plus lossless 16-bit sidecars for Windows reopening.
+- New interface text is translated in all eight languages. No new runtime dependency.
+
+**Scope:** this merge does not claim complete new macOS UI parity. Multi-page PDF import, tablet pressure controls, physical-key shortcuts on non-Latin layouts, the macOS per-face font panel and RGB Split's separate dispersed-color-layer action are not ported in this release. The standalone RGB Split works within existing raster bounds; the adjustment layer processes the canvas. Existing RAW engine, object-selection, font-rendering and GPU/Metal differences remain. The app/updater are unsigned. See [release notes](releases/0.5.4.md).
 
 ## Version 0.5.3p1 — Automatic RAW lens correction
 

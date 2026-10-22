@@ -198,6 +198,7 @@ void MainWindow::buildEditingActions() {
     }
     add("imageSize", "", [this] { sizeDialog(true); });
     add("canvasSize", "", [this] { sizeDialog(false); });
+    add("splitChannels", "", [this] { document_.splitChannels(); });
     add("trim", "", [this] { document_.trim(); });
     add("rotateCanvasCW", "", [this] {
         document_.rotateCanvas(true);
@@ -289,7 +290,7 @@ void MainWindow::buildEditingActions() {
                                                              {"bloom", "Bloom / Glow"},
                                                              {"dither", "Dither"},
                                                              {"tonalContrast", "Tonal Contrast"},
-                                                             {"lensCorrection", "Lens Correction"}, {"progressiveBlur", "Progressive Blur"}}) {
+                                                             {"lensCorrection", "Lens Correction"}, {"progressiveBlur", "Progressive Blur"}, {"rgbSplit", "RGB Split"}}) {
         const QString key = "filter." + entry.first;
         add(key, "", [this, kind = entry.second] { filterDialog(kind, false); });
     }
@@ -304,7 +305,7 @@ void MainWindow::buildEditingActions() {
                                                             {"grain", "Grain"},
                                                             {"noise", "Add Noise"},
                                                             {"motionBlur", "Motion Blur"},
-                                                            {"blur", "Gaussian Blur"}}) {
+                                                            {"blur", "Gaussian Blur"}, {"progressiveBlur", "Progressive Blur"}, {"bloom", "Bloom / Glow"}, {"rgbSplit", "RGB Split"}}) {
         const QString key = "adjustment." + entry.first;
         add(key, "", [this, kind = entry.second] { filterDialog(kind, true); });
     }
@@ -346,7 +347,6 @@ void MainWindow::sizeDialog(bool image) {
     if (dialog.exec() == QDialog::Accepted)
         invoke([&] {
             document_.resizeCanvas({w.value(), h.value()}, image, center.isChecked());
-            canvas_->fit();
         });
 }
 void MainWindow::editText() {
@@ -394,7 +394,7 @@ void MainWindow::adoptDocument(State state, QString name, QString path, QByteArr
     tabs_->setTabButton(currentTab_, QTabBar::RightSide, close);
     tabs_->setCurrentIndex(currentTab_);
     switchingTab_ = false;
-    canvas_->fit();
+    canvas_->fit(false);
     updateTitle();
 }
 void MainWindow::switchTab(int index) {

@@ -7,6 +7,9 @@
 #include "Renderer.h"
 #include "RetouchStroke.h"
 #include "LayerClipboard.h"
+#include "LayerSearch.h"
+#include <QLineEdit>
+#include <QDialogButtonBox>
 #include "Selection.h"
 #include <lcms2.h>
 #include <QDataStream>
@@ -173,6 +176,168 @@ class GpuUpstreamTests : public QObject {
         Q_INIT_RESOURCE(controls);
         QCoreApplication::setOrganizationName("CompositorTests");
         QCoreApplication::setApplicationName("UpstreamTests");
+    }
+    void v16FilterLayersRoundTripAndFallBackCorrectly() {
+        for (int depth : {8, 16}) for (const auto kind : {"Progressive Blur", "Bloom / Glow", "RGB Split"}) {
+            State input = document(depth);
+            Layer layer; layer.id = newId(); layer.name = kind; layer.placement.size = input.size;
+            auto settings = defaultFilterLayerSettings(input.size);
+            settings["rgbSplitDistance"] = 3.25; settings["rgbSplitBlur"] = 1.5;
+            layer.metadata["adjustment"] = QJsonObject{{"kind", kind}, {"filterLayerSettings", settings}};
+            input.layers.append(layer);
+            validateState(input);
+            const auto expected = render(input);
+            QVERIFY(!expected.isNull());
+            QCOMPARE(wideImage(expected), depth == 16);
+            QCOMPARE(renderPreview(input), expected);
+            QTemporaryDir dir;
+            const auto path = dir.path() + "/filter.comp";
+            writeProject(path, input, {}, true);
+            const auto loaded = readProject(path).state;
+            QCOMPARE(loaded.metadata["version"].toInt(), 16);
+            QCOMPARE(loaded.layers.last().metadata["adjustment"].toObject(), layer.metadata["adjustment"].toObject());
+            QCOMPARE(render(loaded), expected);
+            const auto target = QSize(48, 40);
+            const auto mapped = mappedFilterLayer(layer.metadata["adjustment"].toObject(), input.size, target);
+            QCOMPARE(mapped["rgbSplitDistance"].toDouble(), 1.625);
+            QCOMPARE(mapped["progressiveEndY"].toDouble(), 1.);
+            manifest(path, [](QJsonObject &j) { j["version"] = 15; });
+            QVERIFY(rejects("invalidProject", [&] { readProject(path); }));
+        }
+    }
+    void legacyMasksAndUpstreamLineVersionsAreDistinct() {
+        auto state = document(16);
+        state.layers[0].mask = QImage(state.size, QImage::Format_Grayscale16);
+        state.layers[0].mask.fill(QColor::fromRgba64(12345, 12345, 12345, 65535));
+        state.layers[0].maskPlacement = state.layers[0].placement;
+        state.layers[0].metadata["shape"] = QJsonObject{{"kind", "Line"}, {"lineStyle", "Dotted"}, {"lineCap", "Square"}};
+        QTemporaryDir dir; const auto path = dir.path() + "/line.comp";
+        writeProject(path, state);
+        QCOMPARE(readProject(path).state.metadata["version"].toInt(), 17);
+        manifest(path, [](QJsonObject &j) { j["version"] = 15; });
+        QCOMPARE(readProject(path).state.layers[0].mask, state.layers[0].mask);
+        writeProject(path, state, {}, true);
+        const auto compatible = readProject(path).state;
+        QCOMPARE(compatible.metadata["version"].toInt(), 15);
+        QCOMPARE(compatible.layers[0].mask, state.layers[0].mask);
+        QFile png(path + "/images/" + state.layers[0].id + ".mask.png"); QVERIFY(png.open(QIODevice::ReadOnly));
+        QCOMPARE(quint8(png.readAll()[24]), quint8(8));
+        manifest(path, [](QJsonObject &j) { j["version"] = 14; });
+        QVERIFY(rejects("invalidProject", [&] { readProject(path); }));
+    }
+    void spectralSplitRetainsPrecisionAndHdr() {
+        for (int depth : {8, 16}) {
+            auto source = pixels(depth);
+            QCOMPARE(rgbSplit(source, {{"rgbSplitDistance", 0}, {"rgbSplitBlur", 0}}), source);
+            const auto split = rgbSplit(source, {{"rgbSplitDistance", 5}, {"rgbSplitBlur", 2}});
+            QCOMPARE(split.size(), source.size()); QCOMPARE(wideImage(split), depth == 16);
+            QVERIFY(split.pixelColor(30, 30) != source.pixelColor(30, 30));
+            QCOMPARE(split.pixelColor(30, 30).alpha(), 255);
+            const auto radial = rgbSplit(source, {{"rgbSplitRadial", true}, {"rgbSplitReach", 20}});
+            QVERIFY(radial != split);
+            if (depth == 16) QVERIFY(pixel64(split, 30, 30).red() % 257 != 0);
+        }
+        auto hdr = hdrDocument().layers[0].image;
+        auto split = rgbSplit(hdr, {{"rgbSplitDistance", 4}});
+        QVERIFY(hdrImage(split)); QVERIFY(reinterpret_cast<const FloatPixel *>(split.constScanLine(20))[20].r > 4);
+    }
+    void packedPngKeepsRgbWhenAlphaIsZero() {
+        auto state = document(8); state.layers[0].name = " Red "; state.layers[0].visible = false;
+        state.layers[0].image.fill(Qt::white);
+        QCOMPARE(defaultChannelSource(state, 0), state.layers[0].id);
+        QCOMPARE(defaultChannelSource(state, 3), QString("@white"));
+        const auto packed = renderChannelPack(state, QSize(12, 8), {state.layers[0].id, "@white", "@black", "@black"});
+        const auto encoded = pngBytes(packed);
+        auto decoded = QImage::fromData(encoded, "png").convertToFormat(QImage::Format_RGBA8888);
+        QVERIFY(!decoded.isNull());
+        const auto *pixel = decoded.constScanLine(3) + 4 * 4;
+        QCOMPARE(pixel[0], uchar(255)); QCOMPARE(pixel[1], uchar(255)); QCOMPARE(pixel[2], uchar(0)); QCOMPARE(pixel[3], uchar(0));
+    }
+    void splitChannelsKeepsWideSamplesAndUndo() {
+        auto state = document(16);
+        Document doc; doc.reset(state); doc.splitChannels();
+        QCOMPARE(doc.state().layers.size(), 5); QVERIFY(doc.state().layers[0].group);
+        const auto &red = doc.state().layers.last(); QCOMPARE(red.name, QString("Red"));
+        QCOMPARE(pixel64(red.image, 10, 10).red(), pixel64(state.layers[0].image, 10, 10).red());
+        QCOMPARE(pixel64(red.image, 10, 10).green(), pixel64(red.image, 10, 10).red());
+        doc.undo(); QCOMPARE(doc.state().layers.size(), 1); QCOMPARE(doc.state().layers[0].image, state.layers[0].image);
+    }
+    void splitChannelsRefusesToBreakClipping() {
+        auto state = document(16);
+        Layer dependent = state.layers[0]; dependent.id = newId(); dependent.maskSource = state.active;
+        state.layers.append(dependent);
+        Document doc; doc.reset(state); const auto revision = doc.revision();
+        QVERIFY(rejects("splitClippingSource", [&] { doc.splitChannels(); }));
+        QCOMPARE(doc.revision(), revision); QCOMPARE(doc.state().layers.size(), 2);
+        QCOMPARE(doc.state().layers.last().maskSource, state.active);
+    }
+    void layerSearchPreservesHierarchyAndFolderContents() {
+        auto state = document(8);
+        Layer group; group.id = newId(); group.name = "Photos"; group.group = true; group.placement.size = state.size;
+        state.layers[0].parent = group.id; state.layers[0].name = "Mountain"; state.layers.prepend(group);
+        Layer other = state.layers.last(); other.id = newId(); other.parent.clear(); other.name = "Caption";
+        other.metadata["text"] = QJsonObject{{"content", "Text"}}; state.layers.append(other);
+        QCOMPARE(matchingLayers(state, "MOUN", "all", {}), (QSet<QString>{group.id, state.layers[1].id}));
+        QCOMPARE(matchingLayers(state, "photo", "all", {}), (QSet<QString>{group.id, state.layers[1].id}));
+        QCOMPARE(matchingLayers(state, "", "text", {}), QSet<QString>{other.id});
+        QCOMPARE(matchingLayers(state, "", "selected", {group.id}), (QSet<QString>{group.id, state.layers[1].id}));
+    }
+    void onePixelLinesAndDotsRemainOpaque() {
+        for (const auto style : {"Solid", "Dotted", "Dashed", "Long Dash"}) for (const auto cap : {"Square", "Round"}) {
+            QImage image(40, 12, QImage::Format_RGBA64_Premultiplied); image.fill(Qt::transparent);
+            QPainter painter(&image); painter.setRenderHint(QPainter::Antialiasing);
+            strokeShapeLine(painter, linePixelPoint({3, 5}, 1), linePixelPoint({35, 5}, 1), 1, style, cap, Qt::white);
+            painter.end();
+            int ink = 0;
+            for (int x = 0; x < 40; ++x) { if (image.pixelColor(x, 5).alpha() > 180) ++ink; QCOMPARE(image.pixelColor(x, 3).alpha(), 0); }
+            QVERIFY2(ink > 8, style);
+            if (QString(style) == "Solid") QVERIFY(ink >= 32);
+        }
+    }
+    void photoshopFileImportsSeparateArtboards() {
+        const auto result = readPhotoshop(QFINDTESTDATA("fixtures/artboards.psd"));
+        QCOMPARE(result.artboards.size(), 2);
+        QCOMPARE(result.artboards[0].first, QString("Phone"));
+        QCOMPARE(result.artboards[0].second.size, QSize(80, 60));
+        QCOMPARE(result.artboards[1].first, QString("Tablet"));
+        QCOMPARE(result.artboards[1].second.size, QSize(60, 50));
+        QCOMPARE(result.artboards[1].second.layers[0].placement.origin, QPointF(10, 10));
+        QCOMPARE(result.artboards[0].second.layers.size(), 1);
+        QCOMPARE(result.artboards[1].second.layers.size(), 1);
+    }
+    void artboardDocumentsOffsetLayersAndMasks() {
+        auto source = document(16); source.size = {240, 100};
+        Layer board; board.id = newId(); board.group = true; board.name = "Phone"; board.placement.size = source.size;
+        board.metadata["windowsPSDArtboard"] = QJsonArray{120, 10, 220, 90};
+        source.layers[0].parent = board.id; source.layers[0].placement.origin = {135, 20};
+        source.layers[0].maskPlacement.origin = {130, 18}; source.layers.prepend(board);
+        Layer loose; loose.id = newId(); loose.name = "Loose"; loose.placement.size = source.size; source.layers.append(loose);
+        const auto boards = photoshopArtboards(source); QCOMPARE(boards.size(), 1);
+        QCOMPARE(boards[0].first, QString("Phone")); QCOMPARE(boards[0].second.size, QSize(100, 80));
+        QCOMPARE(boards[0].second.layers.size(), 1); const auto layer = boards[0].second.layers[0];
+        QCOMPARE(layer.placement.origin, QPointF(15, 10)); QCOMPARE(layer.maskPlacement.origin, QPointF(10, 8));
+        QVERIFY(layer.parent.isEmpty()); QVERIFY(wideImage(layer.image));
+    }
+    void newAdjustmentControlsCreateEditableLayers() {
+        MainWindow window; window.document()->reset(document(16));
+        for (const auto key : {"progressiveBlur", "bloom", "rgbSplit"}) {
+            auto *action = window.findChild<QAction *>(QString("adjustment.") + key + "Action"); QVERIFY(action);
+            bool opened = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = window.findChild<QDialog *>("filterDialog");
+                if (dialog) { opened = true; dialog->accept(); }
+            });
+            action->trigger(); QVERIFY(opened);
+            const auto a = window.document()->state().layers.last().metadata["adjustment"].toObject();
+            QVERIFY(a["filterLayerSettings"].isObject()); validateAdjustment(a);
+        }
+        auto *search = window.findChild<QLineEdit *>("layerSearch"); QVERIFY(search);
+        search->setText("nonexistent-layer");
+        auto *tree = window.findChild<QTreeWidget *>("layerList"); QVERIFY(tree);
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) QVERIFY(tree->topLevelItem(i)->isHidden());
+        search->clear();
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) QVERIFY(!tree->topLevelItem(i)->isHidden());
+        window.canvas()->resize(1200, 900); window.canvas()->fit(false); QVERIFY(window.canvas()->zoom() <= 1.);
     }
     void upstreamPngProjectsInferDepthAndPreserveOriginalBytes() {
         for (int depth : {8, 16})

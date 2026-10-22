@@ -274,6 +274,14 @@ LoadedProject readProject(const QString &directory) {
         Layer l;
         l.metadata = j;
         require(v >= 14 || !j["shape"].toObject()["smoothing"].toBool());
+        const auto shape = j["shape"].toObject();
+        if (shape.contains("lineStyle") || shape.contains("lineCap")) {
+            require(v >= 15 && shape["kind"] == "Line");
+            require(!shape.contains("lineStyle") || QStringList{"Solid", "Dotted", "Dashed", "Long Dash"}.contains(shape["lineStyle"].toString()));
+            require(!shape.contains("lineCap") || QStringList{"Square", "Round"}.contains(shape["lineCap"].toString()));
+        }
+        const auto adjustment = j["adjustment"].toObject();
+        require(v >= 16 || (!isFilterLayerKind(adjustment["kind"].toString()) && !adjustment.contains("filterLayerSettings")));
         l.id = canonicalId(j["id"]);
         l.name = j["name"].toString();
         require(j["isVisible"].isBool());
@@ -446,8 +454,14 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
         manifest["bitDepth"] = 16;
     else
         manifest.remove("bitDepth");
-    for (const auto &layer : s.layers)
-        if (layer.metadata["shape"].toObject()["smoothing"].toBool()) manifest["version"] = 14;
+    for (const auto &layer : s.layers) {
+        const auto shape = layer.metadata["shape"].toObject();
+        const auto adjustment = layer.metadata["adjustment"].toObject();
+        int required = shape["smoothing"].toBool() ? 14 : ProjectManifest::eightBit;
+        if (shape.contains("lineStyle") || shape.contains("lineCap")) required = 15;
+        if (isFilterLayerKind(adjustment["kind"].toString()) || adjustment.contains("filterLayerSettings")) required = 16;
+        manifest["version"] = std::max(manifest["version"].toInt(), required);
+    }
     if (!compatibilityMode && std::any_of(s.layers.cbegin(), s.layers.cend(),
         [](const Layer &layer) { return wideImage(layer.mask); }))
         manifest["version"] = ProjectManifest::current;
@@ -475,6 +489,14 @@ QByteArray writeProject(const QString &directory, const State &s, const QByteArr
     try {
         for (const auto &l : s.layers) {
             auto j = l.metadata;
+            if (j["shape"].isObject()) {
+                auto shape = j["shape"].toObject();
+                // Earlier Windows line tools stored points as objects; upstream CGPoint uses an array.
+                for (const auto key : {"start", "end"}) if (shape[key].isObject()) {
+                    const auto point = shape[key].toObject(); shape[key] = QJsonArray{point["x"], point["y"]};
+                }
+                j["shape"] = shape;
+            }
             for (const auto &field : QStringList{"imageFile", "maskFile", "maskEnabled", "maskPlacement", "maskLinked",
                                                  "maskSourceID", "parentID"})
                 j.remove(field);

@@ -279,6 +279,8 @@ QImage render(const State &s, QSize target) {
             continue;
         if (l.metadata["adjustment"].isObject()) {
             auto settings = l.metadata["adjustment"].toObject();
+            if (isFilterLayerKind(settings["kind"].toString()))
+                settings = mappedFilterLayer(settings, s.size, target);
             if (settings["kind"] == "Gaussian Blur")
                 settings["blurRadius"] = settings["blurRadius"].toDouble(10) * target.width() / s.size.width();
             const auto adjusted = filtered(result, settings);

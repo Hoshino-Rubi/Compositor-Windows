@@ -4,6 +4,46 @@
 #include <QPainter>
 #include <numbers>
 namespace comp {
+QPointF linePixelPoint(QPointF point, double width) {
+    const double shift = width / 2 - std::floor(width / 2);
+    return {std::round(point.x()) + shift, std::round(point.y()) + shift};
+}
+void strokeShapeLine(QPainter &p, QPointF start, QPointF end, double width, const QString &style, const QString &cap, QColor color) {
+    const auto delta = end - start;
+    const double length = std::hypot(delta.x(), delta.y());
+    const auto direction = length > 0 ? delta / length : QPointF(1, 0);
+    auto along = [&](double distance) { return start + direction * (distance - width / 2); };
+    const double total = length + width;
+    QVector<qreal> pattern;
+    if (style == "Dotted") pattern = {1, 1};
+    else if (style == "Dashed") pattern = {3, 2};
+    else if (style == "Long Dash") pattern = {7, 2};
+    p.save();
+    if (cap == "Square") {
+        QPen pen(color, width, Qt::SolidLine, Qt::FlatCap);
+        if (!pattern.isEmpty()) pen.setDashPattern(pattern);
+        p.setPen(pen); p.drawLine(along(0), along(total));
+    } else {
+        p.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap)); p.setBrush(color);
+        if (pattern.isEmpty()) {
+            if (length > 0) p.drawLine(start, end);
+            else { p.setPen(Qt::NoPen); p.drawEllipse(start, width / 2, width / 2); }
+        } else {
+            QPainterPath dashes, dots;
+            int index = 0;
+            for (double at = 0; at < total; ++index) {
+                const double next = std::min(total, at + pattern[index % pattern.size()] * width);
+                if (index % 2 == 0) {
+                    if (next - at > width + .001) { dashes.moveTo(along(at + width / 2)); dashes.lineTo(along(next - width / 2)); }
+                    else dots.addEllipse(along((at + next) / 2), width / 2, width / 2);
+                }
+                at = next;
+            }
+            p.drawPath(dashes); p.setPen(Qt::NoPen); p.drawPath(dots);
+        }
+    }
+    p.restore();
+}
 QPainterPath roundedShapePath(QRectF rect, double radius, bool smoothing) {
     radius = std::clamp(radius, 0., std::min(rect.width(), rect.height()) / 2);
     QPainterPath path;

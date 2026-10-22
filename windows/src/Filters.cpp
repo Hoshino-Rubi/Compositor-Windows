@@ -61,7 +61,7 @@ QImage blurImage(const QImage &source, double radius) {
 bool supportedAdjustment(const QJsonObject &s) {
     const QString kind = s["kind"].toString();
     if (!QStringList{"Invert", "Hue/Saturation", "Exposure", "Levels", "Gaussian Blur", "Add Noise", "Black & White",
-                     "Color Balance", "Curves", "Gradient Map", "Grain", "Motion Blur"}
+                     "Color Balance", "Curves", "Gradient Map", "Grain", "Motion Blur", "Progressive Blur", "Bloom / Glow", "RGB Split"}
              .contains(kind))
         return false;
 
@@ -78,6 +78,22 @@ void validateAdjustment(const QJsonObject &settings) {
         if (!v.isDouble() || !std::isfinite(v.toDouble()) || v.toDouble() < low || v.toDouble() > high)
             throw Error("invalidProject");
     };
+    if (settings.contains("filterLayerSettings")) {
+        if (!settings["filterLayerSettings"].isObject()) throw Error("invalidProject");
+        const auto f = settings["filterLayerSettings"].toObject();
+        number(f, "progressiveFrom", 0, 250); number(f, "progressiveTo", 0, 250);
+        number(f, "bloomAmount", 0, 100); number(f, "bloomRadius", 1, 150);
+        number(f, "rgbSplitDistance", 0, 200); number(f, "rgbSplitBlur", 0, 400);
+        number(f, "rgbSplitAngle", -180, 180); number(f, "rgbSplitReach", 1, 100000);
+        for (const auto key : {"progressiveStart", "progressiveEnd", "rgbSplitCenter"}) {
+            const auto p = f[key].toArray();
+            if (!f.contains(key) || f[key].isNull()) continue;
+            if (p.size() != 2 || !p[0].isDouble() || !p[1].isDouble() ||
+                !std::isfinite(p[0].toDouble()) || !std::isfinite(p[1].toDouble())) throw Error("invalidProject");
+        }
+        for (const auto key : {"progressiveRadial", "progressiveInverted", "rgbSplitRadial"})
+            if (f.contains(key) && !f[key].isBool()) throw Error("invalidProject");
+    }
     number(settings, "hue", -360, 360);
     number(settings, "saturation", -100, 100);
     number(settings, "lightness", -100, 100);
@@ -173,8 +189,11 @@ void validateAdjustment(const QJsonObject &settings) {
             number(gradient[end].toObject(), key, 0, 1);
 }
 QImage filtered(const QImage &source, const QJsonObject &settings) {
-    if (hdrImage(source)) return hdrFiltered(source, settings);
+    if (settings.contains("filterLayerSettings"))
+        return filtered(source, mappedFilterLayer(settings, source.size(), source.size()));
     if (settings["kind"] == "Progressive Blur") return progressiveBlur(source, settings);
+    if (settings["kind"] == "RGB Split") return rgbSplit(source, settings);
+    if (hdrImage(source)) return hdrFiltered(source, settings);
     if (settings["kind"] == "Gaussian Blur" && settings["preserveTransparency"].toBool())
         return blurPreservingTransparency(source, settings["blurRadius"].toDouble(5));
     if (isStandaloneFilter(settings["kind"].toString()))

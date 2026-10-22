@@ -63,6 +63,7 @@ class Document : public QObject {
     void flipCanvas(bool horizontal);
     void rotateCanvas(bool clockwise);
     void trim();
+    void splitChannels();
     void addGuide(bool horizontal, double position);
     void contentFill();
     void featherSelection(double radius);

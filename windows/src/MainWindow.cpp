@@ -19,6 +19,7 @@
 #include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QSaveFile>
 #include <QFileInfo>
 #include <QFontDialog>
 #include <QEventLoop>
@@ -690,7 +691,9 @@ void MainWindow::exportImage() {
     auto *layout = new QVBoxLayout(&dialog);
     auto *form = new QFormLayout;
     QComboBox format;
+    format.setObjectName("exportFormat");
     format.addItem("PNG", "png");
+    format.addItem(t("channelPack"), "channelpack");
     format.addItem("JPEG", "jpeg");
     format.addItem("TIFF", "tiff");
     if (hasHdr(document_.state())) format.addItem("OpenEXR", "exr");
@@ -712,6 +715,16 @@ void MainWindow::exportImage() {
     QCheckBox aspect(t("keepAspect"));
     aspect.setChecked(true);
     form->addRow(t("format"), &format);
+    QComboBox *channels[4];
+    for (int i = 0; i < 4; ++i) {
+        channels[i] = new QComboBox(&dialog);
+        channels[i]->setObjectName("channelPack" + QString::number(i));
+        channels[i]->addItem(t("black"), "@black"); channels[i]->addItem(t("white"), "@white");
+        for (const auto &layer : document_.state().layers) channels[i]->addItem(layer.name, layer.id);
+        channels[i]->setCurrentIndex(channels[i]->findData(defaultChannelSource(document_.state(), i)));
+        form->addRow(t(QStringList{"red", "green", "blue", "alpha"}[i]), channels[i]);
+    }
+    auto channelSources = [&] { QStringList result; for (auto *box : channels) result.append(box->currentData().toString()); return result; };
     form->addRow(&cmyk);
     form->addRow(t("exportRenderer"), &renderer);
     form->addRow(t("width"), &width);
@@ -732,7 +745,10 @@ void MainWindow::exportImage() {
     auto image = comp::render(document_.state(), document_.state().size.scaled(540, 280, Qt::KeepAspectRatio));
     auto update = [&] {
         quality.setEnabled(format.currentData() == "jpeg");
-        cmyk.setEnabled(format.currentData() != "png" && format.currentData() != "exr");
+        const bool packed = format.currentData() == "channelpack";
+        cmyk.setEnabled(!packed && format.currentData() != "png" && format.currentData() != "exr");
+        renderer.setEnabled(!packed);
+        for (auto *box : channels) form->setRowVisible(box, packed);
         QImage tile(16, 16, QImage::Format_RGB32);
         tile.fill(QColor("#dddddd"));
         {
@@ -745,7 +761,10 @@ void MainWindow::exportImage() {
         QPainter p(&picture);
         p.fillRect(picture.rect(), format.currentData() == "png" ? QBrush(tile) : QBrush(Qt::white));
         p.setRenderHint(QPainter::SmoothPixmapTransform);
-        p.drawImage(picture.rect(), image);
+        if (packed) {
+            try { p.drawImage(picture.rect(), renderChannelPack(document_.state(), size, channelSources()).convertToFormat(QImage::Format_RGBX8888)); }
+            catch (const Error &e) { preview->setText(t(e.key)); return; }
+        } else p.drawImage(picture.rect(), image);
         p.end();
         if(cmyk.isEnabled() && cmyk.isChecked()) {
             try{picture=cmykProof(picture,chosenCmykProfile());}
@@ -753,6 +772,7 @@ void MainWindow::exportImage() {
         }
         preview->setPixmap(QPixmap::fromImage(picture));
     };
+    for (auto *box : channels) connect(box, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { update(); });
     connect(&cmyk,&QCheckBox::toggled,&dialog,[&]{update();});
     const double ratio = double(document_.state().size.width()) / document_.state().size.height();
     connect(&width, qOverload<int>(&QSpinBox::valueChanged), &dialog, [&](int v) {
@@ -793,16 +813,20 @@ void MainWindow::exportImage() {
     if (dialog.exec() != QDialog::Accepted)
         return;
     const auto encoding = format.currentData().toByteArray();
-    const QString extension = encoding == "jpeg" ? "jpg" : QString::fromLatin1(encoding);
+    const QString extension = encoding == "channelpack" ? "png" : encoding == "jpeg" ? "jpg" : QString::fromLatin1(encoding);
     const QString file = QFileDialog::getSaveFileName(this, t("export"), name_ + "." + extension,
                                                       format.currentText() + " (*." + extension + ")");
     if (file.isEmpty())
         return;
     const State snapshot = document_.state();
     runIO([snapshot, file, encoding, size = QSize(width.value(), height.value()),
-           q = quality.value(), selectedRenderer = ExportRenderer(renderer.currentData().toInt()),
+           channels = channelSources(), q = quality.value(), selectedRenderer = ExportRenderer(renderer.currentData().toInt()),
            profile = cmyk.isEnabled() && cmyk.isChecked() ? chosenCmykProfile() : QByteArray()] {
-              exportDocument(snapshot, file, encoding, size, q, selectedRenderer, profile);
+              if (encoding == "channelpack") {
+                  const auto bytes = pngBytes(renderChannelPack(snapshot, size, channels), snapshot.resolution);
+                  QSaveFile output(file);
+                  if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size() || !output.commit()) throw Error("fileError");
+              } else exportDocument(snapshot, file, encoding, size, q, selectedRenderer, profile);
           },
           [this] { statusBar()->showMessage(t("exported"), 3000); });
 }

@@ -2,6 +2,7 @@
 #include "MainWindow.h"
 #include "Icons.h"
 #include "LayerClipboard.h"
+#include "LayerSearch.h"
 #include <QApplication>
 #include <QMenuBar>
 #include <QMenu>
@@ -186,7 +187,7 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     });
     menu("edit", {"undo", "redo", "", "cut", "copy", "copyMerged", "paste", "", "fillForeground", "fillBackground",
                   "clearPixels", "contentFill", "", "preferences"});
-    menu("image", {"depth8", "depth16", "", "imageSize", "canvasSize", "trim", "", "flipCanvasX", "flipCanvasY",
+    menu("image", {"depth8", "depth16", "", "imageSize", "canvasSize", "trim", "splitChannels", "", "flipCanvasX", "flipCanvasY",
                    "rotateCanvasCW", "rotateCanvasCCW"});
     menu("layer", {"addLayer",   "addGroup",   "groupSelection",  "ungroup",     "",           "duplicate", "merge",
                    "rename",     "editText",   "layerEffects",    "delete",      "",           "moveUp",    "moveDown",
@@ -198,11 +199,11 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
                                         "filter.grayscale", "filter.invert", "filter.blur", "filter.motionBlur",
                                         "filter.noise", "filter.grain", "filter.colorBalance", "filter.gradientMap",
                                         "filter.cameraRaw", "filter.scanlines", "filter.vignette", "filter.bloom",
-                                         "filter.dither", "filter.tonalContrast", "filter.lensCorrection", "filter.progressiveBlur", "", "lastFilter"});
+                                         "filter.dither", "filter.tonalContrast", "filter.lensCorrection", "filter.progressiveBlur", "filter.rgbSplit", "", "lastFilter"});
     auto *adjustLayer = adjust->addMenu("");
     adjustLayer->setObjectName("adjustmentLayerMenu");
     for (const auto &key : QStringList{"hsv", "levels", "curves", "exposure", "grayscale", "colorBalance",
-                                       "gradientMap", "grain", "noise", "blur", "motionBlur", "invert"})
+                                       "gradientMap", "grain", "noise", "blur", "motionBlur", "progressiveBlur", "bloom", "rgbSplit", "invert"})
         adjustLayer->addAction(actions_["adjustment." + key]);
     auto *view = menu("view", {"fit", "actualSize", "zoomIn", "zoomOut", "", "showRulers", "showGuides", "showGrid", "snap",
                   "gridSettings", "addGuide", "clearGuides", "lockGuides", "pixelGrid", "transformControls",
@@ -441,6 +442,17 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     lineWidth_->setSuffix(" px");
     shape->addWidget(lineWidth_);
     connect(lineWidth_, qOverload<int>(&QSpinBox::valueChanged), canvas_, &Canvas::setLineWidth);
+    for (const bool caps : {false, true}) {
+        auto *box = new QComboBox;
+        box->setObjectName(caps ? "lineCap" : "lineStyle");
+        const auto values = caps ? QStringList{"Square", "Round"} : QStringList{"Solid", "Dotted", "Dashed", "Long Dash"};
+        for (const auto &value : values) box->addItem("", value);
+        shape->addWidget(box);
+        connect(box, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, box, caps] {
+            if (caps) canvas_->setLineCap(box->currentData().toString());
+            else canvas_->setLineStyle(box->currentData().toString());
+        });
+    }
     auto *shapeColor = new QPushButton;
     buttons_.append({shapeColor, "color"});
     shape->addWidget(shapeColor);
@@ -568,6 +580,20 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
     layerCount_->setStyleSheet("color:#828282;");
     titleRow->addWidget(layerCount_);
     panelLayout->addLayout(titleRow);
+    auto *searchRow = new QHBoxLayout;
+    searchRow->setContentsMargins(12, 0, 12, 10);
+    layerSearch_ = new QLineEdit;
+    layerSearch_->setObjectName("layerSearch");
+    layerSearch_->setClearButtonEnabled(true);
+    layerSearch_->setMinimumHeight(30);
+    layerFilter_ = new QComboBox;
+    layerFilter_->setObjectName("layerTypeFilter");
+    for (const auto &key : QStringList{"all", "selected", "raster", "text", "shape", "group", "adjustment"})
+        layerFilter_->addItem("", key);
+    searchRow->addWidget(layerSearch_, 1); searchRow->addWidget(layerFilter_);
+    panelLayout->addLayout(searchRow);
+    connect(layerSearch_, &QLineEdit::textChanged, this, &MainWindow::filterLayers);
+    connect(layerFilter_, qOverload<int>(&QComboBox::currentIndexChanged), this, &MainWindow::filterLayers);
     auto *appearance = new QHBoxLayout;
     appearance->setContentsMargins(12, 0, 12, 12);
     appearance->setSpacing(7);
@@ -639,8 +665,10 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
                            [this, ids, parent, before] { invoke([&] { moveLayers(document_, ids, parent, before); }); });
     };
     connect(layers_, &QTreeWidget::itemSelectionChanged, this, [this] {
-        if (!refreshing_)
+        if (!refreshing_) {
             canvas_->setSelectedLayers(selectedLayers());
+            if (layerFilter_->currentData() == "selected") filterLayers();
+        }
     });
     connect(layers_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
         if (!refreshing_ && item) {
@@ -770,7 +798,27 @@ QSlider::groove:horizontal{height:3px;background:#111111;border-radius:1px;}QSli
             preferences_->refresh();
         });
 }
+void MainWindow::filterLayers() {
+    if (!layers_ || !layerSearch_ || !layerFilter_) return;
+    const auto visible = matchingLayers(document_.state(), layerSearch_->text(), layerFilter_->currentData().toString(), selectedLayers());
+    const bool filtering = !layerSearch_->text().trimmed().isEmpty() || layerFilter_->currentIndex() != 0;
+    QTreeWidgetItemIterator it(layers_);
+    while (*it) {
+        const auto id = (*it)->data(0, Qt::UserRole).toString();
+        (*it)->setHidden(!visible.contains(id));
+        if (filtering && visible.contains(id) && (*it)->childCount()) (*it)->setExpanded(true);
+        ++it;
+    }
+}
 void MainWindow::retranslate() {
+    for (const auto name : {"lineStyle", "lineCap"}) {
+        auto *box = findChild<QComboBox *>(name);
+        for (int i = 0; i < box->count(); ++i) box->setItemText(i, t("line." + box->itemData(i).toString()));
+    }
+    layerSearch_->setPlaceholderText(t("searchLayers"));
+    layerSearch_->setAccessibleName(t("searchLayers"));
+    for (int i = 0; i < layerFilter_->count(); ++i)
+        layerFilter_->setItemText(i, t("layerType." + layerFilter_->itemData(i).toString()));
     const QFont face(Localization::fontFamily(localization_.language()));
     QApplication::setFont(face);
     setFont(face);
@@ -921,6 +969,8 @@ void MainWindow::setTool(Tool tool) {
     blurRadius_->setVisible(tool == Tool::Blur && retouchMode_->currentIndex() == 0);
     findChild<QLabel *>("blurRadiusLabel")->setVisible(tool == Tool::Blur && retouchMode_->currentIndex() == 0);
     lineWidth_->setVisible(tool == Tool::Line);
+    findChild<QComboBox *>("lineStyle")->setVisible(tool == Tool::Line);
+    findChild<QComboBox *>("lineCap")->setVisible(tool == Tool::Line);
     findChild<QLabel *>("lineWidthLabel")->setVisible(tool == Tool::Line);
     findChild<QCheckBox *>("smoothCorners")->setText(t("smoothCorners"));
     findChild<QCheckBox *>("smoothCorners")->setVisible(tool == Tool::Rectangle);
@@ -936,8 +986,9 @@ void MainWindow::setTool(Tool tool) {
 }
 QStringList MainWindow::selectedLayers() const {
     QStringList ids;
-    for (auto *item : layers_->selectedItems())
-        ids.append(item->data(0, Qt::UserRole).toString());
+    // Filtering must not drop hidden members of a multi-selection.
+    QTreeWidgetItemIterator it(layers_, QTreeWidgetItemIterator::Selected);
+    while (*it) { ids.append((*it)->data(0, Qt::UserRole).toString()); ++it; }
     if (ids.isEmpty() && !document_.state().active.isEmpty())
         ids.append(document_.state().active);
     return ids;
@@ -1015,6 +1066,7 @@ void MainWindow::refresh() {
     }
     layers_->verticalScrollBar()->setValue(scroll);
     layerCount_->setText(QString::number(s.layers.size()));
+    filterLayers();
     refreshing_ = false;
     canvas_->setSelectedLayers(selectedLayers());
     stack_->setCurrentWidget(document_.hasDocument() ? static_cast<QWidget *>(canvas_) : welcome_);
@@ -1025,6 +1077,7 @@ void MainWindow::refreshSelection() {
     const int i = s.index(s.active);
     const bool active = i >= 0, doc = document_.hasDocument(),
                pixels = active && !s.layers[i].group && !s.layers[i].metadata["adjustment"].isObject();
+    actions_["splitChannels"]->setEnabled(!busy_ && pixels && !mask_->isChecked() && selectedLayers().size() <= 1 && !s.layers[i].image.isNull());
     const bool hasMask = active && !s.layers[i].mask.isNull();
     actions_["depth8"]->setEnabled(!busy_ && doc);
     actions_["depth16"]->setEnabled(!busy_ && doc);

@@ -6,6 +6,8 @@ namespace comp {
 // the integer CPU reference (notably for strokes).
 enum class ExportRenderer { ReferenceCpu, AcceleratedGpu };
 
+QImage renderChannelPack(const State &state, QSize size, const QStringList &sources);
+QString defaultChannelSource(const State &state, int channel);
 QImage renderExportImage(const State &state, QSize size,
                          ExportRenderer renderer = ExportRenderer::ReferenceCpu);
 

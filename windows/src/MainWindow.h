@@ -18,6 +18,7 @@
 #include <exception>
 #include <QTabBar>
 #include <QCheckBox>
+#include <QLineEdit>
 #include <QJsonObject>
 namespace comp {
 class MainWindow : public QMainWindow {
@@ -46,6 +47,9 @@ class MainWindow : public QMainWindow {
     QStackedWidget *stack_;
     QWidget *welcome_, *editor_;
     QTreeWidget *layers_;
+    QLineEdit *layerSearch_ = nullptr;
+    QComboBox *layerFilter_ = nullptr;
+    void filterLayers();
     QComboBox *blend_;
     PreferencesDialog *preferences_ = nullptr;
     void showPreferences(bool shortcuts = false);

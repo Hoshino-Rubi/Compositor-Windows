@@ -384,6 +384,34 @@ void Document::merge(const QStringList &ids) {
         s.active = result.id;
     });
 }
+void Document::splitChannels() {
+    const int index = state_.index(state_.active);
+    if (index < 0 || state_.layers[index].group || state_.layers[index].image.isNull()) return;
+    if (std::any_of(state_.layers.cbegin(), state_.layers.cend(), [&](const Layer &layer) {
+        return layer.maskSource == state_.active;
+    })) throw Error("splitClippingSource");
+    edit([&](State &s) {
+        const auto original = s.layers[index];
+        const bool hdr = hdrImage(original.image), wide = wideImage(original.image);
+        const auto pixels = original.image.convertToFormat(QImage::Format_RGBA32FPx4);
+        Layer group; group.id = newId(); group.name = original.name; group.parent = original.parent;
+        group.group = true; group.placement.size = s.size;
+        s.layers[index] = group;
+        for (int c = 3; c >= 0; --c) {
+            Layer layer; layer.id = newId(); layer.name = QStringList{"Red", "Green", "Blue", "Alpha"}[c];
+            layer.parent = group.id; layer.placement = original.placement;
+            QImage plane(pixels.size(), QImage::Format_RGBA32FPx4_Premultiplied);
+            if (plane.isNull()) throw Error("tooLarge");
+            for (int y = 0; y < plane.height(); ++y) {
+                const auto *in = reinterpret_cast<const float *>(pixels.constScanLine(y));
+                auto *out = reinterpret_cast<FloatPixel *>(plane.scanLine(y));
+                for (int x = 0; x < plane.width(); ++x) { const float v = in[x * 4 + c]; out[x] = {v, v, v, 1}; }
+            }
+            layer.image = hdr ? plane : plane.convertToFormat(pixelFormat(wide ? 16 : 8));
+            s.layers.insert(index + 4 - c, layer); s.active = layer.id;
+        }
+    });
+}
 void Document::resizeCanvas(QSize size, bool rescale, bool centered) {
     if (!size.isValid() || size.width() > MaxSide || size.height() > MaxSide ||
         qint64(size.width()) * size.height() > MaxCanvasPixels)

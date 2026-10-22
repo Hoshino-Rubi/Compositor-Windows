@@ -10,8 +10,8 @@
 #include <stdexcept>
 namespace comp {
 struct ProjectManifest {
-    static constexpr int current = 15;
-    static constexpr int readable = 15;
+    static constexpr int current = 17;
+    static constexpr int readable = 17;
     static constexpr int maskPrecisionVersion = 1;
     static constexpr int eightBit = 11;
 };

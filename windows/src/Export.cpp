@@ -1,4 +1,5 @@
 #include "Export.h"
+#include "Filters.h"
 #include "Cmyk.h"
 #include "GpuPreview.h"
 #include "Pixels.h"
@@ -10,10 +11,66 @@
 #include <QPainter>
 #include <QPdfWriter>
 #include <QSaveFile>
+#include <QSet>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 namespace comp {
+QString defaultChannelSource(const State &state, int channel) {
+    const QStringList names{"red", "green", "blue", "alpha"};
+    if (channel < 0 || channel > 3) throw Error("invalidProject");
+    for (auto it = state.layers.crbegin(); it != state.layers.crend(); ++it) {
+        const auto name = it->name.trimmed().toLower();
+        if (name == names[channel] || name == names[channel].left(1)) return it->id;
+    }
+    return channel == 3 ? "@white" : "@black";
+}
+QImage renderChannelPack(const State &state, QSize size, const QStringList &sources) {
+    if (sources.size() != 4 || !size.isValid() || size.width() > MaxSide || size.height() > MaxSide ||
+        qint64(size.width()) * size.height() > MaxCanvasPixels) throw Error("invalidSize");
+    QImage packed(size, QImage::Format_RGBA8888);
+    if (packed.isNull()) throw Error("tooLarge");
+    QHash<QString, QImage> cache;
+    for (int channel = 0; channel < 4; ++channel) {
+        const auto id = sources[channel];
+        const bool solid = id == "@black" || id == "@white";
+        QImage gray;
+        if (!solid) {
+            if (state.index(id) < 0) throw Error("invalidProject");
+            if (!cache.contains(id)) {
+                State isolated = state;
+                QSet<QString> ancestors{id}, descendants;
+                for (int i : state.descendants(id)) descendants.insert(state.layers[i].id);
+                QString parent = state.layers[state.index(id)].parent;
+                while (!parent.isEmpty()) {
+                    const int i = state.index(parent); if (i < 0) break;
+                    ancestors.insert(parent); parent = state.layers[i].parent;
+                }
+                for (auto &layer : isolated.layers) {
+                    if (ancestors.contains(layer.id)) layer.visible = true;
+                    else if (!descendants.contains(layer.id)) layer.visible = false;
+                }
+                const auto image = renderExportImage(isolated, size).convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+                QImage plane(size, QImage::Format_Grayscale8);
+                if (plane.isNull()) throw Error("tooLarge");
+                for (int y = 0; y < size.height(); ++y) {
+                    const auto *in = image.constScanLine(y); auto *out = plane.scanLine(y);
+                    for (int x = 0; x < size.width(); ++x)
+                        out[x] = quint8(std::clamp(qRound(.2126 * in[x * 4] + .7152 * in[x * 4 + 1] + .0722 * in[x * 4 + 2]), 0, 255));
+                }
+                cache.insert(id, plane);
+            }
+            gray = cache[id];
+        }
+        for (int y = 0; y < size.height(); ++y) {
+            auto *row = packed.scanLine(y); const auto *plane = solid ? nullptr : gray.constScanLine(y);
+            for (int x = 0; x < size.width(); ++x) row[x * 4 + channel] = solid ? (id == "@white" ? 255 : 0) : plane[x];
+        }
+    }
+    packed.setColorSpace(QColorSpace::SRgb);
+    return packed;
+}
+
 namespace {
 
 void validateExportSize(QSize size) {
@@ -28,7 +85,7 @@ bool globalAdjustment(const State &state) {
         // These kernels depend on full-image coordinates or a rotated image
         // grid.  Rendering one tile at a time would change their result.
         if (QStringList{"Add Noise", "Grain", "Motion Blur", "Camera Raw", "Vignette", "Bloom / Glow",
-                        "Dither", "Tonal Contrast", "Lens Correction", "Scanlines"}
+                        "Dither", "Tonal Contrast", "Lens Correction", "Scanlines", "Progressive Blur", "RGB Split"}
                 .contains(kind))
             return true;
     }
@@ -77,7 +134,7 @@ State scaledState(const State &source, QSize target) {
         scalePlacement(layer.placement, sx, sy);
         scalePlacement(layer.maskPlacement, sx, sy);
         if (layer.metadata["adjustment"].isObject()) {
-            auto adjustment = layer.metadata["adjustment"].toObject();
+            auto adjustment = transformFilterLayer(layer.metadata["adjustment"].toObject(), QTransform::fromScale(sx, sy), sx);
             if (adjustment["kind"] == "Gaussian Blur")
                 scaleValue(adjustment, "blurRadius", sx);
             layer.metadata["adjustment"] = adjustment;

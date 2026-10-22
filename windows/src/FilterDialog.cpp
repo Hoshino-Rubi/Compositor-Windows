@@ -18,7 +18,7 @@
 #include <QSignalBlocker>
 namespace comp {
 void MainWindow::filterDialog(const QString &kind, bool adjustment, QString editLayer) {
-    if (kind == "Progressive Blur") { progressiveBlurDialog(); return; }
+    if (kind == "Progressive Blur" && !adjustment && editLayer.isEmpty()) { progressiveBlurDialog(); return; }
     if (kind == "Camera Raw") {
         cameraRawDialog();
         return;
@@ -41,13 +41,16 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                                          {"Scanlines", "filter.scanlines"},
                                          {"Vignette", "filter.vignette"}, {"Bloom / Glow", "filter.bloom"},
                                          {"Dither", "filter.dither"}, {"Tonal Contrast", "filter.tonalContrast"},
-                                         {"Lens Correction", "filter.lensCorrection"}};
+                                         {"Lens Correction", "filter.lensCorrection"}, {"Progressive Blur", "filter.progressiveBlur"}, {"RGB Split", "filter.rgbSplit"}};
     const int active = document_.state().index(document_.state().active);
     if (active < 0 && !adjustment)
         return;
     const int editIndex = document_.state().index(editLayer);
     const QJsonObject original =
         editIndex >= 0 ? document_.state().layers[editIndex].metadata["adjustment"].toObject() : QJsonObject();
+    auto filterSettings = defaultFilterLayerSettings(adjustment || !editLayer.isEmpty() || active < 0 ? document_.state().size : document_.state().layers[active].image.size());
+    const auto storedFilter = original["filterLayerSettings"].toObject();
+    for (auto it = storedFilter.begin(); it != storedFilter.end(); ++it) filterSettings[it.key()] = it.value();
     QDialog dialog(this);
     dialog.setObjectName("filterDialog");
     dialog.setWindowTitle(t(titles.value(kind)));
@@ -68,6 +71,8 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         form->addRow(t(label.isEmpty() ? key : label), box);
     };
     QComboBox ditherStyle, ditherColors, pixelShape;
+    QCheckBox radial(t("progressiveRadial")), inverted(t("progressiveInvert"));
+    radial.setObjectName("filterRadial"); inverted.setObjectName("filterInverted");
     QCheckBox lightOnDark(t("lightOnDark")), preserveTransparency(t("preserveTransparency"));
     preserveTransparency.setChecked(original["preserveTransparency"].toBool());
     QLineEdit characters;
@@ -182,8 +187,27 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         field("vignetteHighlights", 25, 0, 100, "highlights");
         form->addRow(t("color"), &vignetteColor);
     } else if (kind == "Bloom / Glow") {
-        field("bloomAmount", 40, 0, 100, "amount");
-        field("bloomRadius", 24, 1, 150, "radius");
+        field("bloomAmount", filterSettings["bloomAmount"].toDouble(40), 0, 100, "amount");
+        field("bloomRadius", filterSettings["bloomRadius"].toDouble(24), 1, 150, "radius");
+    } else if (kind == "Progressive Blur" || kind == "RGB Split") {
+        const bool progressive = kind == "Progressive Blur";
+        if (progressive) {
+            field("progressiveFrom", filterSettings["progressiveFrom"].toDouble(), 0, 250, "progressiveFrom");
+            field("progressiveTo", filterSettings["progressiveTo"].toDouble(20), 0, 250, "progressiveTo");
+        } else {
+            field("rgbSplitDistance", filterSettings["rgbSplitDistance"].toDouble(10), 0, 200, "distance");
+            field("rgbSplitBlur", filterSettings["rgbSplitBlur"].toDouble(), 0, 400, "rgbSplitBlurLabel");
+            field("rgbSplitAngle", filterSettings["rgbSplitAngle"].toDouble(), -180, 180, "rotation");
+            field("rgbSplitReach", filterSettings["rgbSplitReach"].toDouble(1000), 1, 100000, "radius");
+        }
+        for (const auto &key : progressive ? QStringList{"progressiveStart", "progressiveEnd"} : QStringList{"rgbSplitCenter"}) {
+            const auto point = filterSettings[key].toArray();
+            field(key + "X", point[0].toDouble(), -100000, 100000, key + "X");
+            field(key + "Y", point[1].toDouble(), -100000, 100000, key + "Y");
+        }
+        radial.setChecked(filterSettings[progressive ? "progressiveRadial" : "rgbSplitRadial"].toBool());
+        form->addRow(&radial);
+        if (progressive) { inverted.setChecked(filterSettings["progressiveInverted"].toBool()); form->addRow(&inverted); }
     } else if (kind == "Tonal Contrast") {
         field("tonalAmount", 50, 0, 100, "amount");
         field("tonalRadius", 16, 1, 150, "radius");
@@ -378,6 +402,18 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
         } else
             for (auto it = v.begin(); it != v.end(); ++it)
                 settings[it.key()] = it.value();
+        if (isFilterLayerKind(kind)) {
+            auto f = filterSettings;
+            for (auto it = v.begin(); it != v.end(); ++it) f[it.key()] = it.value();
+            for (const auto key : {"progressiveStart", "progressiveEnd", "rgbSplitCenter"}) {
+                const QString prefix(key);
+                if (v.contains(prefix + "X")) f[key] = QJsonArray{v[prefix + "X"], v[prefix + "Y"]};
+                f.remove(prefix + "X"); f.remove(prefix + "Y");
+            }
+            if (kind == "Progressive Blur") { f["progressiveRadial"] = radial.isChecked(); f["progressiveInverted"] = inverted.isChecked(); }
+            if (kind == "RGB Split") f["rgbSplitRadial"] = radial.isChecked();
+            settings["filterLayerSettings"] = f;
+        }
         if (kind == "Vignette")
             settings["vignetteColor"] = vignette.name();
         if (kind == "Dither") {
@@ -447,6 +483,7 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
                     if (kind == "Gaussian Blur" && sourceSize.width() > 0)
                         settings["blurRadius"] =
                             settings["blurRadius"].toDouble() * source.width() / sourceSize.width();
+                    if (settings.contains("filterLayerSettings")) settings = mappedFilterLayer(settings, sourceSize, source.size());
                     auto output = filteredAccelerated(source, settings);
                     if (!base.selectionMask.isNull()) {
                         constrainSelection(base,
@@ -491,6 +528,8 @@ void MainWindow::filterDialog(const QString &kind, bool adjustment, QString edit
     connect(&ditherColors, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
     connect(&pixelShape, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&] { debounce.start(); });
     connect(&preserveTransparency, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
+    connect(&radial, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
+    connect(&inverted, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
     connect(&lightOnDark, &QCheckBox::toggled, &dialog, [&] { debounce.start(); });
     connect(&characters, &QLineEdit::textChanged, &dialog, [&] { debounce.start(); });
     for (auto [button, value] : {std::pair{&vignetteColor, &vignette}, std::pair{&darkColor, &dark},

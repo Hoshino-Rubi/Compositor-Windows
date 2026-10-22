@@ -28,7 +28,7 @@ void MainWindow::insertImported(const QString &name, const QImage &image, bool o
         adoptDocument(s, openAsDocument ? name : t("untitled"));
     }
     document_.addLayer(name, image);
-    canvas_->fit();
+    canvas_->fit(false);
 }
 void MainWindow::importNext(QStringList paths, bool openAsDocument) {
     if (paths.isEmpty() || busy_)
@@ -53,7 +53,8 @@ void MainWindow::importNext(QStringList paths, bool openAsDocument) {
                   if (accepted) {
                       if (result->state.metadata.contains("windowsCMYKProfile"))
                           chooseCmykProfile(QByteArray::fromBase64(result->state.metadata["windowsCMYKProfile"].toString().toLatin1()));
-                      adoptDocument(result->state, QFileInfo(path).completeBaseName());
+                      if (result->artboards.isEmpty()) adoptDocument(result->state, QFileInfo(path).completeBaseName());
+                      else for (const auto &board : result->artboards) adoptDocument(board.second, board.first);
                       remember(path);
                   }
                   importNext(paths, openAsDocument);

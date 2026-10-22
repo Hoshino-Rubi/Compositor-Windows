@@ -23,4 +23,4 @@ If you've been asked to make or change an image in a `.comp` project, you don't 
 
 - GitHub release titles and complete release notes use English first, with Simplified Chinese notes in a collapsible section below.
 
-- Incremental GPU-pipeline batches use `0.4.1a1`, `0.4.1a2`, and so on. Publish every batch as a GitHub **pre-release**, never as stable/latest without explicit user approval. The user approved stable patch `windows-v0.5.3p1` on October 19, 2026; keep it as Latest until the next explicitly approved stable release.
+- Incremental GPU-pipeline batches use `0.4.1a1`, `0.4.1a2`, and so on. Publish every batch as a GitHub **pre-release**, never as stable/latest without explicit user approval. The user approved stable release `windows-v0.5.4` on October 22, 2026; keep it as Latest until the next explicitly approved stable release.

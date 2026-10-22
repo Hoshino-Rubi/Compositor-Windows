@@ -158,3 +158,17 @@ def rgb16_tiff():
  data=b''.join(struct.pack('<HHH',10001+x*31,20002+y*29,30003+x*23) for y in range(h) for x in range(w))
  return b'II*\0'+struct.pack('<I',8)+struct.pack('<H',count)+entries+b'\0'*4+struct.pack('<HHH',16,16,16)+data
 (out/'wide-rgb.tif').write_bytes(rgb16_tiff())
+
+# Two synthetic Photoshop artboards plus a loose layer, for native tab import.
+def artboard_fixture():
+ def board(rect):
+  return u32(16)+descriptor([('artboardRect',b'Objc',descriptor([(k,b'doub',struct.pack('>d',v)) for k,v in zip(['Top ','Left','Btom','Rght'],rect)]))])
+ records=[make_layer('Tablet',section=1,extras=extra(b'artb',board((0,120,50,180)))),
+          make_layer('Blue',(10,130,30,150),(0,0,255)),make_layer('End',section=3),
+          make_layer('Phone',section=1,extras=extra(b'artb',board((0,0,60,80)))),
+          make_layer('Red',(20,10,60,40),(255,0,0)),make_layer('End',section=3),
+          make_layer('Loose',(90,0,100,10),(0,255,0))]
+ info=struct.pack('>h',len(records))+b''.join(a for a,b in records)+b''.join(b for a,b in records)
+ info+=b'\0'*(len(info)%2);section=u32(len(info))+info+u32(0)
+ (out/'artboards.psd').write_bytes(b'8BPS'+u16(1)+b'\0'*6+u16(3)+u32(100)+u32(200)+u16(8)+u16(3)+u32(0)+u32(0)+u32(len(section))+section+u16(0)+b'\0'*(200*100*3))
+artboard_fixture()

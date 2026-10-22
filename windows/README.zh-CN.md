@@ -1,13 +1,27 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.5.3p1（正式补丁版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.5.4（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.3p1) 下载正式版便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.4) 下载正式版便携包。
 
-解压 `Compositor-0.5.3p1-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.5.4-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.5.4 — 上游整合与图层工作流
+
+合并上游 **46 个提交**，截至 `551a35fc06fb8429fed3b99b175e31681875f580`（UTC 2026 年 10 月 22 日），包含 Compositor 1.5.5 及后续图层搜索／缩放修复。
+
+- 按名称搜索图层，按类型或已选中状态筛选；匹配的文件夹包含其内容，并保留父级上下文。
+- 渐进模糊、泛光／辉光和 RGB 色散支持可编辑调整层；RGB 色散也提供线性／径向及拖影控制的独立滤镜。新增调整层使用 CPU 参考路径，保留 8/16 位／HDR 精度，支持蒙版及混合模式；大范围光谱效果可能较慢。
+- 线条形状支持实线、点线、虚线、长虚线以及方形／圆形端点。预览与最终绘制共用几何，改善单像素线条及点线，并保存上游兼容的线条元数据。
+- “导出为”新增通道打包，每个 RGBA 通道可选择图层／组或纯黑／白；Alpha 为零时仍保留 RGB。“图像 → 拆分通道”生成四个灰度图层，保留原生精度并支持撤销。
+- Photoshop 画板按自身边界分别打开为标签页；字体家族补全支持名称中间匹配。图像大小／画布大小操作保持缩放，自动适应导入图片不超过 100%。
+- 读取上游 v15/v16 项目及旧 Windows 16 位蒙版。新的原生高精度蒙版保存为 Windows **v17**，避免与上游 v15 线条样式混用。兼容模式按所用功能写入上游 v11–v16，标准蒙版为 8 位，另存无损 16 位副本供 Windows 重开。
+- 新增界面文案覆盖八种语言，无新增运行时依赖。
+
+**范围：**本次不宣称已完整移植新的 macOS 交互。多页 PDF 导入、数位笔压感控件、非拉丁键盘布局的物理键快捷键、macOS 的逐字体字面列表以及 RGB 色散的独立分色图层动作尚未移植。独立 RGB 色散在现有栅格边界内处理，调整层处理整个画布。RAW 引擎、对象选择、字体渲染及 GPU／Metal 差异仍存在；主程序及更新助手仍未签名。详见[发布说明](releases/0.5.4.md)。
 
 ## 0.5.3p1 — RAW 自动镜头校正
 

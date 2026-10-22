@@ -49,6 +49,8 @@ class Canvas : public QWidget {
     void setCloneSampleAll(bool enabled) { cloneSampleAll_ = enabled; }
     void setHealingMode(int mode) { healingMode_ = std::clamp(mode, 0, 2); }
     void setBlurRadius(double radius) { blurRadius_ = std::clamp(radius, 1., 250.); }
+    void setLineStyle(QString style) { lineStyle_ = std::move(style); }
+    void setLineCap(QString cap) { lineCap_ = std::move(cap); }
     void setLineWidth(int width) { lineWidth_ = std::clamp(width, 1, 5000); }
     void setRetouchMode(int value) { retouchMode_ = value; }
     void setObjectMode(bool value) { objectMode_ = value; }
@@ -106,7 +108,7 @@ class Canvas : public QWidget {
         update();
     }
     void setCropRatio(double value) { cropRatio_ = value; }
-    void fit();
+    void fit(bool allowUpscale = true);
     void setZoom(double value);
     double zoom() const { return zoom_; }
     QPointF documentPoint(QPointF view) const;
@@ -150,6 +152,7 @@ class Canvas : public QWidget {
     Document *document_;
     Tool tool_ = Tool::Move;
     QColor color_{"#ed6a45"};
+    QString lineStyle_ = "Solid", lineCap_ = "Square";
     int brushSize_ = 28;
     double flow_ = 1, zoom_ = 1;
     QPointF offset_, anchor_, last_, mouse_;

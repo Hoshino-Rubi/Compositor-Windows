@@ -609,7 +609,7 @@ QImage runGpuNative(const GpuNativeCallback &callback) {
 }
 
 QImage filterGpuImage(const QImage &source,const QJsonObject &settings,double scale,int clipping) {
-    if (hdrImage(source)) return {};
+    if (hdrImage(source) || settings.contains("filterLayerSettings")) return {};
     return processGpuImage(source,settings,scale,clipping,false);
 }
 QImage effectsGpuImage(const QImage &source,const QJsonObject &settings,double scale) {
@@ -627,6 +627,7 @@ QImage effectsAccelerated(const QImage &source,const QJsonObject &settings,doubl
     return image.isNull()?applyEffects(source,settings,scale):image;
 }
 QImage filteredAccelerated(const QImage &source,const QJsonObject &settings,double scale,int clipping) {
+    if (settings.contains("filterLayerSettings")) return filtered(source, settings);
     if (hdrImage(source)) return settings["kind"] == "Camera Raw" ? cameraRaw(source,settings,scale,clipping) : filtered(source,settings);
     if (settings["kind"] == "Progressive Blur" || settings["preserveTransparency"].toBool()) return filtered(source, settings);
     // Small standalone motion-blur requests do not reliably amortize upload/readback.
@@ -738,6 +739,8 @@ QImage renderGpuPreviewImpl(const State &state, QSize target, QPoint viewportOri
             if(!QStringList{"stroke","shadow","colorOverlay","innerShadow","outerGlow","innerGlow"}.contains(it.key())||!it.value().isObject())return {};
         if (layer.metadata["adjustment"].isObject()) {
             const auto settings = layer.metadata["adjustment"].toObject();
+            // New v16 filter layers use the verified reference path until a GPU implementation is measured.
+            if (isFilterLayerKind(settings["kind"].toString())) return {};
             if (settings["kind"] != "Gaussian Blur" && !toneAdjustment(settings) && !GpuProcessor::supports(settings["kind"].toString())) return {};
         }
     }

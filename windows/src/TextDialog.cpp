@@ -6,6 +6,7 @@
 #include <QDialogButtonBox>
 #include <QTextEdit>
 #include <QFontComboBox>
+#include <QCompleter>
 #include <QColorDialog>
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -44,6 +45,11 @@ void MainWindow::textDialog(QPointF point, QString id) {
     outer->addWidget(&text);
     auto *form = new QFormLayout;
     QFontComboBox font;
+    font.setObjectName("textFontFamily");
+    font.setEditable(true);
+    font.completer()->setFilterMode(Qt::MatchContains);
+    font.completer()->setCompletionMode(QCompleter::PopupCompletion);
+    font.completer()->setCaseSensitivity(Qt::CaseInsensitive);
     font.setCurrentFont(QFont(original["fontName"].toString(QApplication::font().family())));
     QSpinBox size;
     size.setObjectName("textFontSize");
