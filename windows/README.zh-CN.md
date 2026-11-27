@@ -1,13 +1,19 @@
 # Compositor Windows 原生版
 
-C++20 / Qt 6 Widgets，版本 **0.5.4（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
+C++20 / Qt 6 Widgets，版本 **0.5.5（正式版）**。保留原版 Swift / AppKit / Metal 工程；Windows 应用没有浏览器运行时。
 
 ## 运行
 
-从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.4) 下载正式版便携包。
+从 [GitHub Releases](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.5) 下载正式版便携包。
 
-解压 `Compositor-0.5.4-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
+解压 `Compositor-0.5.5-win-x64.zip` 后运行 `Compositor.exe`。保留 DLL、插件、translations、models 和 licenses 文件夹。Windows 10 / 11 x64，无需另装 Qt、Python 或 Node.js。
 在“首选项”窗口即时切换 English、简体中文、繁體中文、日本語、한국어、Deutsch、Français、Español，或选择“跟随系统”。语言选择会保存。
+
+## 0.5.5 — 同步上游 1.7.4
+
+合并上游 227 个提交，截至 `7b85bfd71b25278345a0777b678c343ce99cd62f`。Windows 可打开上游保存至 v23、且仅使用已支持图层功能的普通 `.comp` 项目；遇到 GIF 动画、链接视频、带内描边的形状或不支持的调整层会明确拒绝，避免打开内容不全的副本。Windows 保存格式和 16 位蒙版兼容模式不变。上游新增的 macOS 工具与交互未包含在 Windows 程序中，详见[发布说明](releases/0.5.5.md)。
+
+Camera Raw 现有的亮度降噪在 8／16 位工作流中改用上游的 CPU 非局部均值算法，不包含新的独立降噪滤镜或 Metal 加速。
 
 ## 0.5.4 — 上游整合与图层工作流
 

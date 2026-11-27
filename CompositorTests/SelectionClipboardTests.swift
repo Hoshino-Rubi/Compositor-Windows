@@ -132,6 +132,25 @@ struct SelectionClipboardTests {
         #expect(session.activeLayer?.asset?.image === source.asset?.image)
     }
 
+    @Test func duplicateGIFReservesThumbnailBudgetForEachSavedLayer() throws {
+        let asset = try LiveMaskTests().asset([255, 255, 255, 255])
+        let context = try BrushRaster.context(width: 96, height: 96, mask: false)
+        let thumbnail = try #require(context.makeImage())
+        let frames = (0..<1_000).map { GIFTimelineFrame(index: $0, thumbnail: thumbnail, duration: 0.1) }
+        let source = GIFSource(data: Data([0]), frames: frames, width: 2, height: 2)
+        let session = EditorSession()
+        session.insert(asset, gifAnimation: GIFAnimation(source: source))
+        let layer = try #require(session.activeLayer)
+        #expect(session.canRetainGIFSources(in: [layer]))
+        // Reused images and source bytes still produce two complete thumbnail sets when the package is reopened.
+        #expect(!session.canRetainGIFSources(in: [layer, layer]))
+        let count = session.history.undoCount
+        session.duplicateActiveLayer()
+        #expect(session.document?.layers.count == 1)
+        #expect(session.activeLayerID == layer.id)
+        #expect(session.history.undoCount == count)
+    }
+
     @Test func transformSelectionMovesPixelsAndOutlineAsOneUndo() async throws {
         let session = await makeSession()
         let source = try #require(session.activeLayerID)
@@ -256,5 +275,22 @@ struct SelectionClipboardTests {
         session.paste()
         pasted = try #require(session.activeLayer)
         #expect(try await layerPixel(session, pasted.id, x: 65, y: 15) == [0, 0, 255, 255])
+    }
+
+    /// With a folder selected, a paste goes just above the folder, outside it, rather than into it.
+    @Test func pasteWithAFolderSelectedGoesAboveTheFolder() async throws {
+        let session = await makeSession()
+        select(session, CGRect(x: 0, y: 0, width: 20, height: 20))
+        session.copyMergedSelection()
+        session.addGroup()
+        let outer = try #require(session.activeLayerID)
+        session.addGroup() // A folder inside the first, so "outside" means its parent, not the top level.
+        let folder = try #require(session.activeLayerID)
+        session.paste()
+        let pasted = try #require(session.activeLayer)
+        #expect(pasted.parentID == outer)
+        let layers = try #require(session.document?.layers)
+        let folderIndex = try #require(layers.firstIndex { $0.id == folder })
+        #expect(layers.firstIndex { $0.id == pasted.id } == folderIndex + 1)
     }
 }

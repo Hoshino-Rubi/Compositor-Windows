@@ -77,7 +77,7 @@ import Testing
         return session
     }
 
-    private struct Difference { let mean: Double; let over: Double }
+    private struct Difference { let mean: Double; let over: Double; var cpu: CGImage? = nil }
 
     /// Both canvases drawn for `session`; the share of pixels more than 12 levels apart, and the mean difference.
     private func compare(_ session: EditorSession, name: String, width points: Int = 500, height pointsHigh: Int = 400,
@@ -140,7 +140,7 @@ import Testing
         if let png = NSBitmapImageRep(cgImage: pair.makeImage()!).representation(using: .png, properties: [:]) {
             Attachment.record(png, named: "\(name).png")
         }
-        return Difference(mean: total / Double(width * height * 3), over: Double(over) / Double(width * height))
+        return Difference(mean: total / Double(width * height * 3), over: Double(over) / Double(width * height), cpu: cpu.makeImage())
     }
 
     @Test(arguments: [1.0, 2.0 / 3.0, 1.0 / 3.0, 2.0])
@@ -206,6 +206,47 @@ import Testing
     }
 
     /// A gradient being dragged, linear and radial, the radial one inside a selection.
+    /// A gradient dragged on a layer's mask shows as it's dragged, as on the Core Graphics canvas, with the mask over its
+    /// layer or placed apart from it: placed apart, it used to show only once Return committed it.
+    @Test(arguments: [false, true])
+    func showsAGradientOnAMaskAsItsDragged(placedApart: Bool) throws {
+        guard GPUCanvasRenderer.shared != nil else { return }
+        let session = try paintable(masked: true)
+        let index = try #require(session.document?.layers.firstIndex { $0.id == session.activeLayerID })
+        if placedApart, let layer = session.document?.layers[index] {
+            var placement = layer.transform
+            placement.origin.y -= 6
+            placement.size.height += 14
+            session.document?.layers[index].mask?.placement = placement
+        }
+        session.isMaskSelected = true
+        session.tool = .gradient
+        session.zoom(to: 1)
+        // The GPU canvas on its own, as on screen: the Core Graphics one fills the gradient's tiles as it draws.
+        let renderer = try #require(GPUCanvasRenderer.shared)
+        let canvas = CanvasView(session: session)
+        canvas.frame = CGRect(x: 0, y: 0, width: 500, height: 400)
+        func frame() throws -> [UInt8] {
+            let shot = try #require(canvas.gpuFrame(size: CGSize(width: 1000, height: 800)))
+            let made = try #require(renderer.context.createCGImage(shot, from: CGRect(x: 0, y: 0, width: 1000, height: 800),
+                                                                    format: .RGBA8, colorSpace: renderer.space))
+            let read = try BrushRaster.context(width: 1000, height: 800, mask: false)
+            BrushRaster.draw(made, in: CGRect(x: 0, y: 0, width: 1000, height: 800), mask: false, context: read)
+            return Array(UnsafeBufferPointer(start: try #require(read.data).assumingMemoryBound(to: UInt8.self), count: 1000 * 800 * 4))
+        }
+        let before = try frame()
+        session.beginGradient(at: CGPoint(x: 150, y: 120))
+        session.moveGradient(end: CGPoint(x: 420, y: 330))
+        #expect(session.gradientEdit?.raster.isMask == true)
+        let during = try frame()
+        let changed = stride(from: 0, to: before.count, by: 4).filter { abs(Int(before[$0]) - Int(during[$0])) > 12 }.count
+        #expect(changed > 1000 * 800 / 20, "the gradient shows while dragging: \(changed) pixels changed")
+        // And as the Core Graphics canvas shows it.
+        let difference = try compare(session, name: "mask-gradient-\(placedApart)")
+        #expect(difference.mean < 1.5 && difference.over < 0.01, "mean \(difference.mean), over 12 levels \(difference.over * 100)%")
+        _ = session.finishBrushImmediately()
+    }
+
     @Test(arguments: [GradientShape.linear, .radial])
     func matchesWhileDraggingAGradient(shape: GradientShape) throws {
         guard GPUCanvasRenderer.shared != nil else { return }
@@ -224,6 +265,238 @@ import Testing
     }
 
     /// A Smudge stroke in progress.
+    /// Lens Effects' angles turn the same way on the GPU canvas, whose rows run down, as in the filter and the export.
+    @Test(arguments: [LensEffect.starburst, .prism])
+    func lensEffectsAnglesMatch(_ effect: LensEffect) throws {
+        guard GPUCanvasRenderer.shared != nil else { return }
+        let session = EditorSession()
+        session.viewport.resize(to: CGSize(width: 500, height: 400), backingScale: 2, documentSize: nil)
+        session.createDocument(width: 400, height: 300)
+        let context = try BrushRaster.context(width: 400, height: 300, mask: false)
+        context.setFillColor(CGColor(srgbRed: 0.05, green: 0.05, blue: 0.08, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+        context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        context.fillEllipse(in: CGRect(x: 150, y: 110, width: 24, height: 24))
+        context.setFillColor(CGColor(srgbRed: 0.9, green: 0.4, blue: 0.2, alpha: 1))
+        context.fill(CGRect(x: 60, y: 200, width: 80, height: 60))
+        let image = try #require(context.makeImage())
+        session.insert(ImportedImage(image: image, thumbnail: image, name: "Light"))
+        var lens = LensEffectSettings()
+        lens.effect = effect
+        lens.starPoints = 4
+        lens.starAngle = 30
+        lens.starLength = 30
+        lens.prismAngle = 40
+        lens.prismCopies = 2
+        lens.prismOffset = 12
+        var adjustment = ImageLayer(name: "Lens", blankSize: CGSize(width: 400, height: 300))
+        adjustment.adjustment = LayerAdjustment(kind: .lensEffects)
+        adjustment.adjustment!.filterLayer.lens = lens
+        session.document!.layers.append(adjustment)
+        session.selectLayer(nil)
+        session.zoom(to: 1)
+        let difference = try compare(session, name: "lens-\(effect.rawValue)")
+        #expect(difference.over < 0.01, "\(effect.rawValue): \(difference.over) of pixels far apart")
+    }
+
+    /// What the canvas shows for a Lens Effects layer, once settled, is what Copy Merged then Paste shows.
+    @Test(arguments: [1.0, 0.43])
+    func lensLayerShowsWhatCopyMergedPastes(zoom: CGFloat) async throws {
+        guard let renderer = GPUCanvasRenderer.shared else { return }
+        let session = EditorSession()
+        session.createDocument(width: 600, height: 400)
+        let context = try BrushRaster.context(width: 600, height: 400, mask: false)
+        context.setFillColor(CGColor(srgbRed: 0.5, green: 0.55, blue: 0.6, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 600, height: 400))
+        var seed: UInt64 = 9
+        func random() -> CGFloat { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return CGFloat(seed >> 11) / CGFloat(1 << 53) }
+        for _ in 0..<120 {
+            let gray = 0.6 + random() * 0.4
+            context.setFillColor(CGColor(srgbRed: gray, green: gray, blue: gray, alpha: 1))
+            context.fill(CGRect(x: random() * 600, y: random() * 400, width: 1 + random() * 3, height: 1 + random() * 3))
+        }
+        let image = try #require(context.makeImage())
+        session.insert(ImportedImage(image: image, thumbnail: image, name: "Picture"))
+        session.addAdjustment(.lensEffects)
+        session.adjustmentEditingID = nil
+        let lensID = try #require(session.activeLayerID)
+        var adjustment = LayerAdjustment(kind: .lensEffects)
+        adjustment.filterLayer.lens = LensEffectSettings()
+        adjustment.filterLayer.lens?.effect = .starburst
+        session.updateAdjustment(lensID, value: adjustment)
+        session.selectLayer(nil)
+        let canvas = CanvasView(session: session)
+        canvas.frame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let window = NSWindow(contentRect: canvas.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = canvas
+        defer { _ = window }
+        session.viewport.resize(to: canvas.bounds.size, backingScale: 2, documentSize: session.document?.size)
+        session.zoom(to: zoom)
+        canvas.synchronizeDisplay()
+        func frame() throws -> [UInt8] {
+            let shot = try #require(canvas.gpuFrame(size: CGSize(width: 1400, height: 1000)))
+            let made = try #require(renderer.context.createCGImage(shot, from: CGRect(x: 0, y: 0, width: 1400, height: 1000),
+                                                                    format: .RGBA8, colorSpace: renderer.space))
+            let read = try BrushRaster.context(width: 1400, height: 1000, mask: false)
+            BrushRaster.draw(made, in: CGRect(x: 0, y: 0, width: 1400, height: 1000), mask: false, context: read)
+            return Array(UnsafeBufferPointer(start: try #require(read.data).assumingMemoryBound(to: UInt8.self), count: 1400 * 1000 * 4))
+        }
+        _ = try frame()
+        // Awaited, not the run loop spun, so the main thread is free to take the picture made off it.
+        for _ in 0..<100 where !canvas.adjustmentsSettled { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(canvas.adjustmentsSettled)
+        let live = try frame()
+        // Copy Merged, pasted on top, with the lens layer hidden: what copying it gives.
+        let merged = try #require(try session.renderMergedPixels())
+        let index = try #require(session.document?.layers.firstIndex { $0.id == lensID })
+        session.document?.layers[index].isVisible = false
+        session.insert(ImportedImage(image: merged.image, thumbnail: merged.image, name: "Pasted"))
+        if let last = session.document?.layers.indices.last {
+            session.document?.layers[last].transform = LayerTransform(origin: .zero, size: CGSize(width: 600, height: 400))
+        }
+        session.selectLayer(nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        let pasted = try frame()
+        let worst = zip(live, pasted).map { abs(Int($0) - Int($1)) }.max() ?? 0
+        #expect(worst <= 1, "zoom \(zoom): within \(worst) levels")
+    }
+
+    /// A Reduce Noise layer's picture, once made, is kept as the canvas zooms: only placed again, not worked out again.
+    @Test func zoomingKeepsAReduceNoiseLayersPicture() async throws {
+        guard GPUCanvasRenderer.shared != nil else { return }
+        let session = EditorSession()
+        session.createDocument(width: 600, height: 400)
+        let context = try BrushRaster.context(width: 600, height: 400, mask: false)
+        context.setFillColor(CGColor(srgbRed: 0.5, green: 0.55, blue: 0.6, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 600, height: 400))
+        let image = try #require(context.makeImage())
+        session.insert(ImportedImage(image: image, thumbnail: image, name: "Picture"))
+        session.addAdjustment(.reduceNoise)
+        session.adjustmentEditingID = nil
+        session.selectLayer(nil)
+        let canvas = CanvasView(session: session)
+        canvas.frame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let window = NSWindow(contentRect: canvas.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = canvas
+        defer { _ = window }
+        session.viewport.resize(to: canvas.bounds.size, backingScale: 2, documentSize: session.document?.size)
+        canvas.synchronizeDisplay()
+        _ = try #require(canvas.gpuFrame(size: CGSize(width: 1400, height: 1000)))
+        for _ in 0..<100 where !canvas.adjustmentsSettled { try await Task.sleep(for: .milliseconds(100)) }
+        #expect(canvas.adjustmentsSettled)
+        for zoom in [0.5, 1.7] {
+            session.zoom(to: zoom)
+            canvas.synchronizeDisplay()
+            _ = try #require(canvas.gpuFrame(size: CGSize(width: 1400, height: 1000)))
+            #expect(canvas.adjustmentsSettled, "at \(zoom), still the picture made")
+        }
+    }
+
+    /// Painting a Lens Effects layer's own mask changes only where the effect shows: the effect itself stays as it was.
+    @Test func paintingALensLayersMaskKeepsItsEffect() throws {
+        guard let renderer = GPUCanvasRenderer.shared else { return }
+        let session = EditorSession()
+        session.createDocument(width: 600, height: 400)
+        let context = try BrushRaster.context(width: 600, height: 400, mask: false)
+        context.setFillColor(CGColor(srgbRed: 0.3, green: 0.32, blue: 0.36, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 600, height: 400))
+        context.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+        for point in [CGPoint(x: 150, y: 120), CGPoint(x: 420, y: 260), CGPoint(x: 300, y: 330)] {
+            context.fillEllipse(in: CGRect(x: point.x, y: point.y, width: 6, height: 6))
+        }
+        let image = try #require(context.makeImage())
+        session.insert(ImportedImage(image: image, thumbnail: image, name: "Picture"))
+        session.addAdjustment(.lensEffects)
+        session.adjustmentEditingID = nil
+        let lensID = try #require(session.activeLayerID)
+        var adjustment = LayerAdjustment(kind: .lensEffects)
+        adjustment.filterLayer.lens = LensEffectSettings()
+        adjustment.filterLayer.lens?.effect = .starburst
+        session.updateAdjustment(lensID, value: adjustment)
+        session.addLayerMask()
+        let canvas = CanvasView(session: session)
+        canvas.frame = CGRect(x: 0, y: 0, width: 700, height: 500)
+        let window = NSWindow(contentRect: canvas.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = canvas
+        defer { _ = window }
+        session.viewport.resize(to: canvas.bounds.size, backingScale: 2, documentSize: session.document?.size)
+        session.zoom(to: 1)
+        canvas.synchronizeDisplay()
+        func frame() throws -> [UInt8] {
+            let shot = try #require(canvas.gpuFrame(size: CGSize(width: 1400, height: 1000)))
+            let made = try #require(renderer.context.createCGImage(shot, from: CGRect(x: 0, y: 0, width: 1400, height: 1000),
+                                                                    format: .RGBA8, colorSpace: renderer.space))
+            let read = try BrushRaster.context(width: 1400, height: 1000, mask: false)
+            BrushRaster.draw(made, in: CGRect(x: 0, y: 0, width: 1400, height: 1000), mask: false, context: read)
+            return Array(UnsafeBufferPointer(start: try #require(read.data).assumingMemoryBound(to: UInt8.self), count: 1400 * 1000 * 4))
+        }
+        _ = try frame()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        let settled = try frame()
+        // A stroke along the bottom left corner, still being painted.
+        session.selectTool(.brush)
+        session.brushSettings.diameter = 30
+        session.beginBrush(at: CGPoint(x: 40, y: 360))
+        session.continueBrush(at: CGPoint(x: 90, y: 360))
+        let painting = try frame()
+        let size = try #require(session.document?.size)
+        let corner = session.viewport.viewPoint(from: CGPoint(x: 140, y: 300), documentSize: size)
+        var worst = 0
+        for y in 0..<1000 {
+            for x in 0..<1400 where !(CGFloat(x) < corner.x * 2 && CGFloat(y) > corner.y * 2) {
+                let i = (y * 1400 + x) * 4
+                for c in 0..<3 { worst = max(worst, abs(Int(settled[i + c]) - Int(painting[i + c]))) }
+            }
+        }
+        #expect(worst <= 1, "away from the stroke: within \(worst) levels")
+        _ = session.finishBrushImmediately()
+    }
+
+    /// The canvas places a layer pixel for pixel with nearest sampling; Lens Effects must work on it as the export does,
+    /// smoothly, or its rotated spikes keep hard bright pixels and sparkle more.
+    @Test func lensEffectsIgnoreTheCanvasNearestSampling() throws {
+        let context = try BrushRaster.context(width: 300, height: 200, mask: false)
+        context.setFillColor(CGColor(srgbRed: 0.5, green: 0.55, blue: 0.6, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 300, height: 200))
+        var seed: UInt64 = 5
+        func random() -> CGFloat { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return CGFloat(seed >> 11) / CGFloat(1 << 53) }
+        for _ in 0..<80 {
+            let gray = 0.6 + random() * 0.4
+            context.setFillColor(CGColor(srgbRed: gray, green: gray, blue: gray, alpha: 1))
+            context.fill(CGRect(x: random() * 300, y: random() * 200, width: 1 + random() * 2, height: 1 + random() * 2))
+        }
+        let image = CIImage(cgImage: try #require(context.makeImage()))
+        var adjustment = LayerAdjustment(kind: .lensEffects)
+        adjustment.filterLayer.lens = LensEffectSettings()
+        adjustment.filterLayer.lens?.effect = .starburst
+        let size = CGSize(width: 300, height: 200)
+        func pixels(_ input: CIImage) throws -> [Float] {
+            let result = try #require(GPUAdjustment.apply(adjustment, to: input, scale: 1, mapping: .identity, document: size))
+            var out = [Float](repeating: 0, count: 300 * 200 * 4)
+            PixelAdjust.ciContext.render(result, toBitmap: &out, rowBytes: 300 * 16, bounds: CGRect(origin: .zero, size: size),
+                                         format: .RGBAf, colorSpace: nil)
+            return out
+        }
+        let smooth = try pixels(image), nearest = try pixels(image.samplingNearest())
+        #expect(zip(smooth, nearest).allSatisfy { abs($0 - $1) < 0.002 })
+    }
+
+    /// Zoomed out, a document with a Lens Effects layer is composited in its own pixels and then scaled to the view, so it
+    /// sparkles as its export does: it must land where the rest of the canvas puts the document.
+    @Test func zoomedOutLensDocumentLandsInPlace() throws {
+        guard GPUCanvasRenderer.shared != nil else { return }
+        let session = try self.session(zoom: 0.5)
+        var lens = LensEffectSettings()
+        lens.effect = .starburst
+        lens.starAmount = 0
+        var adjustment = ImageLayer(name: "Lens", blankSize: CGSize(width: 600, height: 500))
+        adjustment.adjustment = LayerAdjustment(kind: .lensEffects)
+        adjustment.adjustment!.filterLayer.lens = lens
+        session.document!.layers.append(adjustment)
+        let difference = try compare(session, name: "lens-zoomed-out")
+        #expect(difference.mean < 3 && difference.over < 0.03, "mean \(difference.mean), over \(difference.over)")
+    }
+
     @Test func matchesWhileSmudging() throws {
         guard GPUCanvasRenderer.shared != nil else { return }
         let session = try paintable(masked: true)
@@ -428,6 +701,49 @@ import Testing
         session.zoom(to: 1)
         let difference = try compare(session, name: "shape")
         #expect(difference.mean < 1.5 && difference.over < 0.01, "mean \(difference.mean), over 12 levels \(difference.over * 100)%")
+    }
+
+    /// A shape dragged out over the top of a clipping stack: the new layer won't be clipped, so both canvases show it
+    /// in full, above the stack, past the base's edges too.
+    @Test func matchesWhileDrawingAShapeOverAClippingStack() throws {
+        guard GPUCanvasRenderer.shared != nil else { return }
+        let session = try paintable()
+        let image = try pattern(300, 200, seed: 5)
+        session.insert(ImportedImage(image: image, thumbnail: image, name: "Clipped"))
+        let clipped = try #require(session.activeLayerID)
+        session.toggleClippingMask(clipped)
+        #expect(session.activeLayer?.maskSourceID != nil)
+        session.selectTool(.shape)
+        session.beginShape(at: CGPoint(x: 20, y: 20))
+        session.dragShape(to: CGPoint(x: 580, y: 480), square: false, fromCenter: false)
+        session.zoom(to: 1)
+        let difference = try compare(session, name: "shape-over-stack")
+        #expect(difference.mean < 1.5 && difference.over < 0.01, "mean \(difference.mean), over 12 levels \(difference.over * 100)%")
+    }
+
+    /// With a hidden layer active, the shape shows as it's dragged out — its layer goes above the hidden one, and shows.
+    @Test func showsAShapeDrawnWithAHiddenLayerActive() throws {
+        guard GPUCanvasRenderer.shared != nil else { return }
+        let session = try paintable()
+        let image = try pattern(300, 200, seed: 5)
+        session.insert(ImportedImage(image: image, thumbnail: image, name: "Hidden"))
+        let hidden = try #require(session.document?.layers.firstIndex { $0.id == session.activeLayerID })
+        session.document!.layers[hidden].isVisible = false
+        session.selectTool(.shape)
+        session.beginShape(at: CGPoint(x: 20, y: 20))
+        session.dragShape(to: CGPoint(x: 580, y: 480), square: false, fromCenter: false)
+        session.zoom(to: 1)
+        let difference = try compare(session, name: "shape-over-hidden")
+        #expect(difference.mean < 1.5 && difference.over < 0.01, "mean \(difference.mean), over 12 levels \(difference.over * 100)%")
+        // The middle of the view, inside the shape, is the shape's color.
+        let fill = try #require(session.shapeDraft?.fill)
+        let cpu = try #require(difference.cpu)
+        let pixel = try BrushRaster.context(width: 1, height: 1, mask: false)
+        BrushRaster.draw(cpu, in: CGRect(x: -cpu.width / 2, y: -cpu.height / 2, width: cpu.width, height: cpu.height), mask: false, context: pixel)
+        let bytes = pixel.data!.assumingMemoryBound(to: UInt8.self)
+        let red = Double(bytes[0]) / 255, green = Double(bytes[1]) / 255, blue = Double(bytes[2]) / 255
+        #expect(abs(red - fill.red) < 0.05 && abs(green - fill.green) < 0.05 && abs(blue - fill.blue) < 0.05,
+                "\(red) \(green) \(blue)")
     }
 
     enum EffectsCase: String, CaseIterable {

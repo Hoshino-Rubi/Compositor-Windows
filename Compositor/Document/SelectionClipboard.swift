@@ -41,7 +41,7 @@ extension EditorSession {
 
     var canCopyPixels: Bool {
         guard canEditLayers, let layer = activeLayer, !layer.isGroup || isMaskSelected, selection?.isEmpty != true else { return false }
-        return isMaskSelected ? layer.mask != nil : layer.asset != nil
+        return isMaskSelected ? selectedMask(for: layer) != nil : layer.asset != nil
     }
 
     /// The active layer's pixels (or mask as opaque gray) exactly as they sit on the canvas,
@@ -52,19 +52,19 @@ extension EditorSession {
         let clip = try selection?.clip(canvas: document.size)
         if clip != nil, clip?.coverage == nil { return nil }
         guard let region = selectionCopyRegion() else { return nil }
-        let deep = sixteenBit && !mask ? try layer.asset.flatMap { try DeepLayer.flattened($0) } : nil
+        let deep = sixteenBit && !mask ? try displayedAsset(for: layer).flatMap { try DeepLayer.flattened($0) } : nil
         let context = deep == nil ? try BrushRaster.context(width: Int(region.width), height: Int(region.height), mask: false)
                                   : try DeepLayer.context(width: Int(region.width), height: Int(region.height),
                                                           hdr: deep.map(DeepLayer.isHDR) ?? false)
         context.translateBy(x: -region.minX, y: -region.minY)
         clip?.apply(to: context)
         let transform = displayedTransform(for: layer)
-        if mask, let owned = layer.mask {
+        if mask, let owned = selectedMask(for: layer) {
             let placement = displayedMaskPlacement(for: layer)
             context.setFillColor(gray: placement == nil ? 0 : LayerMask.background(of: owned.asset.thumbnail), alpha: 1)
             context.fill(region)
             LayerRenderer.drawCoverage(owned.asset.image, transform: placement ?? transform, in: context)
-        } else if !mask, let image = deep ?? layer.asset?.image {
+        } else if !mask, let image = deep ?? displayedAsset(for: layer)?.image {
             LayerRenderer.draw(image, transform: transform, center: transform.center, in: context)
         } else { return nil }
         guard let image = context.makeImage() else { throw ExportError.render }
@@ -151,18 +151,18 @@ extension EditorSession {
         return Self.pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 
-    /// Cmd-V: pastes as a new layer above the active one. Pixels copied here go back exactly
-    /// where they came from; images copied in other apps are centered.
+    /// Cmd-V: pastes as a new layer above the active one, or with a folder selected, just above the folder rather than
+    /// inside it. Pixels copied here go back exactly where they came from; images copied in other apps are centered.
     func paste() {
         guard canPaste, let document else { return }
         let pasteboard = Self.pasteboard
         if let clip = pixelClipboard, pasteboard.changeCount == clip.changeCount {
-            addPixelLayer(clip.image, at: clip.origin, name: nextLayerName(), editName: "Paste")
+            addPixelLayer(clip.image, at: clip.origin, name: nextLayerName(), editName: "Paste", besideFolder: true)
         } else if let external = NSImage(pasteboard: pasteboard)?.cgImage(forProposedRect: nil, context: nil, hints: nil),
                   let image = try? Self.sRGBCopy(of: external) {
             let origin = CGPoint(x: floor((document.size.width - CGFloat(image.width)) / 2),
                                  y: floor((document.size.height - CGFloat(image.height)) / 2))
-            addPixelLayer(image, at: origin, name: nextLayerName(), editName: "Paste")
+            addPixelLayer(image, at: origin, name: nextLayerName(), editName: "Paste", besideFolder: true)
         } else { NSSound.beep() }
     }
 
@@ -249,6 +249,7 @@ extension EditorSession {
                 }
             }
         }
+        relinkCopiedClipping(copiesOf)
         activeLayerID = active.flatMap { copiesOf[$0] } ?? copiesOf[ids[0]] ?? copiesOf.values.first
         selectedLayerIDs = Set(copiesOf.values)
         endEdit()
@@ -261,20 +262,43 @@ extension EditorSession {
         let included = descendantIDs(of: layer.id).union([layer.id])
         let originals = (document?.layers ?? []).filter { included.contains($0.id) }
         guard (document?.layers.count ?? 0) + originals.count <= 10_000 else { return nil }
+        guard canRetainGIFSources(in: (document?.layers ?? []) + originals) else { return nil }
         let mapping = Dictionary(uniqueKeysWithValues: originals.map { ($0.id, UUID()) })
         let copies = originals.map { original in
-            ImageLayer(id: mapping[original.id]!, asset: original.asset,
+            ImageLayer(id: mapping[original.id]!, asset: displayedAsset(for: original),
                 name: original.name + (original.id == layer.id ? " copy" : ""), isVisible: original.isVisible,
                 transform: original.transform, parentID: original.parentID.map { mapping[$0] ?? $0 },
                 isGroup: original.isGroup, opacity: original.opacity, blendMode: original.blendMode,
                 mask: original.mask, maskSourceID: original.maskSourceID.map { mapping[$0] ?? $0 },
-                adjustment: original.adjustment, shape: original.shape, effects: original.effects, text: original.text)
+                adjustment: original.adjustment, shape: original.shape, effects: original.effects, text: original.text,
+                gifAnimation: currentGIFAnimation(for: original))
         }
         document?.layers.insert(contentsOf: copies, at: index + 1)
         for original in originals where collapsedGroupIDs.contains(original.id) {
             collapsedGroupIDs.insert(mapping[original.id]!)
         }
         return mapping[layer.id]
+    }
+
+    /// Each animation layer embeds its source and rebuilds its thumbnails on opening, even when runtime data is shared.
+    func canRetainGIFSources(in layers: [ImageLayer]) -> Bool {
+        var bytes = 0, thumbnailPixels = 0
+        if layers.contains(where: { $0.gifAnimation?.framePixels.isEmpty == false }) {
+            let pixels = layers.reduce(0) { total, layer in
+                total + (layer.asset.map { $0.image.width * $0.image.height } ?? 0)
+                    + (layer.gifAnimation?.framePixels.values.reduce(0) { $0 + $1.image.width * $1.image.height } ?? 0)
+            }
+            guard pixels <= DocumentLimits.documentPixelBudget else { return false }
+        }
+        for layer in layers {
+            guard let source = layer.gifAnimation?.source else { continue }
+            let pixels = source.frames.reduce(0) { $0 + $1.thumbnail.width * $1.thumbnail.height }
+            guard source.data.count <= GIFSource.totalByteLimit - bytes,
+                  pixels <= GIFSource.totalThumbnailPixelBudget - thumbnailPixels else { return false }
+            bytes += source.data.count
+            thumbnailPixels += pixels
+        }
+        return true
     }
 
     /// Option-drag in the Layers panel: a copy of the layer placed where it was dropped (inside `parent`,
@@ -292,18 +316,27 @@ extension EditorSession {
     }
 
     /// Inserts pixels as a new layer above the active one (inside its folder), all in one undo
-    /// step. Pasting drops the selection, as in Photoshop; a drawn shape keeps it.
-    func addPixelLayer(_ image: CGImage, at origin: CGPoint, name: String, editName: String, dropsSelection: Bool = true, shape: LayerShape? = nil, text: LayerText? = nil) {
+    /// step. Pasting drops the selection, as in Photoshop; a drawn shape keeps it. With a folder active, the layer
+    /// goes in at the folder's top, or with `besideFolder`, just above the folder, outside it.
+    func addPixelLayer(_ image: CGImage, at origin: CGPoint, name: String, editName: String, dropsSelection: Bool = true, shape: LayerShape? = nil, text: LayerText? = nil, besideFolder: Bool = false) {
         guard let document, let thumbnail = try? PixelInvert.thumbnail(of: image) else { return }
         var layer = ImageLayer(asset: ImportedImage(image: image, thumbnail: thumbnail, name: name), origin: origin)
         layer.name = name
         layer.shape = shape
         layer.text = text
-        layer.parentID = activeLayer?.isGroup == true ? activeLayerID : activeLayer?.parentID
-        let index = document.layers.firstIndex { $0.id == activeLayerID }.map { $0 + 1 } ?? document.layers.count
+        let intoFolder = activeLayer?.isGroup == true && !besideFolder
+        layer.parentID = intoFolder ? activeLayerID : activeLayer?.parentID
+        // Into a folder, it goes at the top of the folder, as a new blank layer does.
+        let index = intoFolder ? newLayerIndex(in: document.layers)
+            : document.layers.firstIndex { $0.id == activeLayerID }.map { $0 + 1 } ?? document.layers.count
         finishOpacityEdit()
         beginEdit(editName)
         self.document?.layers.insert(layer, at: index)
+        // Added in the middle of a clipping group, it joins the group.
+        if var layers = self.document?.layers {
+            Self.adoptClipping(layer.id, in: &layers)
+            self.document?.layers = layers
+        }
         if dropsSelection { self.document?.selection = nil }
         activeLayerID = layer.id
         endEdit()

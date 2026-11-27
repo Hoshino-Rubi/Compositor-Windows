@@ -3,18 +3,18 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     /// The Layers panel's width, remembered across launches.
-    @AppStorage("layersPanelWidth") private var layersPanelWidth = 252.0
+    @AppStorage("layersPanelWidth") private var layersPanelWidth = 261.0
     @AppStorage("navigator.visible") private var showsNavigator = false
     @Bindable var session: EditorSession
     var applicationDelegate: CompositorApplicationDelegate? = nil
     @Environment(\.openWindow) private var openWindow
     @State private var canvasFrame: CGRect = .zero
-    @State private var levelsPanel = FloatingPanelController(name: "levelsPanel")
-    @State private var adjustmentPanel = FloatingPanelController(name: "adjustmentPanel")
-    @State private var selectionAmountPanel = FloatingPanelController(name: "selectionAmountPanel")
-    @State private var colorRangePanel = FloatingPanelController(name: "colorRangePanel")
-    @State private var filterPanel = FloatingPanelController(name: "filterPanel")
-    @State private var effectsPanel = FloatingPanelController(name: "effectsPanel")
+    @State private var levelsPanel = FloatingPanelController(name: "levelsPanel", sharing: "editPanel")
+    @State private var adjustmentPanel = FloatingPanelController(name: "adjustmentPanel", sharing: "editPanel")
+    @State private var selectionAmountPanel = FloatingPanelController(name: "selectionAmountPanel", sharing: "editPanel")
+    @State private var colorRangePanel = FloatingPanelController(name: "colorRangePanel", sharing: "editPanel")
+    @State private var filterPanel = FloatingPanelController(name: "filterPanel", sharing: "editPanel")
+    @State private var effectsPanel = FloatingPanelController(name: "effectsPanel", sharing: "editPanel")
     @State private var isDropTargeted = false
     /// The window's width, so the tab strip can use the toolbar's free space.
     @State private var windowWidth: CGFloat = 1180
@@ -82,7 +82,7 @@ struct ContentView: View {
             if !session.canvasOnly { toolHeaders }
             HStack(spacing: 0) {
                 if !session.canvasOnly {
-                    toolRail
+                    ToolRail(session: session)
                     Divider()
                 }
                 VStack(spacing: 0) {
@@ -119,11 +119,42 @@ struct ContentView: View {
                         }
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor")) } action: { canvasFrame = $0 }
                     }
+                    if !session.canvasOnly, let layer = session.activeLayer, let movie = layer.movie {
+                        Divider()
+                        MovieTimeline(session: session, layer: layer, link: movie).id(layer.id)
+                    }
+                    if !session.canvasOnly,
+                       let gifLayerID = session.gifTimelineLayerID,
+                       session.activeLayerID == gifLayerID,
+                       session.document?.layers.contains(where: { $0.id == gifLayerID }) == true,
+                       !session.gifTimelineFrames.isEmpty {
+                        Divider()
+                        GIFTimeline(frames: session.gifTimelineFrames,
+                                    selectedFrameIndex: session.gifTimelineSelectedFrameIndex,
+                                    isPlaying: session.gifTimelineIsPlaying,
+                                    canPlay: session.gifTimelineCanPlay,
+                                    timing: session.gifTimelineTiming,
+                                    canEditFrames: session.gifTimelineCanEditFrames,
+                                    canEditTiming: session.gifTimelineCanEditTiming,
+                                    onSelectFrame: { index in
+                                        guard session.activeLayerID == gifLayerID else { return }
+                                        await session.selectGIFTimelineFrame(index)
+                                    },
+                                    onTogglePlayback: { session.toggleGIFPlayback(for: gifLayerID) },
+                                    onStopPlayback: { session.stopGIFPlayback(for: gifLayerID) },
+                                    onChangeTiming: { session.setGIFFrameTiming($0, for: gifLayerID) },
+                                    onDuplicateFrame: { await session.duplicateGIFFrame(at: $0, for: gifLayerID) },
+                                    onDeleteFrame: { await session.deleteGIFFrames(at: [$0], for: gifLayerID) })
+                            .id(gifLayerID)
+                            .frame(height: 110)
+                            .releasesFocusOnCommit(session)
+                    }
                 }
                 if !session.canvasOnly {
                     PanelResizeEdge(width: $layersPanelWidth, range: LayersPanel.widths)
                     // Clamped: a width saved when the panel could go narrower is brought into range.
                     LayersPanel(session: session, width: min(LayersPanel.widths.upperBound, max(LayersPanel.widths.lowerBound, layersPanelWidth)))
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { session.layersPanelFrame = $0 }
                 }
             }
             if !session.canvasOnly {
@@ -146,7 +177,8 @@ struct ContentView: View {
         }
         .frame(minWidth: 800, minHeight: 520)
         .coordinateSpace(name: "editor")
-        .onDrop(of: [UTType.fileURL.identifier, UTType.image.identifier, ProjectWorkspace.layerType], isTargeted: $isDropTargeted) { providers, location in
+        .onDrop(of: [UTType.fileURL.identifier, UTType.image.identifier, ProjectWorkspace.layerType],
+                delegate: EditorDropDelegate(session: session, targeted: $isDropTargeted) { providers, location in
             guard session.levels == nil, !session.isProjectBusy, !session.showsNewDocument, !session.showsImporter, session.renamingLayerID == nil else { return false }
             let point: CGPoint?
             if let document = session.document, canvasFrame.contains(location) {
@@ -162,7 +194,7 @@ struct ContentView: View {
                 Task { await ImageFileDrop.importProviders(providers, into: session, at: point) }
             }
             return true
-        }
+        })
         .overlay {
             if isDropTargeted, acceptsDrop {
                 RoundedRectangle(cornerRadius: 8).strokeBorder(Color.accentColor, lineWidth: 3)
@@ -282,7 +314,7 @@ struct ContentView: View {
         }
         // A folder brings in the images directly inside it.
         .fileImporter(isPresented: $session.showsImporter,
-                      allowedContentTypes: UTType.importableImages + [.folder], allowsMultipleSelection: true) { result in
+                      allowedContentTypes: UTType.importableImages + [.quickTimeMovie, .mpeg4Movie, .folder], allowsMultipleSelection: true) { result in
             switch result {
             case .success(let urls): Task { await session.importImages(urls) }
             case .failure(let error):
@@ -307,43 +339,8 @@ struct ContentView: View {
         if let applicationDelegate { Task { await applicationDelegate.projects.newCanvas() } }
         else { session.clearProject() }
     }
-    private var toolRail: some View {
-        // Scrolls when the window is too short for every tool, rather than pushing the bars above and below away.
-        IndicatorlessScrollView {
-        VStack(spacing: 10) {
-            ForEach(NavigationTool.allCases.filter { $0 != .idle }, id: \.self) { tool in
-                Button { session.selectTool(tool) } label: {
-                    Group {
-                        if tool == .gradient { GradientToolIcon().frame(width: 18, height: 18) }
-                        else if tool == .cloneStamp { CloneStampToolIcon().frame(width: 18, height: 18) }
-                        else if tool == .lasso, session.lassoKind == .polygonal { PolygonalLassoToolIcon().frame(width: 18, height: 18) }
-                        else if tool == .wand, session.wandMode == .object { ObjectSelectionToolIcon().frame(width: 18, height: 18) }
-                        // The Marquee's icon follows its shape: a dashed circle in Ellipse mode.
-                        else { Image(systemName: tool == .marquee && session.marqueeKind == .ellipse ? "circle.dashed" : session.symbol(for: tool)).font(.system(size: 17)) }
-                    }
-                    .frame(width: 36, height: 36)
-                        .background(session.tool == tool ? Color.white.opacity(0.12) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 7))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 7)
-                                .strokeBorder(session.tool == tool ? Color.white.opacity(0.14) : .clear)
-                        }
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).help(tool.label).accessibilityLabel(tool.label)
-                .foregroundStyle(.primary)
-                .accessibilityAddTraits(session.tool == tool ? .isSelected : [])
-            }
-            ColorPaletteControls(session: session).padding(.top, 8)
-        }
-        .padding(.top, 16).padding(.bottom, 12)
-        .frame(width: 56)
-        }
-        .frame(width: 56)
-    }
     private var welcome: some View {
         NewCanvasSheet(session: session,
-            onCreate: { session.createNewProject(width: $0, height: $1, resolution: $2, background: $3) },
             onOpen: { Task { await applicationDelegate?.projects.open() } })
     }
     private var statusBar: some View {
@@ -352,6 +349,12 @@ struct ContentView: View {
                 Text(session.viewport.zoom, format: .percent.precision(.fractionLength(0...1)))
                     .frame(width: 62, alignment: .leading).accessibilityIdentifier("zoomStatus")
                 Text("\(document.width) × \(document.height) px").accessibilityIdentifier("canvasDimensions")
+                if let draft = session.shapeDraft, let size = session.dragOutSize {
+                    Text("\(draft.kind == .line ? "Line" : "Shape") \(size.text)").accessibilityIdentifier("shapeDimensions")
+                } else if let size = session.selectionSize {
+                    Text("Selection \(size.width) × \(size.height) px" + (session.selectionFeather.map { " · Feather \($0) px" } ?? ""))
+                        .accessibilityIdentifier("selectionDimensions")
+                }
                 Text("sRGB · Transparent")
             } else { Text("Ready when you are") }
             Spacer()
@@ -489,5 +492,36 @@ private struct WidthReader: ViewModifier {
     @Binding var width: CGFloat
     func body(content: Content) -> some View {
         content.onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+
+/// Files, images and layers dropped on the editor. A layer drag over the Layers panel's list or its blend and opacity
+/// controls is the list's own: those take it themselves, and in any sliver between them the editor leaves it alone,
+/// rather than flashing the "+" of a copy into this document for a frame.
+private struct EditorDropDelegate: DropDelegate {
+    let session: EditorSession
+    @Binding var targeted: Bool
+    let perform: ([NSItemProvider], CGPoint) -> Bool
+    private func isListDrag(_ info: DropInfo) -> Bool {
+        guard info.hasItemsConforming(to: [ProjectWorkspace.layerType]), !session.layersPanelFrame.isEmpty,
+              let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.contains(NSEvent.mouseLocation) }),
+              let content = window.contentView else { return false }
+        let inWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let point = CGPoint(x: inWindow.x, y: content.bounds.height - inWindow.y)
+        // Within the panel, from the controls' top edge down; above them a drag is free to copy elsewhere.
+        let top = session.layerControlsFrame.isEmpty ? session.layersPanelFrame.minY : session.layerControlsFrame.minY
+        return session.layersPanelFrame.contains(point) && point.y >= top
+    }
+    func validateDrop(info: DropInfo) -> Bool { !isListDrag(info) }
+    func dropEntered(info: DropInfo) { targeted = !isListDrag(info) }
+    func dropExited(info: DropInfo) { targeted = false }
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        targeted = !isListDrag(info)
+        return isListDrag(info) ? DropProposal(operation: .cancel) : nil
+    }
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        guard !isListDrag(info) else { return false }
+        return perform(info.itemProviders(for: [UTType.fileURL.identifier, UTType.image.identifier, ProjectWorkspace.layerType]), info.location)
     }
 }

@@ -66,9 +66,12 @@ for name in names:
  code=re.sub(r'^#include[^\n]*\n','',code,flags=re.M)
  code=code.replace('static void in_bands(size_t count, void (^body)(size_t start, size_t end))','template<class Body> static void in_bands(size_t count, Body body)')
  code=code.replace('dispatch_apply(bands, DISPATCH_APPLY_AUTO,','pixel_parallel(bands,').replace('^(','[&](').replace('__block int failed = 0','std::atomic<int> failed{0}')
+ code=code.replace('static dispatch_once_t once;\n    dispatch_once(&once, ^{ for (int i = 0; i <= steps; ++i) table[i] = (float)exp(-6.0 * i / steps); });', 'static const bool initialized = [] { for (int i = 0; i <= steps; ++i) table[i] = (float)exp(-6.0 * i / steps); return true; }();\n    (void)initialized;')
+ # Reject distant matches in floating point: 16-bit noise floors can otherwise overflow an int.
+ code=code.replace('int step = distance <= 0 ? 0 : (int)(distance * toStep);\n                        if (step >= steps) continue;', 'const float scaledDistance = distance * toStep;\n                        if (scaledDistance >= float(steps)) continue;\n                        const int step = distance <= 0 ? 0 : int(scaledDistance);')
  # C allocation assignments get explicit C++ casts based on each declared destination.
  code=re.sub(r'\bmalloc\(', '(float *)malloc(',code).replace('calloc(', '(double *)calloc(')
- for var in ['low','weight']:
+ for var in ['low','weight','total','weights','strongest']:
   code=code.replace(f'*{var} = (double *)calloc(',f'*{var} = (float *)calloc(')
  for var in ['alpha','copy']:
   code=code.replace(f'uint16_t *{var} = (float *)malloc(',f'uint16_t *{var} = (uint16_t *)malloc(')

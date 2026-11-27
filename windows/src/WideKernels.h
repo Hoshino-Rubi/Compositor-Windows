@@ -71,6 +71,9 @@ void adjust_tonal_contrast(uint16_t *rgba, const uint16_t *blurred, size_t width
                            size_t stride, size_t blurredStride, double amount,
                            double shadows, double midtones, double highlights);
 
+extern int (*adjust_nonlocal_means_gpu)(const float *luma, const float *coverage, float *out, size_t width, size_t height,
+                                        int search, int patch, double h, double sigma);
+
 void adjust_camera_raw_detail(uint16_t *rgba, size_t width, size_t height, size_t stride,
                               double sharpenAmount, double sharpenRadius, double sharpenDetail, double sharpenMasking,
                               double noiseLuminance, double noiseLuminanceDetail, double noiseLuminanceContrast,

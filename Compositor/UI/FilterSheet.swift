@@ -129,6 +129,12 @@ struct FilterSheet: View {
                     control("Angle", \.rgbSplitAngle, range: -180...180, unit: "°", decimals: 0, logarithmic: false)
                         .help("Which way the colors spread")
                 }
+            case .lensEffects:
+                lensEffectsControls
+            case .rimLight:
+                rimLightControls
+            case .volumetricLight:
+                volumetricLightControls
             case .motionBlur:
                 control("Angle", \.angle, range: -90...90, unit: "°", decimals: 0, logarithmic: false)
                 control("Distance", \.distance, range: 1...2000, unit: "px", decimals: 0, logarithmic: true)
@@ -148,20 +154,15 @@ struct FilterSheet: View {
             case .scanlines:
                 scanlinesControls
             case .vignette:
-                HStack(spacing: 8) {
-                    Text("Color").frame(width: 95, alignment: .leading)
+                HStack(spacing: 10) {
+                    Text("Color").frame(width: labelWidth, alignment: .leading)
+                    Spacer()
                     Button { session.openVignetteColorPicker() } label: {
-                        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        shape.fill(Color(.sRGB, red: settings.vignetteColor.red,
-                                         green: settings.vignetteColor.green, blue: settings.vignetteColor.blue))
-                            .overlay { shape.inset(by: 1).strokeBorder(.white, lineWidth: 1.5) }
-                            .overlay { shape.strokeBorder(.black, lineWidth: 1) }
-                            .frame(width: 24, height: 24)
-                            .contentShape(shape)
+                        ColorSwatch(color: Color(.sRGB, red: settings.vignetteColor.red,
+                                                 green: settings.vignetteColor.green, blue: settings.vignetteColor.blue))
                     }
                     .buttonStyle(.plain)
                     .help("Choose the vignette color")
-                    Spacer()
                 }
                 control("Amount", \.vignetteAmount, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
                     .help("Blend the chosen color into the edges while keeping the center unchanged")
@@ -170,6 +171,18 @@ struct FilterSheet: View {
                 control("Feather", \.vignetteFeather, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
                 control("Highlights", \.vignetteHighlights, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
                     .help("Protect bright areas near the edge")
+            case .sharpen:
+                control("Amount", \.sharpenAmount, range: 0...300, unit: "%", decimals: 0, logarithmic: false)
+                    .help("How strongly edges and fine detail are brought out")
+                control("Radius", \.sharpenRadius, range: 0.1...20, unit: "px", decimals: 1, logarithmic: true)
+                    .help("How fine the detail it sharpens: small for crisp texture, larger for a punchier look")
+            case .reduceNoise:
+                control("Strength", \.reduceNoiseLuminance, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                    .help("How much grain is smoothed from the picture's brightness")
+                control("Preserve Details", \.reduceNoiseDetail, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                    .help("How much fine texture and edges are kept while the grain is smoothed")
+                control("Color Noise", \.reduceNoiseColor, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                    .help("How much colored speckle is smoothed into the colors around it")
             case .bloomGlow:
                 control("Amount", \.bloomAmount, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
                 control("Radius", \.bloomRadius, range: 1...150, unit: "px", decimals: 0, logarithmic: true)
@@ -184,8 +197,11 @@ struct FilterSheet: View {
                 Text("Positive straightens lines that bow outward (barrel); negative, lines that bow inward (pincushion).")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            Toggle("Preview", isOn: Binding(get: { edit?.preview ?? true },
-                                            set: { session.updateFilter(settings, preview: $0) }))
+            // Not for an adjustment layer: its eye in the layers panel shows the picture without it.
+            if session.adjustmentOriginal == nil {
+                Toggle("Preview", isOn: Binding(get: { edit?.preview ?? true },
+                                                set: { session.updateFilter(settings, preview: $0) }))
+            }
             if let error = edit?.previewError {
                 Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
@@ -213,15 +229,30 @@ struct FilterSheet: View {
                     ProgressView().controlSize(.small)
                     Text(edit?.committing == true ? "Applying…" : "Working…")
                         .font(.callout).foregroundStyle(.secondary)
+                } else if edit?.kind == .volumetricLight, session.preparingDepth {
+                    // The first time only: the depth model is downloading (about 2.6 MB).
+                    ProgressView().controlSize(.small)
+                    Text("Getting depth…").font(.callout).foregroundStyle(.secondary)
+                } else if let edit, edit.preparing, edit.kind == .rimLight && !RimLighting.hasSubject(for: edit.hdrPreviewSource ?? edit.previewSource)
+                            || edit.kind == .volumetricLight && !VolumetricLighting.hasLooked(for: edit.hdrPreviewSource ?? edit.previewSource) {
+                    // Only the first preview, which finds the subject: relighting it afterwards is quick.
+                    ProgressView().controlSize(.small)
+                    Text("Finding the subject…").font(.callout).foregroundStyle(.secondary)
+                }
+                if edit?.kind == .volumetricLight {
+                    Button("Extract Depth") { Task { await session.extractDepth() } }
+                        .help("Close the filter and add the depth the haze goes by as a new layer: white is near, black is far")
+                        .disabled(volumetricWaiting)
                 }
                 Button("OK") { Task { await session.commitFilter() } }
                     .configuredNativeShortcut(.return).buttonStyle(.borderedProminent)
-                    .disabled(edit?.kind.isAutomatic == true && (edit?.preparing == true || edit?.previewError != nil))
+                    .disabled(edit?.kind.isAutomatic == true && (edit?.preparing == true || edit?.previewError != nil) || volumetricWaiting)
             }
         }
         .onPreferenceChange(LabelWidthKey.self) { labelWidth = max(60, $0) }
         .padding(24)
-        .frame(width: isCameraRaw ? FloatingPanelController.dockedWidth : 380)
+        // Volumetric Light's a little wider: Extract Depth shares the row with Cancel and OK.
+        .frame(width: isCameraRaw ? FloatingPanelController.dockedWidth : edit?.kind == .volumetricLight ? 440 : 380)
         .frame(maxHeight: isCameraRaw ? .infinity : nil, alignment: .top)
         .fixedSize(horizontal: false, vertical: !isCameraRaw)
 
@@ -230,6 +261,8 @@ struct FilterSheet: View {
         .onChange(of: session.colorPicker?.color) { _, _ in
             session.previewGradientMapColor()
             session.previewVignetteColor()
+            session.previewRimLightColor()
+            session.previewVolumetricLightColor()
             session.previewDitherColor()
         }
     }
@@ -345,15 +378,167 @@ struct FilterSheet: View {
 
     private func swatch(_ color: AdjustmentColor, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
-            shape.fill(Color(.sRGB, red: color.red, green: color.green, blue: color.blue))
-                .overlay { shape.inset(by: 1).strokeBorder(.white, lineWidth: 1.5) }
-                .overlay { shape.strokeBorder(.black, lineWidth: 1) }
-                .frame(width: 24, height: 24)
-                .contentShape(shape)
+            ColorSwatch(color: Color(.sRGB, red: color.red, green: color.green, blue: color.blue))
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    /// Lens Effects: which effect, then its own settings.
+    /// Rim Light: Glow, then each light's color, angle, strength, width and choke, with room for up to three.
+    /// Volumetric Light's first preview, while it fetches the depth model or finds the subject: Extract Depth and OK
+    /// wait for it (the spinner says what for), and Cancel stays.
+    private var volumetricWaiting: Bool {
+        guard let edit, edit.kind == .volumetricLight else { return false }
+        return session.preparingDepth || edit.preparing && !VolumetricLighting.hasLooked(for: edit.hdrPreviewSource ?? edit.previewSource)
+    }
+
+    @ViewBuilder private var volumetricLightControls: some View {
+        let color = settings.volumetric.color
+        HStack(spacing: 8) {
+            Text("Click or drag on the canvas to move the light")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button { session.openVolumetricLightColorPicker() } label: {
+                ColorSwatch(color: Color(.sRGB, red: color.red, green: color.green, blue: color.blue))
+            }
+            .buttonStyle(.plain)
+            .help("Choose the light's color")
+        }
+        control("Haze", \.volumetric.haze, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            .help("How thick the air is: haze lit by the light, thinner in front of the subject")
+        control("Distance", \.volumetric.distance, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            .help("How far into the scene the haze begins: low reaches up to the camera, high leaves all but the farthest parts clear")
+        control("Depth Contrast", \.volumetric.depthContrast, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            .help("Spread out depths bunched together, such as a distant city, so the haze builds through them in steps; 0 keeps the depth as the model sees it")
+        control("Size", \.volumetric.size, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            .help("How big the light is")
+        control("Intensity", \.volumetric.intensity, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            .help("How bright the beams are")
+        control("Length", \.volumetric.length, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            .help("How far from the light the beams reach")
+        control("Shafts", \.volumetric.shafts, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            .help("How much the beams break up into separate shafts")
+        Toggle("Keep Subject Clear", isOn: flag(\.volumetric.keepsSubjectClear))
+            .help("Keep the subject clear of the haze; off, it's hazed by its own distance, so a figure far off is misted")
+    }
+
+    @ViewBuilder private var rimLightControls: some View {
+        let rim = settings.rimLight
+        control("Glow", \.rimLight.glow, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            .help("Let the lights glow in the air around the subject, blending them into the background")
+        ForEach(Array(rim.lights.enumerated()), id: \.element.id) { index, light in
+            Divider()
+            HStack(spacing: 8) {
+                Text("Light \(index + 1)").font(.headline)
+                Spacer()
+                let color = light.color
+                Button { session.openRimLightColorPicker(index: index) } label: {
+                    ColorSwatch(color: Color(.sRGB, red: color.red, green: color.green, blue: color.blue))
+                }
+                .buttonStyle(.plain)
+                .help("Choose this light's color")
+                if rim.lights.count > 1 {
+                    Button {
+                        // A color still being picked belongs to the lights as they were numbered.
+                        if case .rimLight = session.colorPicker?.target { session.closeColorPicker(commit: true) }
+                        update { $0.rimLight.lights.removeAll { $0.id == light.id } }
+                    } label: { Image(systemName: "minus.circle") }
+                    .buttonStyle(.borderless)
+                    .help("Remove this light")
+                }
+            }
+            control("Angle", \.rimLight[light: light.id].angle, range: -180...180, unit: "°", decimals: 0, logarithmic: false)
+                .help("Where the light comes from, behind the subject: 0° from the right, 90° from above")
+            control("Strength", \.rimLight[light: light.id].strength, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            control("Width", \.rimLight[light: light.id].width, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How far the light wraps around the subject's edges")
+            control("Choke", \.rimLight[light: light.id].choke, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How the light ends on the inside: low feathers it off softly from the edge, high holds it bright and ends it crisply")
+        }
+        if rim.lights.count < RimLightSettings.maximumLights {
+            Button("Add Light") {
+                if case .rimLight = session.colorPicker?.target { session.closeColorPicker(commit: true) }
+                update { $0.rimLight.lights.append($0.rimLight.nextLight) }
+            }
+            .help("Light the subject from another side as well")
+        }
+    }
+
+    @ViewBuilder private var lensEffectsControls: some View {
+        HStack(spacing: 10) {
+            Text("Effect")
+            Picker("Effect", selection: Binding(get: { settings.lens.effect }, set: { new in update { $0.lens.effect = new } })) {
+                ForEach(LensEffect.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .labelsHidden().fixedSize()
+        }
+        switch settings.lens.effect {
+        case .anamorphicFlare:
+            control("Amount", \.lens.flareAmount, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            control("Length", \.lens.flareLength, range: 1...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How far the streaks reach across the picture")
+            control("Threshold", \.lens.threshold, range: 50...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How bright a light has to be to flare; near 100, only the biggest, brightest spots")
+            control("Blue", \.lens.flareBlue, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How far the lens's coatings turn each streak blue along its length; none keeps the light's own color")
+        case .starburst:
+            control("Amount", \.lens.starAmount, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            control("Length", \.lens.starLength, range: 2...40, unit: "%", decimals: 0, logarithmic: false)
+                .help("How far the spikes reach")
+            control("Threshold", \.lens.threshold, range: 50...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How bright a light has to be to sparkle; near 100, only the biggest, brightest spots")
+            control("Angle", \.lens.starAngle, range: -180...180, unit: "°", decimals: 0, logarithmic: false)
+            HStack(spacing: 10) {
+                Text("Points")
+                Picker("Points", selection: Binding(get: { settings.lens.starPoints }, set: { new in update { $0.lens.starPoints = new } })) {
+                    ForEach(LensEffectSettings.starPointChoices, id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .help("How many spikes each light has, as the lens's aperture blades make them")
+            }
+        case .mist:
+            control("Strength", \.lens.mistStrength, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How much light scatters: a soft halo around bright areas, and gently lifted shadows")
+            control("Size", \.lens.mistSize, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How far the light spreads")
+        case .prism:
+            control("Amount", \.lens.prismAmount, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+            control("Copies", \.lens.prismCopies, range: 1...8, unit: "", decimals: 0, logarithmic: false)
+                .help("How many times the picture echoes, each fainter")
+            control("Offset", \.lens.prismOffset, range: 0...50, unit: "%", decimals: 0, logarithmic: false)
+                .help("How far apart the copies are")
+            control("Angle", \.lens.prismAngle, range: -180...180, unit: "°", decimals: 0, logarithmic: false)
+                .help("Which way the copies step")
+            control("Blur", \.lens.prismBlur, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("Soften the copies, more the farther they're pushed")
+            control("Fringe", \.lens.prismFringe, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("Split each copy's red and blue apart, as glass does; 0 keeps the copies crisp")
+            HStack(spacing: 10) {
+                Text("Direction")
+                Picker("Direction", selection: Binding(get: { settings.lens.prismBothWays }, set: { new in update { $0.lens.prismBothWays = new } })) {
+                    Text("One Way").tag(false)
+                    Text("Both Ways").tag(true)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .help("Copies to one side of the picture, or out to both")
+            }
+        case .bokeh:
+            control("Size", \.lens.bokehRadius, range: LensEffectSettings.bokehSizes, unit: "%", decimals: 1, logarithmic: false)
+                .help("How far out of focus: the size of each disc")
+            control("Brightness", \.lens.bokehBrightness, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("How brightly lights open into discs")
+            control("Ring", \.lens.bokehRing, range: 0...100, unit: "%", decimals: 0, logarithmic: false)
+                .help("Light gathered at each disc's rim, as some lenses draw it")
+            HStack(spacing: 10) {
+                Text("Shape")
+                Picker("Shape", selection: Binding(get: { settings.lens.bokehShape }, set: { new in update { $0.lens.bokehShape = new } })) {
+                    ForEach(BokehShape.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .labelsHidden().fixedSize()
+                .help("The aperture's shape: round wide open, a hexagon of blades, an anamorphic oval, or a cat's eye toward the edges")
+            }
+        }
     }
 
     private func flag(_ key: WritableKeyPath<FilterSettings, Bool>) -> Binding<Bool> {
@@ -394,13 +579,17 @@ struct FilterSheet: View {
                                 onChange: { value in update { $0[keyPath: key] = (value * step).rounded() / step } },
                                 onReset: reset)
             } else {
-                Slider(value: Binding(get: { logarithmic ? log(settings[keyPath: key]) : settings[keyPath: key] },
+                AppSlider(value: Binding(get: { logarithmic ? log(settings[keyPath: key]) : settings[keyPath: key] },
                                       set: { value in update { $0[keyPath: key] = ((logarithmic ? exp(value) : value) * step).rounded() / step } }),
                        in: logarithmic ? log(range.lowerBound)...log(range.upperBound) : range)
             }
             TextField(title, value: Binding(get: { settings[keyPath: key] }, set: { value in update { $0[keyPath: key] = value } }),
                       format: .number.precision(.fractionLength(0...decimals)))
                 .frame(width: 56).textFieldStyle(.roundedBorder).multilineTextAlignment(.trailing)
+                // Up and Down step it by its last digit: 1 for a whole number, as Color Balance's.
+                .arrowSteps(1 / step, value: { settings[keyPath: key] }, change: { stepped in
+                    update { $0[keyPath: key] = min(range.upperBound, max(range.lowerBound, (stepped * step).rounded() / step)) }
+                })
                 .unitSuffix(unit)
         }
     }
@@ -433,15 +622,9 @@ struct GradientMapControls: View {
     private func color(_ value: AdjustmentColor) -> Color { Color(.sRGB, red: value.red, green: value.green, blue: value.blue) }
 
     private func swatch(_ title: String, _ value: AdjustmentColor, action: @escaping () -> Void) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
         return HStack(spacing: 8) {
             Button(action: action) {
-                shape
-                    .fill(color(value))
-                    .overlay { shape.inset(by: 1).strokeBorder(.white, lineWidth: 1.5) }
-                    .overlay { shape.strokeBorder(.black, lineWidth: 1) }
-                    .frame(width: 24, height: 24)
-                    .contentShape(shape)
+                ColorSwatch(color: color(value))
             }
             .buttonStyle(.plain)
             .help("Choose the \(title.lowercased()) color")

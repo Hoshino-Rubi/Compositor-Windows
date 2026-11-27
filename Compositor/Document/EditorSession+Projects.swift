@@ -6,19 +6,33 @@ extension EditorSession {
         guard let document else { return nil }
         var images: [UUID: ImportedImage] = [:]
         var masks: [UUID: ImportedImage] = [:]
+        var animations: [UUID: GIFAnimation] = [:]
         let layers = document.layers.map { layer in
-            if let asset = layer.asset { images[layer.id] = asset }
+            let asset = savedAsset(for: layer)
+            if let asset { images[layer.id] = asset }
             if let mask = layer.mask { masks[layer.id] = mask.asset }
+            var gif: ProjectGIFRecord?
+            if let animation = currentGIFAnimation(for: layer) {
+                animations[layer.id] = animation
+                gif = ProjectGIFRecord(sourceFile: "\(layer.id.uuidString).gif", selectedFrameIndex: animation.selectedFrameIndex,
+                    geometry: animation.geometry,
+                    framePixels: animation.framePixels.keys.sorted().map {
+                        ProjectGIFPixelsRecord(index: $0, imageFile: "\(layer.id.uuidString).frame-\($0).png")
+                    }, deletedFrameIndices: animation.deletedFrameIndices.sorted(), frameOrder: animation.frameOrder,
+                    timing: animation.timing == GIFFrameTiming() ? nil : ProjectGIFTimingRecord(animation.timing))
+            }
             return ProjectLayerRecord(id: layer.id, name: layer.name, isVisible: layer.isVisible,
-                transform: layer.transform, imageFile: layer.asset?.file(for: layer.id), parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.mask == nil ? nil : "\(layer.id.uuidString).mask.png", maskEnabled: layer.mask?.isEnabled, maskSourceID: layer.maskSourceID, adjustment: layer.adjustment, maskPlacement: layer.mask?.placement, maskLinked: layer.mask?.isLinked, shape: layer.liveShape?.style, effects: layer.effects, text: layer.liveText?.style)
+                transform: layer.transform, imageFile: asset?.file(for: layer.id), parentID: layer.parentID, isGroup: layer.isGroup, opacity: layer.opacity, blendMode: layer.blendMode, maskFile: layer.mask == nil ? nil : "\(layer.id.uuidString).mask.png", maskEnabled: layer.mask?.isEnabled, maskSourceID: layer.maskSourceID, adjustment: layer.adjustment, maskPlacement: layer.mask?.placement, maskLinked: layer.mask?.isLinked, shape: layer.liveShape?.style, effects: layer.effects, text: layer.liveText?.style, gif: gif, movie: layer.movie)
         }
         return ProjectSnapshot(manifest: ProjectManifest(resolution: document.resolution, documentID: document.id, width: document.width,
             height: document.height, activeLayerID: activeLayerID, layers: layers,
-            guides: document.guides.isEmpty ? nil : document.guides), images: images, masks: masks)
+            guides: document.guides.isEmpty ? nil : document.guides), images: images, masks: masks,
+            animations: animations)
     }
 
     /// Called only after the entire package has successfully validated and loaded.
     func installProject(_ snapshot: ProjectSnapshot, from url: URL) {
+        clearGIFTimeline()
         collapsedGroupIDs = []
         isMaskSelected = false
         cancelCrop()
@@ -29,6 +43,7 @@ extension EditorSession {
             layers: snapshot.documentLayers, resolution: manifest.resolution ?? 72, guides: manifest.guides ?? [])
         activeLayerID = manifest.activeLayerID
         projectURL = url
+        sourceImageURL = nil
         renamingLayerID = nil
         history.reset()
         viewport.fit(documentSize: document!.size)
@@ -54,6 +69,7 @@ extension EditorSession {
     }
 
     func clearProject() {
+        clearGIFTimeline()
         collapsedGroupIDs = []
         isMaskSelected = false
         cancelCrop()
@@ -63,13 +79,16 @@ extension EditorSession {
         activeLayerID = nil
         renamingLayerID = nil
         projectURL = nil
+        sourceImageURL = nil
         history.reset()
     }
 
-    func createNewProject(width: Int, height: Int, resolution: Double = 72, background: CGColor? = nil) {
-        guard !isProjectBusy, !isImporting, (1...DocumentLimits.maxSide).contains(width), (1...DocumentLimits.maxSide).contains(height) else { return }
+    @discardableResult
+    func createNewProject(width: Int, height: Int, resolution: Double = 72, background: CGColor? = nil) -> Bool {
+        guard !isProjectBusy, !isImporting, (1...DocumentLimits.maxSide).contains(width), (1...DocumentLimits.maxSide).contains(height) else { return false }
         clearProject()
         createDocument(width: width, height: height, emptyLayer: true, resolution: resolution, background: background)
+        return true
     }
 }
 
@@ -83,7 +102,8 @@ extension ProjectSnapshot {
                        isVisible: $0.isVisible, transform: $0.transform, parentID: $0.parentID, isGroup: $0.isGroup == true, opacity: $0.opacity ?? 1, blendMode: $0.blendMode ?? .normal, mask: mask(for: $0), maskSourceID: $0.maskSourceID, adjustment: $0.adjustment,
                        shape: LayerShape.loaded($0.shape, image: images[$0.id]?.image),
                        effects: $0.effects,
-                       text: LayerText.loaded($0.text, image: images[$0.id]?.image))
+                       text: LayerText.loaded($0.text, image: images[$0.id]?.image),
+                       gifAnimation: animations[$0.id], movie: $0.movie)
         }
     }
 }

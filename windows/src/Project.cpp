@@ -55,6 +55,18 @@ static QString canonicalId(const QJsonValue &v) {
     require(v.isString() && validId(v.toString()));
     return v.toString().toUpper();
 }
+static void rejectUnsupportedLayer(const QJsonObject &layer) {
+    // Reading just the preview PNG would lose the animation or movie on save.
+    const auto hasValue = [&](const char *field) {
+        const auto value = layer.value(field);
+        return !value.isUndefined() && !value.isNull();
+    };
+    if (hasValue("gif")) throw Error("unsupportedGifLayer");
+    if (hasValue("movie")) throw Error("unsupportedMovieLayer");
+    const auto stroke = layer.value("shape").toObject().value("strokeWidth");
+    if (!stroke.isUndefined() && !stroke.isNull())
+        throw Error("unsupportedShapeStroke");
+}
 QTransform Placement::matrix(QSize source) const {
     QTransform t;
     t.translate(origin.x() + size.width() / 2, origin.y() + size.height() / 2);
@@ -142,6 +154,7 @@ void validateState(const State &s) {
     QSet<QString> ids;
     qint64 pixels = 0, maskPixels = 0;
     for (const auto &l : s.layers) {
+        rejectUnsupportedLayer(l.metadata);
         require(validId(l.id) && !ids.contains(l.id) && !l.name.trimmed().isEmpty() && l.name.toUtf8().size() <= 16384);
         ids.insert(l.id);
         Placement::fromJson(l.placement.json());
@@ -271,6 +284,7 @@ LoadedProject readProject(const QString &directory) {
     for (const auto &entry : m["layers"].toArray()) {
         require(entry.isObject());
         const auto j = entry.toObject();
+        rejectUnsupportedLayer(j);
         Layer l;
         l.metadata = j;
         require(v >= 14 || !j["shape"].toObject()["smoothing"].toBool());

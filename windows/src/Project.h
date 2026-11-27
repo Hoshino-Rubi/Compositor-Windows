@@ -11,7 +11,7 @@
 namespace comp {
 struct ProjectManifest {
     static constexpr int current = 17;
-    static constexpr int readable = 17;
+    static constexpr int readable = 23;
     static constexpr int maskPrecisionVersion = 1;
     static constexpr int eightBit = 11;
 };

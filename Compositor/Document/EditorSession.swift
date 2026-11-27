@@ -1,10 +1,12 @@
 import SwiftUI
+import AVFoundation
 import UniformTypeIdentifiers
 
 struct ImageLayer: Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.isVisible == rhs.isVisible && lhs.transform == rhs.transform
             && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape && lhs.text == rhs.text && lhs.effects == rhs.effects
+            && lhs.gifAnimation == rhs.gifAnimation && lhs.movie == rhs.movie
     }
     let id: UUID
     var asset: ImportedImage?
@@ -18,6 +20,9 @@ struct ImageLayer: Identifiable, Equatable {
     var blendMode: LayerBlendMode = .normal
     var maskSourceID: UUID?
     var mask: LayerMask?
+    /// Masks scoped to frames in an imported GIF. The frames remain part of this one layer.
+    var movie: MovieLink?
+    var gifAnimation: GIFAnimation? = nil
     var adjustment: LayerAdjustment?
     /// Set on layers the Shape tool made; see `liveShape`.
     var shape: LayerShape?
@@ -40,7 +45,8 @@ struct ImageLayer: Identifiable, Equatable {
         self.name = name
     }
 
-    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil, effects: LayerEffects? = nil, text: LayerText? = nil) {
+    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil, effects: LayerEffects? = nil, text: LayerText? = nil, gifAnimation: GIFAnimation? = nil, movie: MovieLink? = nil) {
+        self.movie = movie
         self.id = id
         self.asset = asset
         self.name = name
@@ -51,6 +57,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.opacity = opacity
         self.blendMode = blendMode
         self.mask = mask
+        self.gifAnimation = gifAnimation
         self.maskSourceID = maskSourceID
         self.adjustment = adjustment
         self.shape = shape
@@ -95,14 +102,114 @@ enum NavigationTool: String, CaseIterable {
     var isBrushTool: Bool { self == .brush || self == .spotHealing || self == .cloneStamp || self == .blur }
     /// Tools that draw and edit selections, sharing modifiers, moving, and nudging.
     var isSelectionTool: Bool { self == .marquee || self == .lasso || self == .wand }
-    var symbol: String { self == .type ? "textformat" : self == .eyedropper ? "eyedropper" : self == .marquee ? "rectangle.dashed" : self == .lasso ? "lasso" : self == .wand ? "wand.and.stars" : self == .brush ? "paintbrush.pointed" : self == .spotHealing ? "bandage" : self == .cloneStamp ? "seal" : self == .blur ? "drop" : self == .gradient ? "square.bottomhalf.filled" : self == .shape ? "square.on.circle" : self == .crop ? "crop" : self == .move ? "arrow.up.left.and.arrow.down.right" : self == .hand ? "hand.draw" : "magnifyingglass" }
+    var symbol: String { self == .type ? "textformat" : self == .eyedropper ? "eyedropper" : self == .marquee ? "rectangle.dashed" : self == .lasso ? "lasso" : self == .wand ? "wand.and.stars" : self == .brush ? "paintbrush.pointed" : self == .spotHealing ? "bandage" : self == .cloneStamp ? "seal" : self == .blur ? "drop" : self == .gradient ? "square.bottomhalf.filled" : self == .shape ? "square.on.circle" : self == .crop ? "crop" : self == .move ? "arrow.up.left.and.arrow.down.right" : self == .hand ? "hand.raised" : "magnifyingglass" }
     var label: String { self == .type ? "Type (T)" : self == .eyedropper ? "Eyedropper (I)" : self == .marquee ? "Marquee (M)" : self == .lasso ? "Lasso (L)" : self == .wand ? "Magic (W) · Tab switches Wand and Object" : self == .brush ? "Brush (B) · Eraser (E)" : self == .spotHealing ? "Spot Healing Brush (J)" : self == .cloneStamp ? "Clone Stamp (S) · Option-click sets the source" : self == .blur ? "Smear (R)" : self == .gradient ? "Gradient (G)" : self == .shape ? "Shape (U) · Shift-U switches Rectangle/Ellipse" : self == .crop ? "Crop (C)" : self == .move ? "Move / Transform (V)" : self == .hand ? "Hand (H)" : "Zoom (Z)" }
+}
+
+private struct GIFLayerTimelineState {
+    // History owns deleted animations until Undo expires; previews must not retain their source bytes forever.
+    weak var source: GIFSource?
+    let geometry: GIFFrameGeometry?
+    var selectedFrameIndex: Int
+    var sourceFrameIndex: Int
+    var displayedAsset: ImportedImage?
+    var isPlaying = false
 }
 
 @Observable
 final class EditorSession {
     var skipsInitialClipboardCanvasSize = false
     var document: CanvasDocument?
+    /// Runtime animation data keyed by the imported layer, so switching layers restores that GIF's timeline.
+    private var gifTimelinesByLayerID: [UUID: GIFLayerTimelineState] = [:]
+    private func gifTimeline(for layer: ImageLayer) -> GIFLayerTimelineState? {
+        guard let animation = layer.gifAnimation else { return nil }
+        if let state = gifTimelinesByLayerID[layer.id],
+           state.source === animation.source, state.geometry == animation.geometry,
+           animation.sourceFrameIndex(for: state.selectedFrameIndex) == state.sourceFrameIndex { return state }
+        return GIFLayerTimelineState(source: animation.source, geometry: animation.geometry, selectedFrameIndex: animation.selectedFrameIndex,
+                                    sourceFrameIndex: animation.sourceFrameIndex(for: animation.selectedFrameIndex) ?? animation.selectedFrameIndex,
+                                    displayedAsset: layer.asset)
+    }
+    var gifTimelineLayerID: UUID? {
+        guard let layer = activeLayer, layer.gifAnimation?.source.frames.isEmpty == false else { return nil }
+        return layer.id
+    }
+    var gifTimelineFrames: [GIFTimelineFrame] {
+        guard let animation = activeLayer?.gifAnimation else { return [] }
+        return animation.frames.map { frame in
+            GIFTimelineFrame(index: frame.index, thumbnail: animation.framePixels[frame.index]?.thumbnail ?? frame.thumbnail,
+                             duration: frame.duration)
+        }
+    }
+    var gifTimelineTiming: GIFFrameTiming { activeLayer?.gifAnimation?.timing ?? GIFFrameTiming() }
+    var gifTimelineSelectedFrameIndex: Int {
+        activeLayer.flatMap { gifTimeline(for: $0)?.selectedFrameIndex } ?? 0
+    }
+    var gifTimelineCanEditFrames: Bool { canEditLayers && !gifTimelineIsLoadingFrame }
+    /// Timing belongs to the layer and does not depend on the frame being decoded.
+    var gifTimelineCanEditTiming: Bool { canEditLayers }
+    var gifTimelineIsPlaying: Bool {
+        activeLayer.flatMap { gifTimeline(for: $0)?.isPlaying } ?? false
+    }
+    var gifTimelineCanPlay: Bool { gifTimelineFrames.count > 1 }
+    private var isLoadingGIFFrame = false {
+        didSet {
+            if !isLoadingGIFFrame {
+                let waiters = projectWaiters
+                projectWaiters.removeAll()
+                for waiter in waiters { waiter.resume() }
+                resumeFileRequests()
+            }
+        }
+    }
+    /// Only timeline controls observe decoding, so they re-enable when it finishes without dimming shared controls.
+    var gifTimelineIsLoadingFrame: Bool { isLoadingGIFFrame }
+    @ObservationIgnored private var gifFrameSelectionRequestID: UUID?
+
+    /// Frame navigation stays in runtime state; pixel edits are immutable assets stored on the animation.
+    /// A shape color being chosen is drawn in place of the committed pixels and is not part of the saved document.
+    func displayedAsset(for layer: ImageLayer, onCanvas: Bool = false) -> ImportedImage? {
+        if onCanvas, let preview = moviePreview, preview.id == layer.id { return preview.frame }
+        let saved = savedAsset(for: layer)
+        if let preview = shapeColorPreview, preview.layerID == layer.id, let saved {
+            return ImportedImage(image: preview.image, thumbnail: saved.thumbnail, name: saved.name)
+        }
+        return saved
+    }
+
+    /// The asset a save writes: the committed layer, or a GIF frame, never a shape-color preview.
+    func savedAsset(for layer: ImageLayer) -> ImportedImage? {
+        guard let timeline = gifTimeline(for: layer) else { return layer.asset }
+        return layer.gifAnimation?.framePixels[timeline.selectedFrameIndex] ?? timeline.displayedAsset ?? layer.asset
+    }
+
+    func displayedLayer(for layer: ImageLayer, onCanvas: Bool = false) -> ImageLayer {
+        guard let asset = displayedAsset(for: layer, onCanvas: onCanvas), asset.image !== layer.asset?.image else { return layer }
+        var displayed = layer
+        displayed.asset = asset
+        return displayed
+    }
+
+    func selectedGIFFrameIndex(for layerID: UUID) -> Int? {
+        document?.layers.first(where: { $0.id == layerID }).flatMap { gifTimeline(for: $0)?.selectedFrameIndex }
+    }
+
+    /// The duplicate shares the clicked frame's raw preview, but owns a new pixel and mask edit target.
+    func selectDuplicatedGIFFrame(_ index: Int, for layer: ImageLayer) {
+        guard var timeline = gifTimeline(for: layer),
+              let sourceIndex = layer.gifAnimation?.sourceFrameIndex(for: index) else { return }
+        timeline.selectedFrameIndex = index
+        timeline.sourceFrameIndex = sourceIndex
+        gifTimelinesByLayerID[layer.id] = timeline
+    }
+
+    func currentGIFAnimation(for layer: ImageLayer) -> GIFAnimation? {
+        guard var animation = layer.gifAnimation else { return nil }
+        animation.selectedFrameIndex = gifTimeline(for: layer)?.selectedFrameIndex ?? animation.selectedFrameIndex
+        return animation
+    }
+
     var canvasFocusRequest = 0
     var showsSampleRing = true
     var adjustmentOriginal: LayerAdjustment?
@@ -113,6 +220,22 @@ final class EditorSession {
     var effectSelection: LayerEffectSelection?
     @ObservationIgnored var effectsPreviews = EffectsPreviewCache()
     var projectURL: URL?
+    /// The image file the document began as, opened or dropped into an empty window: until the document is saved as a
+    /// project, Export offers that file's name, folder and format, so editing a PNG and writing it back is quick.
+    @ObservationIgnored var sourceImageURL: URL?
+    /// Where the Layers panel is in its window (top-left origin): a layer dragged in the list stays in the list until
+    /// the pointer leaves the panel.
+    @ObservationIgnored var layersPanelFrame: CGRect = .zero
+    /// Where the panel's blend and opacity controls are, likewise: a row dragged up over them stays the list's, and
+    /// above them it leaves the list.
+    @ObservationIgnored var layerControlsFrame: CGRect = .zero
+    /// A layer drag is under way that may leave the list for the system's drag (above the panel's controls, or out of
+    /// the panel): set as the row is picked up, so the controls are ready to take it back for the list if it returns
+    /// over them (`LayerDropForwarder`), and cleared as it ends.
+    var layerDragIsOutside = false
+    /// The list, and the dragged row as it draws it, for `LayerDropForwarder`.
+    @ObservationIgnored weak var layerList: NSTableView?
+    @ObservationIgnored var layerDragImage: NSImage?
     /// Blocks overlapping edits immediately. Not observed by the UI: controls only dim via
     /// `showsBusy`, after an operation has run long enough to be worth showing, so quick
     /// edits (invert, fills, stroke commits) never flash the interface.
@@ -127,23 +250,28 @@ final class EditorSession {
             updateBusyIndicator()
         }
     }
-    /// True once `isProjectBusy` has lasted longer than `busyIndicatorDelay`.
-    private(set) var showsBusy = false
+    /// True once `isProjectBusy` has lasted longer than `busyIndicatorDelay`. Reading it also watches for a quicker
+    /// operation ending, which `isProjectBusy`, not observed, can't tell the UI: a menu drawn during a Magic Wand click
+    /// that selected what was already selected kept Deselect dimmed, with nothing after it to redraw the menu.
+    var showsBusy: Bool { _ = quickOperationsEnded; return busyShowing }
+    private var busyShowing = false
+    private var quickOperationsEnded = 0
     static let busyIndicatorDelay: Duration = .milliseconds(250)
     @ObservationIgnored private var busyIndicatorTask: Task<Void, Never>?
     private func updateBusyIndicator() {
         if isProjectBusy {
-            guard busyIndicatorTask == nil, !showsBusy else { return }
+            guard busyIndicatorTask == nil, !busyShowing else { return }
             busyIndicatorTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: Self.busyIndicatorDelay)
                 guard let self, !Task.isCancelled, self.isProjectBusy else { return }
-                self.showsBusy = true
+                self.busyShowing = true
                 self.busyIndicatorTask = nil
             }
         } else {
+            if busyIndicatorTask != nil { quickOperationsEnded += 1 }
             busyIndicatorTask?.cancel()
             busyIndicatorTask = nil
-            if showsBusy { showsBusy = false }
+            if busyShowing { busyShowing = false }
         }
     }
     private var projectWaiters: [CheckedContinuation<Void, Never>] = []
@@ -164,7 +292,7 @@ final class EditorSession {
         for waiter in waiters { waiter.resume() }
     }
     func waitForProjectAccess() async {
-        while isProjectBusy {
+        while isProjectBusy || isLoadingGIFFrame {
             await withCheckedContinuation { projectWaiters.append($0) }
         }
     }
@@ -182,6 +310,10 @@ final class EditorSession {
     @ObservationIgnored var distortEffectsCache: [UUID: DistortEffectsCache] = [:]
     /// Document positions a move has just snapped to, drawn as guides while it lasts.
     @ObservationIgnored var snapGuides: (xs: [CGFloat], ys: [CGFloat]) = ([], [])
+    /// Pixel gaps the Move tool shows while a layer is dragged, or with Command held over another layer.
+    @ObservationIgnored var distanceLines: [DistanceLine] = []
+    /// A Move tool resize or rotation in progress: the layer's size or angle, and where the pointer is, in document pixels.
+    @ObservationIgnored var resizeSize: (text: String, corner: CGPoint)?
     /// Crop, resize and selection moves follow View › Snap (⇧⌘;) too: they had a Snap item of their own, which left
     /// the View menu with two called Snap.
     var snappingEnabled: Bool {
@@ -196,6 +328,9 @@ final class EditorSession {
     @ObservationIgnored var brushPointer: CGPoint?
     /// The pen's latest pressure in this stroke; 1 for a mouse. Events that carry none (the release) keep it.
     @ObservationIgnored var brushPressure: CGFloat = 1
+    /// Every point the stroke in progress has been given, with its pressure, so it can be painted again from the start
+    /// (see `restartBrush`).
+    @ObservationIgnored var brushInput: [(point: CGPoint, pressure: CGFloat)] = []
     @ObservationIgnored var maskDistortPreviewCache: MaskDistortPreviewCache?
     /// The last rounded rectangle drawn for a transform in progress, by layer, with the size it was drawn at.
     @ObservationIgnored var shapeTransformPreviewCache: [UUID: (size: CGSize, image: CGImage)] = [:]
@@ -205,6 +340,9 @@ final class EditorSession {
     /// The Move tool's transform box and handles (⌘H). Hidden, a drag anywhere just moves the layer;
     /// a pending ⌘T transform still shows its box.
     var showsTransformControls = ToolDefaults.bool("transformControls", true) { didSet { ToolDefaults.set(showsTransformControls, "transformControls") } }
+    /// The selection whose outline ⌘H hid (outside the Move tool). It still limits painting and adjustments; any other
+    /// selection, or none, shows its outline again, so a new one is never invisible.
+    var hiddenSelectionEdges: DocumentSelection?
     /// The copies an Option-drag made, and what was selected before it, so Escape can take them away again.
     @ObservationIgnored var transformDuplicate: (copies: [UUID], source: Set<UUID>, primary: UUID?)?
     var brushSettings = BrushSettings() { didSet { refreshGradient() } }
@@ -247,6 +385,16 @@ final class EditorSession {
     /// A Line shape's dash pattern and the finish on its ends (and on each dash).
     var shapeLineStyle = ShapeLineStyle.solid
     var shapeLineCap = ShapeLineCap.square
+    /// The next rectangle or ellipse's inside stroke. 0 draws none, which is how every shape started.
+    var shapeStrokeWidth: Double = 0
+    var shapeStrokeColor = PaletteColor.black
+    /// A fill picked in the Shape bar, and the foreground color when it was: the next shape uses it until the
+    /// foreground changes. Otherwise the next shape is the foreground color.
+    var shapeFillChoice: (fill: PaletteColor, foreground: PaletteColor)?
+    /// The layer whose stroke or radius a drag is changing, so the drag is one undo step.
+    var shapeStyleEditLayerID: UUID?
+    /// The preview drawn while a shape's fill or stroke color is being chosen. Not part of the document or its history.
+    var shapeColorPreview: (layerID: UUID, image: CGImage)?
     /// The shape being dragged out with the Shape tool, before it becomes a layer.
     var shapeDraft: ShapeDraft?
     var selectionModeChoice = SelectionMode.replace
@@ -282,7 +430,6 @@ final class EditorSession {
     @ObservationIgnored var previewZoom: ((PreviewZoomCommand) -> Void)?
     /// The text's style before the font menu started previewing faces on it (see `previewFont`).
     @ObservationIgnored var fontPreviewOriginal: LayerTextStyle?
-    var selectionFeatherAmount = 2
     var wandSettings = WandSettings()
     var objectSelectionSettings = ObjectSelectionSettings()
     var showsPixelGrid = ToolDefaults.bool("pixelGrid", true) { didSet { ToolDefaults.set(showsPixelGrid, "pixelGrid") } }
@@ -315,8 +462,15 @@ final class EditorSession {
             ToolDefaults.set(gridAppearance.opacity, "gridOpacity")
         }
     }
-    /// User guides. Hidden extras do not snap.
-    var showsGuides = ToolDefaults.bool("guides", true) { didSet { ToolDefaults.set(showsGuides, "guides") } }
+    /// User guides, as View › Show › Guides (⌘;) and ⌘H leave them. Hidden guides do not snap. Turning them on, or making
+    /// a guide, also brings them back from ⌘H.
+    var showsGuides: Bool {
+        get { guidesOn && !extrasHideGuides }
+        set { guidesOn = newValue; extrasHideGuides = false }
+    }
+    private var guidesOn = ToolDefaults.bool("guides", true) { didSet { ToolDefaults.set(guidesOn, "guides") } }
+    /// ⌘H's hold on the guides, for the session only, so ⌘; keeps its own setting underneath.
+    var extrasHideGuides = false
     /// F: the canvas alone on black, filling the screen, with every panel and bar put away. F again brings them back.
     var canvasOnly = false
     /// Nothing in progress for Escape to cancel (a transform, crop, lasso, shape, gradient, stroke or text), so in
@@ -334,6 +488,13 @@ final class EditorSession {
             && selectionAmountOperation == nil
     }
     var showsRulers = ToolDefaults.bool("rulers", false) { didSet { ToolDefaults.set(showsRulers, "rulers") } }
+    /// View › Show › Distances: the Move tool's pixel gaps, while dragging and with Command held.
+    var showsDistances = ToolDefaults.bool("distances", false) {
+        didSet {
+            ToolDefaults.set(showsDistances, "distances")
+            if !showsDistances { distanceLines = [] }
+        }
+    }
     /// Master snap switch (View > Snap). On so today's layer/canvas snap keeps working.
     var snapEnabled = ToolDefaults.bool("snap", true) {
         didSet {
@@ -348,9 +509,8 @@ final class EditorSession {
     var snapToDocumentBounds = ToolDefaults.bool("snapBounds", true) { didSet { ToolDefaults.set(snapToDocumentBounds, "snapBounds") } }
     var locksGuides = ToolDefaults.bool("lockGuides", false) { didSet { ToolDefaults.set(locksGuides, "lockGuides") } }
     var guideDrag: GuideDrag?
-    /// Pixels the Expand / Contract buttons grow or shrink the selection by.
-    var selectionExpandAmount = 1
-    var selectionContractAmount = 1
+    /// Pixels the Expand, Contract and Feather buttons and commands change the selection by.
+    var selectionModifyAmount = 5
     @ObservationIgnored var pendingOpacityDigit: (digit: Int, time: TimeInterval)?
     var colorPicker: ColorPickerState?
     var brushError: String?
@@ -399,6 +559,7 @@ final class EditorSession {
         if id != activeLayerID { commitTransform(); resolveGradient() }
         activeLayerID = id
         revealActiveLayer()
+        if tool == .shape { adoptShapeKindFromSelection() }
     }
     func selectTool(_ value: NavigationTool) {
         if tool != value, !finishText() { return }
@@ -414,6 +575,7 @@ final class EditorSession {
             brushSettings = settings
         }
         tool = value
+        if value == .shape { adoptShapeKindFromSelection() }
         if value.isBrushTool { _ = MetalBrushCoverage.shared }
         if value == .crop, cropRect == nil, let document {
             cropRatioChoice = "Free"
@@ -462,7 +624,7 @@ final class EditorSession {
             return
         }
         // An unlinked mask, when selected, transforms on its own; linked, layer and mask move together.
-        let maskAlone = isMaskSelected && layer.mask?.isLinked == false
+        let maskAlone = isMaskSelected && selectedMask(for: layer)?.isLinked == false
         transformEdit = TransformEdit(layerID: layer.id, draft: maskAlone ? layer.maskTransform : layer.transform,
                                       persistent: persistent, mask: maskAlone)
     }
@@ -561,12 +723,12 @@ final class EditorSession {
         return layer.transform
     }
     /// Whether transforming places only the active layer's mask (an unlinked mask selected in the Layers panel).
-    var transformTargetsMask: Bool { transformEdit.map(\.mask) ?? (isMaskSelected && activeLayer?.mask?.isLinked == false) }
+    var transformTargetsMask: Bool { transformEdit.map(\.mask) ?? (isMaskSelected && activeLayer.flatMap { selectedMask(for: $0)?.isLinked } == false) }
     /// Where `layer`'s transform handles sit: the pending edit's draft — the layer's or its mask's — else the layer.
     func editedTransform(for layer: ImageLayer) -> LayerTransform {
         if transformEdit?.layerID == layer.id { return transformEdit!.draft }
         if transformEdit == nil, layer.id == activeLayerID, transformsAsGroup, let box = groupTransformBox { return box }
-        return layer.id == activeLayerID && transformTargetsMask ? layer.maskTransform : layer.transform
+        return layer.id == activeLayerID && transformTargetsMask ? (selectedMask(for: layer)?.placement ?? layer.transform) : layer.transform
     }
     /// A layer's transform under the pending edit: the draft for the edited layer, carried along with the box for
     /// each layer of a group; nil when the edit doesn't move it.
@@ -574,6 +736,14 @@ final class EditorSession {
         guard let edit = transformEdit, !edit.mask else { return nil }
         if let group = edit.group { return group.originals[layer.id].map { $0.following(from: group.box, to: edit.draft) } }
         return edit.layerID == layer.id ? edit.draft : nil
+    }
+    /// Option-arrow with the Move tool: a copy of the selected layers, moved by the arrow's step, as an Option-drag
+    /// makes, in one undo step.
+    func duplicateAndNudgeLayer(dx: CGFloat, dy: CGFloat) {
+        beginDuplicateTransform()
+        guard transformDuplicate != nil else { return }
+        nudgeLayer(dx: dx, dy: dy)
+        commitTransform()
     }
     func nudgeLayer(dx: CGFloat, dy: CGFloat) {
         let alreadyEditing = transformEdit != nil
@@ -636,14 +806,22 @@ final class EditorSession {
     var opacityEditLayerID: UUID?
     var blendPreview: (layerID: UUID, mode: LayerBlendMode)?
     @ObservationIgnored var refreshCanvasPreview: (() -> Void)?
-    var isMaskSelected = false { didSet { if !isMaskSelected { viewsMaskAlone = false } } }
+    var isMaskSelected = false {
+        didSet {
+            if !isMaskSelected {
+                viewsMaskAlone = false
+            }
+        }
+    }
     /// Option-click on a mask thumbnail: the canvas shows the targeted mask by itself, in grayscale, so it can be
     /// painted with nothing else in the way, as in Photoshop. Targeting the layer's pixels, or another layer, ends it.
     var viewsMaskAlone = false
     /// The layer whose mask the canvas is showing by itself; nil for the ordinary composite.
     var maskAloneLayer: ImageLayer? {
-        guard viewsMaskAlone, isMaskSelected, let layer = activeLayer, layer.mask != nil else { return nil }
-        return layer
+        guard viewsMaskAlone, isMaskSelected, let layer = activeLayer, let mask = selectedMask(for: layer) else { return nil }
+        var displayed = displayedLayer(for: layer)
+        displayed.mask = mask
+        return displayed
     }
     var selectedLayerIDs: Set<UUID> = []
     var activeLayerID: UUID? {
@@ -663,6 +841,8 @@ final class EditorSession {
     var canRedo: Bool { canUseHistory && history.canRedo }
 
     func undo() {
+        // A shape color that was only being previewed is not an edit, so it gets out of the way first.
+        cancelShapeColorPreview()
         // Like Photoshop, the first Undo discards a pending gradient.
         if gradientEdit != nil { cancelGradient(); return }
         guard canUndo, let snapshot = history.undo() else { return }
@@ -670,6 +850,7 @@ final class EditorSession {
     }
 
     func redo() {
+        cancelShapeColorPreview()
         guard canRedo, let snapshot = history.redo() else { return }
         restore(snapshot)
     }
@@ -691,8 +872,15 @@ final class EditorSession {
         history.begin(name, document: document, selection: activeLayerID)
     }
 
-    func endEdit() { history.end(document: document, selection: activeLayerID) }
+    func endEdit() {
+        if let before = history.endingEditBefore { keepLayerDepths(since: before) }
+        history.end(document: document, selection: activeLayerID)
+        gifTimelinesByLayerID = gifTimelinesByLayerID.filter { $0.value.source != nil }
+    }
     var activeLayer: ImageLayer? { document?.layers.first { $0.id == activeLayerID } }
+    func selectedMask(for layer: ImageLayer) -> LayerMask? {
+        layer.mask
+    }
     /// How the Layers panel looks: grayed for what lasts (a dialog, a pending transform, crop or gradient, a long
     /// operation), but not for what only lasts while the mouse is down (a stroke, a move or Auto Select drag, moving
     /// pixels) or for a moment's work, which flashed the whole panel gray for a frame. `canEditLayers` still blocks
@@ -703,23 +891,20 @@ final class EditorSession {
             && transformEdit?.persistent != true && cropRect == nil && gradientEdit == nil
             && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
     }
-    var canEditLayers: Bool {
+    var canEditLayers: Bool { transformEdit == nil && canEditLayersOnceTransformCommitted }
+    /// As `canEditLayers`, but for a command that commits a pending transform first, so a move in progress doesn't
+    /// stop it.
+    var canEditLayersOnceTransformCommitted: Bool {
         _ = showsBusy
-        return selectionAmountOperation == nil && colorRange == nil && textDraft == nil && document != nil && brushStroke == nil && warpStroke == nil && !isProjectBusy && !isImporting && !showsNewDocument && !showsImporter && renamingLayerID == nil && transformEdit == nil && cropRect == nil && gradientEdit == nil && pixelMove == nil && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
+        return selectionAmountOperation == nil && colorRange == nil && textDraft == nil && document != nil && brushStroke == nil && warpStroke == nil && !isProjectBusy && !isImporting && !showsNewDocument && !showsImporter && renamingLayerID == nil && cropRect == nil && gradientEdit == nil && pixelMove == nil && hueSaturation == nil && levels == nil && filterEdit == nil && adjustmentEditingID == nil
     }
 
-    func addBlankLayer() {
-        guard canEditLayers, let document else { return }
-        let names = Set(document.layers.map(\.name))
-        var number = 1
-        while names.contains("Layer \(number)") { number += 1 }
-        var layer = ImageLayer(name: "Layer \(number)", blankSize: document.size)
-        layer.parentID = activeLayer?.isGroup == true ? activeLayerID : activeLayer?.parentID
-        if let parent = layer.parentID { collapsedGroupIDs.remove(parent) }
-        var insertion = document.layers.firstIndex { $0.id == activeLayerID }.map { $0 + 1 } ?? document.layers.count
-        // With a folder selected the layer goes to the top of the folder: just above its last (topmost) contents.
+    /// Where a new layer goes in `layers`: just above the active layer, or with a folder selected, at the top of the
+    /// folder — just above its last (topmost) contents. With nothing active, on top.
+    func newLayerIndex(in layers: [ImageLayer]) -> Int {
+        var insertion = layers.firstIndex { $0.id == activeLayerID }.map { $0 + 1 } ?? layers.count
         if activeLayer?.isGroup == true, let folder = activeLayerID {
-            let parents = Dictionary(uniqueKeysWithValues: document.layers.map { ($0.id, $0.parentID) })
+            let parents = Dictionary(uniqueKeysWithValues: layers.map { ($0.id, $0.parentID) })
             func isInside(_ id: UUID) -> Bool {
                 var parent = parents[id] ?? nil
                 var steps = 0
@@ -730,11 +915,27 @@ final class EditorSession {
                 }
                 return false
             }
-            if let topmost = document.layers.lastIndex(where: { isInside($0.id) }) { insertion = max(insertion, topmost + 1) }
+            if let topmost = layers.lastIndex(where: { isInside($0.id) }) { insertion = max(insertion, topmost + 1) }
         }
+        return insertion
+    }
+
+    func addBlankLayer() {
+        guard canEditLayers, let document else { return }
+        let names = Set(document.layers.map(\.name))
+        var number = 1
+        while names.contains("Layer \(number)") { number += 1 }
+        var layer = ImageLayer(name: "Layer \(number)", blankSize: document.size)
+        layer.parentID = activeLayer?.isGroup == true ? activeLayerID : activeLayer?.parentID
+        if let parent = layer.parentID { collapsedGroupIDs.remove(parent) }
+        let insertion = newLayerIndex(in: document.layers)
+        var layers = document.layers
+        layers.insert(layer, at: insertion)
+        // Added in the middle of a clipping group, it joins the group.
+        Self.adoptClipping(layer.id, in: &layers)
         beginEdit("New Blank Layer")
         defer { endEdit() }
-        self.document?.layers.insert(layer, at: insertion)
+        self.document?.layers = layers
         activeLayerID = layer.id
     }
 
@@ -769,15 +970,55 @@ final class EditorSession {
 
     func toggleLayerVisibility(_ id: UUID) {
         guard canEditLayers, let index = document?.layers.firstIndex(where: { $0.id == id }) else { return }
+        if let stack = hiddenClippingStack(of: id) {
+            beginEdit("Show Layers")
+            defer { endEdit() }
+            for layer in stack { setVisibilityInSwipe(layer, visible: true) }
+            return
+        }
         beginEdit(document?.layers[index].isVisible == true ? "Hide Layer" : "Show Layer")
         defer { endEdit() }
         document?.layers[index].isVisible.toggle()
+    }
+
+    /// A clipped layer whose base is hidden doesn't show, whatever its own eye says; its eye shows the whole stack
+    /// again, as in Photoshop: the base and every layer clipped to it. Nil when `id` isn't such a layer.
+    func hiddenClippingStack(of id: UUID) -> [UUID]? {
+        guard let layers = document?.layers, let layer = layers.first(where: { $0.id == id }),
+              let base = layer.maskSourceID, let baseLayer = layers.first(where: { $0.id == base }),
+              baseLayer.parentID == layer.parentID, !baseLayer.isVisible else { return nil }
+        return [base] + layers.filter { $0.maskSourceID == base && $0.parentID == baseLayer.parentID }.map(\.id)
+    }
+
+    /// Hide Layer / Show Layer, from the menus: the selected layers all hidden, or with the active one hidden, all
+    /// shown, as one undo step.
+    func toggleSelectedLayersVisibility() {
+        guard canEditLayers, let active = activeLayer else { return }
+        let ids = selectedLayerIDs.union([active.id])
+        let visible = !active.isVisible
+        beginEdit(visibilityTitle)
+        defer { endEdit() }
+        guard let layers = document?.layers else { return }
+        document?.layers = layers.map { layer in
+            var layer = layer
+            if ids.contains(layer.id) { layer.isVisible = visible }
+            return layer
+        }
+    }
+    /// The menus' name for `toggleSelectedLayersVisibility`.
+    var visibilityTitle: String {
+        (activeLayer?.isVisible == false ? "Show " : "Hide ") + (selectedLayerIDs.count > 1 ? "Layers" : "Layer")
     }
 
     /// Photoshop's eye swipe: pressing an eye shows or hides that layer, and dragging over other eyes gives them the
     /// same state, all as one undo step (`beginEdit` at the press, `endEdit` when the button comes up).
     func beginVisibilitySwipe(_ id: UUID) -> Bool? {
         guard canEditLayers, let layer = document?.layers.first(where: { $0.id == id }) else { return nil }
+        if let stack = hiddenClippingStack(of: id) {
+            beginEdit("Show Layers")
+            for layer in stack { setVisibilityInSwipe(layer, visible: true) }
+            return true
+        }
         let visible = !layer.isVisible
         beginEdit(visible ? "Show Layer" : "Hide Layer")
         setVisibilityInSwipe(id, visible: visible)
@@ -816,6 +1057,9 @@ final class EditorSession {
         document?.layers.swapAt(a, b)
         endEdit()
     }
+    var moviePlayback: (id: UUID, player: AVPlayer)?
+    var moviePreview: (id: UUID, frame: ImportedImage)?
+
     private struct ImportRequest {
         let files: [(url: URL, scoped: Bool)]
         let point: CGPoint?
@@ -868,20 +1112,26 @@ final class EditorSession {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             // A CMYK file making a new document: its profile is kept and chosen, for proofing and for CMYK export when
             // it's asked for.
+            let type = UTType(filenameExtension: url.pathExtension)
+            let isMovie = type?.conforms(to: .quickTimeMovie) == true || type?.conforms(to: .mpeg4Movie) == true
             let startsDocument = document == nil
             var psdProfile: CMYKProfile?
             defer {
-                if startsDocument, document != nil, let profile = psdProfile ?? CMYK.profile(ofImageAt: url) {
-                    proofProfile = CMYK.adopt(profile)
+                if startsDocument, document != nil {
+                    if projectURL == nil { sourceImageURL = url }
+                    if !isMovie, let profile = psdProfile ?? CMYK.profile(ofImageAt: url) { proofProfile = CMYK.adopt(profile) }
                 }
             }
             do {
                 guard url.isFileURL else { throw ImageImportError.unsupported }
                 let usedPixels = document?.layers.reduce(0) { total, layer in
-                    guard let image = layer.asset?.image else { return total }
-                    return total + image.width * image.height
+                    total + (layer.asset.map { $0.image.width * $0.image.height } ?? 0)
+                        + (layer.gifAnimation?.framePixels.values.reduce(0) { $0 + $1.image.width * $1.image.height } ?? 0)
                 } ?? 0
-                if RawImporter.matches(url) {
+                if isMovie {
+                    let (movie, frame) = try await MovieFramePicker.open(url, remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
+                    insert(frame, centeredAt: point, movie: movie)
+                } else if RawImporter.matches(url) {
                     guard let size = RawImporter.pixelSize(url) else { throw ImageImportError.unreadable }
                     guard size.width <= DocumentLimits.maxSide, size.height <= DocumentLimits.maxSide,
                           size.width * size.height <= DocumentLimits.documentPixelBudget - usedPixels else { throw ImageImportError.tooLarge }
@@ -898,6 +1148,12 @@ final class EditorSession {
                     let asset = try await ImageImporter.shared.decodeSVG(url, fitting: document?.size,
                                                                          remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
                     insert(asset, centeredAt: point)
+                } else if UTType(filenameExtension: url.pathExtension)?.conforms(to: .gif) == true {
+                    let imported = try await ImageImporter.shared.importGIF(url, remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
+                    var candidate = ImageLayer(asset: imported.asset, origin: .zero)
+                    candidate.gifAnimation = imported.animation
+                    guard canRetainGIFSources(in: (document?.layers ?? []) + [candidate]) else { throw ImageImportError.tooLarge }
+                    insert(imported.asset, centeredAt: point, gifAnimation: imported.animation)
                 } else if UTType(filenameExtension: url.pathExtension)?.conforms(to: .pdf) == true {
                     // Every page, each its own layer with page 1 on top, fitted to the canvas. A new canvas is the
                     // first page at 300 DPI, so it keeps the page's print size.
@@ -960,7 +1216,7 @@ final class EditorSession {
         }
     }
 
-    func insert(_ asset: ImportedImage, centeredAt point: CGPoint? = nil) {
+    func insert(_ asset: ImportedImage, centeredAt point: CGPoint? = nil, gifAnimation: GIFAnimation? = nil, movie: MovieLink? = nil) {
         beginEdit("Import")
         defer { endEdit() }
         if document == nil {
@@ -972,12 +1228,82 @@ final class EditorSession {
         var layer = ImageLayer(asset: asset, origin: CGPoint(
             x: floor(center.x - CGFloat(asset.image.width) / 2),
             y: floor(center.y - CGFloat(asset.image.height) / 2)))
+        layer.gifAnimation = gifAnimation
+        layer.movie = movie
         layer.parentID = activeLayer?.isGroup == true ? activeLayerID : activeLayer?.parentID
         if let parent = layer.parentID { collapsedGroupIDs.remove(parent) }
         self.document?.layers.append(layer)
         activeLayerID = layer.id
     }
 
+    func clearGIFTimeline() {
+        gifTimelinesByLayerID.removeAll()
+        isLoadingGIFFrame = false
+        gifFrameSelectionRequestID = nil
+    }
+
+    func toggleGIFPlayback(for layerID: UUID) {
+        guard activeLayerID == layerID,
+              let layer = activeLayer,
+              var timeline = gifTimeline(for: layer), gifTimelineCanPlay || timeline.isPlaying else { return }
+        timeline.isPlaying.toggle()
+        gifTimelinesByLayerID[layerID] = timeline
+    }
+
+    func stopGIFPlayback(for layerID: UUID) {
+        guard var timeline = gifTimelinesByLayerID[layerID], timeline.isPlaying else { return }
+        timeline.isPlaying = false
+        gifTimelinesByLayerID[layerID] = timeline
+    }
+
+    func pauseGIFForEditing(for layerID: UUID) {
+        stopGIFPlayback(for: layerID)
+        guard activeLayerID == layerID, activeLayer?.gifAnimation != nil else { return }
+        // An in-flight playback decode must not change the target underneath a new stroke.
+        gifFrameSelectionRequestID = nil
+        isLoadingGIFFrame = false
+    }
+
+    func selectGIFTimelineFrame(_ index: Int) async {
+        guard let layerID = gifTimelineLayerID,
+              let layer = activeLayer, let animation = layer.gifAnimation, let timeline = gifTimeline(for: layer),
+              animation.containsFrame(index),
+              document?.layers.contains(where: { $0.id == layerID }) == true,
+              canEditLayers || isLoadingGIFFrame else { return }
+        guard index != timeline.selectedFrameIndex || isLoadingGIFFrame else { return }
+
+        let requestID = UUID()
+        gifFrameSelectionRequestID = requestID
+        isLoadingGIFFrame = true
+        defer {
+            if gifFrameSelectionRequestID == requestID {
+                isLoadingGIFFrame = false
+                gifFrameSelectionRequestID = nil
+            }
+        }
+
+        do {
+            // Cache the source pixels separately so undoing an edit can reveal the original frame.
+            var sourceAnimation = animation
+            sourceAnimation.framePixels = [:]
+            let asset = try await ImageImporter.shared.decodeGIFFrame(sourceAnimation, index: index, name: layer.name)
+            guard !Task.isCancelled, gifFrameSelectionRequestID == requestID,
+                  let currentLayer = document?.layers.first(where: { $0.id == layerID }),
+                  var currentTimeline = gifTimeline(for: currentLayer),
+                  currentLayer.gifAnimation?.sourceFrameIndex(for: index) == animation.sourceFrameIndex(for: index),
+                  currentTimeline.source === animation.source, currentTimeline.geometry == animation.geometry else { return }
+            currentTimeline.selectedFrameIndex = index
+            currentTimeline.sourceFrameIndex = animation.sourceFrameIndex(for: index) ?? index
+            currentTimeline.displayedAsset = asset
+            gifTimelinesByLayerID[layerID] = currentTimeline
+            refreshCanvasPreview?()
+        } catch {
+            guard gifFrameSelectionRequestID == requestID else { return }
+            importError = "Couldn’t read GIF frame \(index + 1): \(error.localizedDescription)"
+        }
+    }
+
+    /// The UI task owns playback's lifetime. Only per-layer runtime previews change, together after decoding.
     /// Puts the sheet up before the file is read, so a big PSD doesn't leave the click unanswered.
     /// `finishPSDReading` fills it in, or takes it away when there is nothing to report.
     func beginPSDReading(title: String, confirmTitle: String) {
@@ -1026,6 +1352,12 @@ final class EditorSession {
     /// Opens each artboard of a Photoshop file as a document of its own; set by the workspace, which makes the tabs.
     /// Without it (no workspace), a file with artboards imports as one canvas, as one without them does.
     @ObservationIgnored var opensArtboard: ((PSDDocument, String) async -> Void)?
+    /// The layer list's Export Layers as PNGs…; set by the project controller, which shows the panels.
+    @ObservationIgnored var exportsLayers: (() async -> Void)?
+    /// While Volumetric Light's depth model is downloading or loading, the first time it's used (`DepthModel`).
+    var preparingDepth = false
+    /// Set while Convert to 8-Bit ends its edit, so `keepLayerDepths` lets it make 16-bit layers 8-bit.
+    @ObservationIgnored var convertsToEightBit = false
 
     /// One Photoshop artboard's layers as this tab's document, after the conversion report when there's anything in it.
     func importArtboard(_ parsed: PSDDocument, named name: String) async {
@@ -1095,6 +1427,7 @@ final class EditorSession {
         var document = CanvasDocument(width: width, height: height, resolution: (1...9600).contains(resolution) ? resolution : 72)
         let layer = emptyLayer ? Self.firstLayer(size: document.size, background: background) : nil
         if let layer { document.layers = [layer] }
+        clearGIFTimeline()
         self.document = document
         activeLayerID = layer?.id
         renamingLayerID = nil

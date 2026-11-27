@@ -3,19 +3,14 @@
   <channel>
     <title>Compositor</title>
     <item>
-      <title>Version 1.5.5</title>
-      <pubDate>Wed, 21 Oct 2026 22:09:13 +0000</pubDate>
-      <sparkle:version>51</sparkle:version>
-      <sparkle:shortVersionString>1.5.5</sparkle:shortVersionString>
+      <title>Version 1.7.4</title>
+      <pubDate>Thu, 26 Nov 2026 20:00:12 +0000</pubDate>
+      <sparkle:version>79</sparkle:version>
+      <sparkle:shortVersionString>1.7.4</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
-      <link>https://github.com/robbietilton/Compositor/releases/tag/v1.5.5</link>
-      <changes><![CDATA[Filter › RGB Split: rainbow dispersion, linear or radial, with blur streaks.
-Progressive Blur, Bloom / Glow and RGB Split as adjustment layers.
-Export As › Channel Pack packs layers into a PNG's red, green, blue and alpha, for game textures.
-Photoshop artboards each open in a tab of their own.
-Copy and paste work in file names when saving, and shortcuts work on non-Latin keyboards.
-Image Size keeps the zoom, and small images open at 100%.]]></changes>
-      <enclosure url="https://github.com/robbietilton/Compositor/releases/download/v1.5.5/Compositor.dmg" sparkle:edSignature="TGExBpK96Swny/lx2IICL1Kq8WyJFc8z48JlLL9CEklE79plJVxcYBAvhmrNu3Ermm2i2ddgmHSdCtfV8yjaAQ==" length="8330075" type="application/octet-stream"/>
+      <link>https://github.com/robbietilton/Compositor/releases/tag/v1.7.4</link>
+      <changes><![CDATA[Video layers: Smoother HDR playback and more consistent colors when playing, scrubbing, and pausing.]]></changes>
+      <enclosure url="https://github.com/robbietilton/Compositor/releases/download/v1.7.4/Compositor.dmg" sparkle:edSignature="ne+r6+qEggB3aps5t+AgWSOMP+tVd8JRBkx3bRymPS1HoiedNMz5b2P7LCBKhEpqLvEvFKwSlqjYDoael1arAA==" length="9035263" type="application/octet-stream"/>
     </item>
   </channel>
 </rss>

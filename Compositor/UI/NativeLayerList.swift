@@ -16,6 +16,8 @@ struct NativeLayerList: NSViewRepresentable {
         table.intercellSpacing = NSSize(width: 0, height: 2)
         table.allowsMultipleSelection = true
         table.allowsEmptySelection = true
+        // Letters are the tools' and the menus' keys here as on the canvas, never typing to jump to a layer's name.
+        table.allowsTypeSelect = false
         table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("layer"))
         column.width = 252
@@ -56,6 +58,7 @@ struct NativeLayerList: NSViewRepresentable {
         init(session: EditorSession) { self.session = session }
 
         func update(_ table: NSTableView) {
+            session.layerList = table
             let selectionChanged = activeLayerID != session.activeLayerID
             activeLayerID = session.activeLayerID
             // The panel's search and type filter narrow what is listed; every row index below is one of these.
@@ -138,7 +141,7 @@ struct NativeLayerList: NSViewRepresentable {
 
             // 3. Delete Layer / Delete Selected Layers
             let deleteTitle: String
-            if session.isMaskSelected && session.activeLayer?.mask != nil {
+            if session.isMaskSelected, let layer = session.activeLayer, session.selectedMask(for: layer) != nil {
                 deleteTitle = "Delete Mask"
             } else if session.selectedLayerIDs.count > 1 {
                 deleteTitle = "Delete Selected Layers"
@@ -153,8 +156,7 @@ struct NativeLayerList: NSViewRepresentable {
             menu.addItem(NSMenuItem.separator())
 
             // 4. Create Clipping Mask / Release Clipping Mask
-            let clippingTitle = session.activeLayer?.maskSourceID != nil ? "Release Clipping Mask" : "Create Clipping Mask"
-            let clippingItem = NSMenuItem(title: clippingTitle, action: #selector(toggleClippingMaskAction), keyEquivalent: "")
+            let clippingItem = NSMenuItem(title: session.selectedClippingTitle, action: #selector(toggleClippingMaskAction), keyEquivalent: "")
             clippingItem.target = self
             clippingItem.isEnabled = validateMenuItem(clippingItem)
             menu.addItem(clippingItem)
@@ -185,19 +187,21 @@ struct NativeLayerList: NSViewRepresentable {
             mergeItem.isEnabled = validateMenuItem(mergeItem)
             menu.addItem(mergeItem)
 
-            // 7b. Convert to 16-Bit / Convert to 8-Bit
-            let depthTitle = session.activeLayer?.asset?.deep == nil ? "Convert to 16-Bit" : "Convert to 8-Bit"
-            let depthItem = NSMenuItem(title: depthTitle, action: #selector(convertDepthAction), keyEquivalent: "")
-            depthItem.target = self
-            depthItem.isEnabled = validateMenuItem(depthItem)
-            // An HDR layer can go to 16 bits as well as to 8.
-            if session.activeLayer?.asset?.isHDR == true {
-                let sixteenItem = NSMenuItem(title: "Convert to 16-Bit", action: #selector(convertHDRToSixteenAction), keyEquivalent: "")
+            // 7b. Convert to 16-Bit / Convert to 8-Bit: whichever would change a selected layer, both for a mix (an HDR
+            // layer can go to 16 bits as well as to 8). Shown, greyed, for layers neither applies to.
+            let sixteen = session.canConvertToSixteenBit, eight = session.canConvertToEightBit
+            if sixteen || !eight {
+                let sixteenItem = NSMenuItem(title: "Convert to 16-Bit", action: #selector(convertToSixteenBitAction), keyEquivalent: "")
                 sixteenItem.target = self
                 sixteenItem.isEnabled = validateMenuItem(sixteenItem)
                 menu.addItem(sixteenItem)
             }
-            menu.addItem(depthItem)
+            if eight {
+                let eightItem = NSMenuItem(title: "Convert to 8-Bit", action: #selector(convertToEightBitAction), keyEquivalent: "")
+                eightItem.target = self
+                eightItem.isEnabled = validateMenuItem(eightItem)
+                menu.addItem(eightItem)
+            }
 
             menu.addItem(NSMenuItem.separator())
 
@@ -238,12 +242,20 @@ struct NativeLayerList: NSViewRepresentable {
 
             menu.addItem(NSMenuItem.separator())
 
-            // 12. Hide Layer / Show Layer
-            let visibilityTitle = session.activeLayer?.isVisible == false ? "Show Layer" : "Hide Layer"
-            let visibilityItem = NSMenuItem(title: visibilityTitle, action: #selector(toggleVisibilityAction), keyEquivalent: "")
+            // 12. Hide Layer / Show Layer, or Layers with several selected
+            let visibilityItem = NSMenuItem(title: session.visibilityTitle, action: #selector(toggleVisibilityAction), keyEquivalent: "")
             visibilityItem.target = self
             visibilityItem.isEnabled = validateMenuItem(visibilityItem)
             menu.addItem(visibilityItem)
+
+            menu.addItem(NSMenuItem.separator())
+
+            // 13. Export Layer as PNG… / Export Layers as PNGs…
+            let exportTitle = session.selectedLayerIDs.count > 1 ? "Export Layers as PNGs…" : "Export Layer as PNG…"
+            let exportItem = NSMenuItem(title: exportTitle, action: #selector(exportLayersAction), keyEquivalent: "")
+            exportItem.target = self
+            exportItem.isEnabled = validateMenuItem(exportItem)
+            menu.addItem(exportItem)
 
             return menu
         }
@@ -257,7 +269,7 @@ struct NativeLayerList: NSViewRepresentable {
             case #selector(deleteLayerAction):
                 return session.canEditLayers && session.activeLayer != nil
             case #selector(toggleClippingMaskAction):
-                return session.activeLayerID.map { session.canToggleClippingMask($0) } ?? false
+                return session.canToggleSelectedClipping
             case #selector(groupSelectedLayersAction):
                 return session.canEditLayers && session.document != nil && (session.document?.layers.count ?? 0) < 10_000 && !session.selectedLayerIDs.isEmpty
             case #selector(ungroupLayersAction):
@@ -266,8 +278,10 @@ struct NativeLayerList: NSViewRepresentable {
                 return session.canEditLayers && session.activeLayer?.parentID != nil
             case #selector(mergeLayersAction):
                 return session.canMergeLayers
-            case #selector(convertDepthAction), #selector(convertHDRToSixteenAction):
-                return session.canConvertLayerDepth
+            case #selector(convertToSixteenBitAction):
+                return session.canConvertToSixteenBit
+            case #selector(convertToEightBitAction):
+                return session.canConvertToEightBit
             case #selector(addWhiteMaskAction), #selector(addBlackMaskAction):
                 return session.canEditMask && session.activeLayer?.mask == nil
             case #selector(toggleMaskAction):
@@ -278,12 +292,19 @@ struct NativeLayerList: NSViewRepresentable {
                 return session.canEditLayers && session.activeLayer?.mask != nil && session.activeLayer?.isGroup == false && session.activeLayer?.adjustment == nil
             case #selector(toggleVisibilityAction):
                 return session.canEditLayers && session.activeLayer != nil
+            case #selector(exportLayersAction):
+                return session.canStartProjectOperation && session.activeLayer != nil && session.exportsLayers != nil
             default:
                 if menuItem.submenu != nil && menuItem.title == "Add Mask" {
                     return session.canEditMask && session.activeLayer?.mask == nil
                 }
                 return true
             }
+        }
+
+        @objc func exportLayersAction(_ sender: Any?) {
+            guard let export = session.exportsLayers else { return }
+            Task { await export() }
         }
 
         @objc func duplicateLayerAction(_ sender: Any?) {
@@ -300,7 +321,7 @@ struct NativeLayerList: NSViewRepresentable {
         }
 
         @objc func toggleClippingMaskAction(_ sender: Any?) {
-            if let id = session.activeLayerID { session.toggleClippingMask(id) }
+            session.toggleSelectedClipping()
         }
 
         @objc func groupSelectedLayersAction(_ sender: Any?) {
@@ -319,12 +340,12 @@ struct NativeLayerList: NSViewRepresentable {
             session.mergeLayers()
         }
 
-        @objc func convertDepthAction(_ sender: Any?) {
-            session.convertLayerDepth()
+        @objc func convertToSixteenBitAction(_ sender: Any?) {
+            session.convertLayers(toSixteenBit: true)
         }
 
-        @objc func convertHDRToSixteenAction(_ sender: Any?) {
-            session.convertHDRToSixteenBit()
+        @objc func convertToEightBitAction(_ sender: Any?) {
+            session.convertLayers(toSixteenBit: false)
         }
 
         @objc func addWhiteMaskAction(_ sender: Any?) {
@@ -356,8 +377,7 @@ struct NativeLayerList: NSViewRepresentable {
         }
 
         @objc func toggleVisibilityAction(_ sender: Any?) {
-            guard let id = session.activeLayerID else { return }
-            session.toggleLayerVisibility(id)
+            session.toggleSelectedLayersVisibility()
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -410,6 +430,26 @@ struct NativeLayerList: NSViewRepresentable {
             item.setString(rows[row].id.uuidString, forType: Self.layerType)
             return item
         }
+        /// The dragged rows are drawn at half strength, so the list shows through them as they move.
+        func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint,
+                       forRowIndexes rowIndexes: IndexSet) {
+            session.enumerateDraggingItems(options: [], for: tableView, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
+                let frame = item.draggingFrame
+                guard let components = item.imageComponents, !components.isEmpty, frame.width > 0, frame.height > 0 else { return }
+                let image = NSImage(size: frame.size, flipped: false) { _ in
+                    for component in components {
+                        let contents: NSImage?
+                        if let image = component.contents as? NSImage { contents = image }
+                        else if let raw = component.contents, CFGetTypeID(raw as CFTypeRef) == CGImage.typeID {
+                            contents = NSImage(cgImage: raw as! CGImage, size: component.frame.size)
+                        } else { contents = nil }
+                        contents?.draw(in: component.frame, from: .zero, operation: .sourceOver, fraction: 0.5)
+                    }
+                    return true
+                }
+                item.setDraggingFrame(frame, contents: image)
+            }
+        }
         func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo,
                        proposedRow row: Int, proposedDropOperation operation: NSTableView.DropOperation) -> NSDragOperation {
             if let source = info.draggingSource as? LayerEffectRow {
@@ -426,7 +466,7 @@ struct NativeLayerList: NSViewRepresentable {
                 tableView.setDropRow(target, dropOperation: .on)
                 return .copy
             }
-            guard session.canEditLayers, info.draggingSource as? NSTableView === tableView,
+            guard session.canEditLayers, Self.isOwnRowDrag(info, of: tableView),
                   (0...rows.count).contains(row) else { return [] }
             let ids = draggedLayers(info)
             guard !ids.isEmpty else { return [] }
@@ -451,7 +491,7 @@ struct NativeLayerList: NSViewRepresentable {
                 session.copyMask(from: source, to: rows[row].id)
                 return true
             }
-            guard info.draggingSource as? NSTableView === tableView else { return false }
+            guard Self.isOwnRowDrag(info, of: tableView) else { return false }
             let ids = draggedLayers(info)
             guard !ids.isEmpty else { return false }
             let copying = info.draggingSourceOperationMask == .copy
@@ -468,13 +508,16 @@ struct NativeLayerList: NSViewRepresentable {
             guard (0...rows.count).contains(row) else { return false }
             return place([id], at: row, intoFolder: false, copying: false)
         }
-        private func place(_ ids: [UUID], at row: Int, intoFolder: Bool, copying: Bool) -> Bool {
+        private func place(_ ids: [UUID], at row: Int, intoFolder: Bool, bottomOf folder: UUID? = nil,
+                           clippedTo base: UUID? = nil, unclipped: Bool = false, copying: Bool) -> Bool {
             // Where the drop lands is worked out once: each layer placed shifts the rows beneath it.
             // The filtered rows, so a drop's indexes mean the rows the panel is showing.
             let current = session.filteredLayerRows
             let parent: UUID?, above: UUID?, atBottom: Bool
             if intoFolder {
                 parent = rows[row].id; above = nil; atBottom = false
+            } else if let folder {
+                parent = folder; above = nil; atBottom = true
             } else if row >= current.count {
                 parent = nil; above = nil; atBottom = true
             } else {
@@ -487,15 +530,50 @@ struct NativeLayerList: NSViewRepresentable {
             session.beginEdit(copying ? (ids.count > 1 ? "Duplicate Layers" : "Duplicate Layer")
                                       : (ids.count > 1 ? "Move Layers" : "Move Layer"))
             var placed = false
+            var landed: [UUID] = []
+            var copiesOf: [UUID: UUID] = [:]
             for id in order {
                 let done = copying ? session.duplicateLayer(id, in: parent, above: above, atBottom: atBottom)
                                    : session.placeLayer(id, in: parent, above: above, atBottom: atBottom)
                 placed = done || placed
+                if done, let copy = copying ? session.activeLayerID : id {
+                    landed.append(copy)
+                    if copying { copiesOf[id] = copy }
+                }
             }
+            // Over the top of a clipping group, the drop said which side: joining the group, or above it, unclipped.
+            if placed, base != nil || unclipped {
+                for id in landed {
+                    guard let index = session.document?.layers.firstIndex(where: { $0.id == id }),
+                          session.document?.layers[index].isGroup == false else { continue }
+                    session.document?.layers[index].maskSourceID = base
+                }
+            }
+            // A base copied with its clipped layers stays their base, wherever the copies land.
+            if placed, copying { session.relinkCopiedClipping(copiesOf) }
             // The layers that moved stay selected, so they can be dragged on as a group.
             if placed, !copying { session.selectLayers(Set(ids), primary: ids.first) }
             session.endEdit()
             return placed
+        }
+        /// A drag of this list's own rows: started by the list, or carried on outside it by `LayerRowDragSource`.
+        static func isOwnRowDrag(_ info: NSDraggingInfo, of table: NSTableView) -> Bool {
+            if let list = info.draggingSource as? NSTableView { return list === table }
+            return (info.draggingSource as? LayerRowDragSource)?.table === table
+        }
+        /// Whether `ids` may go above `row`, or into it when it's a folder: what `validateDrop` allows.
+        func canDrop(_ ids: [UUID], at row: Int, intoFolder: Bool, bottomOf folder: UUID? = nil) -> Bool {
+            guard session.canEditLayers, !ids.isEmpty, (0...rows.count).contains(row) else { return false }
+            if intoFolder, !(rows.indices.contains(row) && rows[row].isGroup) { return false }
+            let parent = intoFolder ? rows[row].id : folder ?? (rows.indices.contains(row) ? rows[row].parentID : nil)
+            return ids.allSatisfy { session.canPlaceLayer($0, in: parent) }
+        }
+        /// Moves (or copies) `ids` to `row`, as a drop there would.
+        @discardableResult func drop(_ ids: [UUID], at row: Int, intoFolder: Bool, bottomOf folder: UUID? = nil,
+                                     clippedTo base: UUID? = nil, unclipped: Bool = false, copying: Bool) -> Bool {
+            guard canDrop(ids, at: row, intoFolder: intoFolder, bottomOf: folder) else { return false }
+            return place(ids, at: row, intoFolder: intoFolder, bottomOf: folder, clippedTo: base, unclipped: unclipped,
+                         copying: copying)
         }
         private func draggedMask(_ info: NSDraggingInfo) -> UUID? {
             info.draggingPasteboard.string(forType: Self.maskType).flatMap(UUID.init(uuidString:))
@@ -729,8 +807,16 @@ final class LayerTableView: NSTableView {
         return nil
     }
     override func mouseEntered(with event: NSEvent) { refreshClippingCursor(event.modifierFlags, at: event.locationInWindow) }
-    override func mouseMoved(with event: NSEvent) { refreshClippingCursor(event.modifierFlags, at: event.locationInWindow) }
-    override func cursorUpdate(with event: NSEvent) { refreshClippingCursor(event.modifierFlags, at: event.locationInWindow) }
+    override func mouseMoved(with event: NSEvent) { refreshCursorAfterMove(event) }
+    override func cursorUpdate(with event: NSEvent) { refreshCursorAfterMove(event) }
+    /// The panel around the list puts its own arrow back as the pointer moves, after the list has set its cursor, which
+    /// lost the duplicate cursor the moment Option-held hovering moved at all. So with Option held the list sets it
+    /// again once this event is through, as it does for a modifier change.
+    private func refreshCursorAfterMove(_ event: NSEvent) {
+        refreshClippingCursor(event.modifierFlags, at: event.locationInWindow)
+        guard event.modifierFlags.contains(.option) else { return }
+        DispatchQueue.main.async { [weak self] in self?.refreshClippingCursor(NSEvent.modifierFlags) }
+    }
     override func mouseExited(with event: NSEvent) {
         // Reloading rows (after a brush stroke, say) rebuilds the tracking areas, which sends an exit even though
         // the pointer never left: taking the cursor back then makes it flicker. Only a real exit resets it.
@@ -766,11 +852,16 @@ final class LayerTableView: NSTableView {
         let point = convert(event.locationInWindow, from: nil)
         let row = row(at: point)
         // Handle clipping before effect selection: effects occupy the lower portion of taller rows.
+        // A press that drags from there is still an Option-drag, a copy: only a click clips. Taken at once, a duplicate
+        // dragged from low on its row did nothing but clip.
         if event.modifierFlags.contains(.option), !event.modifierFlags.contains(.command), isClippingZone(point, row: row),
            thumbnail(at: point)?.isMaskTarget != true, displayedRows.indices.contains(row) {
             session?.effectSelection = nil
-            session?.toggleClippingMask(displayedRows[row].id)
-            refreshClippingCursor(event.modifierFlags)
+            let id = displayedRows[row].id
+            trackRowPress(event) { [weak self] in
+                self?.session?.toggleClippingMask(id)
+                self?.refreshClippingCursor(event.modifierFlags)
+            }
             return
         }
         if row >= 0, let cell = view(atColumn: 0, row: row, makeIfNecessary: false) as? LayerCell,
@@ -786,7 +877,336 @@ final class LayerTableView: NSTableView {
             window?.makeFirstResponder(self)
             displayIfNeeded()
         }
-        super.mouseDown(with: event)
+        trackRowPress(event)
+    }
+
+    // MARK: Dragging rows, drawn by the list itself, as Photoshop does
+
+    /// The source of a row drag carried on outside the list, kept while it lasts.
+    fileprivate var outsideDragSource: LayerRowDragSource?
+    /// Each step of a row drag, for tests: the picked-up row's picture and where a release would land.
+    static var rowDragStepForTesting: ((LayerTableView, NSView, DropTarget?) -> Void)?
+    /// How each row drag ended, for tests: "up", "late up", "no up".
+    static var rowDragEndForTesting: ((String) -> Void)?
+    /// Takes over from the list's own drag once the pointer leaves the Layers panel; tests swap it to watch.
+    var beginsOutsideDrag: (LayerTableView, [UUID], NSImage?, NSRect, NSEvent) -> Void = { table, ids, image, frame, event in
+        table.beginSystemDrag(ids: ids, image: image, frame: frame, event: event)
+    }
+
+    /// A press on a row: a click is the list's own, as before; a drag moves the rows within the list, and over the
+    /// blend and opacity controls too, where a release puts them first, until the pointer leaves the Layers panel or
+    /// rises above those controls, when it becomes an ordinary drag, to copy into another tab or onto the canvas. The
+    /// system's own drag, used before, left the list the moment the pointer did.
+    /// `click`, when given, is what a press that doesn't drag does, in place of the list's own click.
+    private func trackRowPress(_ down: NSEvent, click: (() -> Void)? = nil) {
+        let start = convert(down.locationInWindow, from: nil)
+        let pressed = row(at: start)
+        guard let window, let session, session.canEditLayers, displayedRows.indices.contains(pressed),
+              down.modifierFlags.intersection([.command, .shift]).isEmpty, down.clickCount == 1 else {
+            if let click { click() } else { super.mouseDown(with: down) }
+            return
+        }
+        while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if event.type == .leftMouseUp {
+                if let click { click(); return }
+                // A click: handed back, so the list takes it as it always has.
+                window.postEvent(event, atStart: true)
+                super.mouseDown(with: down)
+                return
+            }
+            let point = convert(event.locationInWindow, from: nil)
+            if hypot(point.x - start.x, point.y - start.y) >= 4 {
+                dragRows(pressed: pressed, start: start, event: event)
+                return
+            }
+        }
+    }
+
+    /// The rows a drag from `pressed` carries: the selection when it's one of them, otherwise just that row, in list
+    /// order, leaving out anything inside a dragged folder, which the folder brings along.
+    private func draggedIDs(pressed: Int) -> [UUID] {
+        let rows = displayedRows
+        let indexes = selectedRowIndexes.contains(pressed) ? selectedRowIndexes : IndexSet(integer: pressed)
+        let picked = indexes.compactMap { rows.indices.contains($0) ? rows[$0].id : nil }
+        guard let session else { return picked }
+        let carried = picked.reduce(into: Set<UUID>()) { $0.formUnion(session.descendantIDs(of: $1)) }
+        return picked.filter { !carried.contains($0) }
+    }
+
+    /// Where a dragged row would land: above `row` (or below the last row), into the folder at `row`, or, in the gap
+    /// under a folder's last layer, at the bottom of that folder, `bottomOf`. In the gap over the top of a clipping
+    /// group the drop says which side it's on: `clippedTo` the group's base, joining it, or `unclipped`, above it.
+    struct DropTarget: Equatable {
+        var row: Int
+        var intoFolder = false
+        var bottomOf: UUID?
+        var clippedTo: UUID?
+        var unclipped = false
+    }
+
+    /// Where a release at `y` (list coordinates) of `ids` lands: above a row, past the last, or into a folder over its
+    /// middle.
+    private func dropTarget(at y: CGFloat, for ids: [UUID]) -> DropTarget {
+        let rows = displayedRows
+        guard !rows.isEmpty else { return DropTarget(row: 0) }
+        if y < rect(ofRow: 0).minY { return DropTarget(row: 0, unclipped: rows[0].maskSourceID != nil) }
+        let index = row(at: NSPoint(x: 1, y: y))
+        if index >= 0 {
+            let frame = rect(ofRow: index)
+            if rows[index].isGroup, abs(y - frame.midY) < frame.height / 4 { return DropTarget(row: index, intoFolder: true) }
+        }
+        let gap = index < 0 ? rows.count : (y < rect(ofRow: index).midY ? index : index + 1)
+        return choice(at: gap, y: y, for: ids)
+    }
+
+    /// One way a gap between rows can be taken, from the top of the gap down.
+    private enum GapChoice { case bottomOf(UUID), beside, clippedTo(UUID) }
+
+    /// Some gaps can be taken more than one way, and there the gap is split by height, as in Photoshop, each choice
+    /// nearer the row it goes with:
+    /// - under a folder's last layer, with the next row outside the folder: nearer the layer, the bottom of the folder
+    ///   (the innermost first, when the layer closes several); nearer the next row, beside the folder.
+    /// - over the top of a clipping group: nearer the row above, unclipped above the group; nearer the group, clipped
+    ///   to its base along with the rest.
+    private func choice(at gap: Int, y: CGFloat, for ids: [UUID]) -> DropTarget {
+        let rows = displayedRows
+        let byID = Dictionary(rows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var choices: [GapChoice] = []
+        let outer = rows.indices.contains(gap) ? rows[gap].parentID : nil
+        if gap > 0, rows.indices.contains(gap - 1) {
+            // The folders the gap closes, innermost first: none under a folder's own row, or where the row below
+            // isn't outside them.
+            var closing: [UUID] = []
+            var parent = rows[gap - 1].parentID
+            while let id = parent, id != outer, closing.count < 64 {
+                closing.append(id)
+                parent = byID[id]?.parentID
+            }
+            if parent == outer { choices += closing.map(GapChoice.bottomOf) }
+        }
+        choices.append(.beside)
+        // Over the top of a clipping group (the row below clipped, the row above not clipped to the same base), when
+        // what's dragged can be clipped: layers, not folders, and not the base itself.
+        if rows.indices.contains(gap), let base = rows[gap].maskSourceID,
+           gap == 0 || rows[gap - 1].maskSourceID != base,
+           ids.allSatisfy({ $0 != base && byID[$0]?.isGroup == false }) {
+            choices.append(.clippedTo(base))
+        }
+        let clips = choices.count > 1 && { if case .clippedTo = choices.last { true } else { false } }()
+        guard choices.count > 1 else { return DropTarget(row: gap) }
+        // The span a drop at this gap covers: from the middle of the row above (or the top of the first) to the middle
+        // of the row below (a folder's quarter, its middle being "into"), or half a row past the last row.
+        let top: CGFloat, bottom: CGFloat
+        if gap > 0 { top = rect(ofRow: gap - 1).midY } else { top = rect(ofRow: 0).minY }
+        if rows.indices.contains(gap) {
+            let below = rect(ofRow: gap)
+            bottom = rows[gap].isGroup ? below.minY + below.height / 4 : below.midY
+        } else {
+            let above = rect(ofRow: gap - 1)
+            bottom = above.maxY + above.height / 2
+        }
+        let band = min(choices.count - 1, max(0, Int((y - top) / max(1, bottom - top) * CGFloat(choices.count))))
+        switch choices[band] {
+        case .bottomOf(let folder): return DropTarget(row: gap, bottomOf: folder)
+        case .beside: return DropTarget(row: gap, unclipped: clips)
+        case .clippedTo(let base): return DropTarget(row: gap, clippedTo: base)
+        }
+    }
+
+    /// Whether a plain drop above `row` lands clipped: between two rows of the same clipping group, it joins the group,
+    /// as `adoptClipping` has it.
+    private func joinsClipping(at row: Int) -> Bool {
+        let rows = displayedRows
+        guard row > 0, rows.indices.contains(row), let base = rows[row - 1].maskSourceID else { return false }
+        return rows[row].id == base || rows[row].maskSourceID == base
+    }
+
+    /// How deep `id` sits among folders, for indenting the drop line.
+    private func depth(of id: UUID?) -> Int {
+        let byID = Dictionary(displayedRows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var depth = 0, parent = id.flatMap { byID[$0] }?.parentID
+        while let current = parent, depth < 64 { depth += 1; parent = byID[current]?.parentID }
+        return depth
+    }
+
+    /// Whether a drag at `event` is still the list's: over the Layers panel and no higher than its blend and opacity
+    /// controls. Past either, it leaves for an ordinary drag.
+    private func dragStaysInList(_ event: NSEvent) -> Bool {
+        guard let window, let content = window.contentView, let session, !session.layersPanelFrame.isEmpty else { return true }
+        let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+        guard session.layersPanelFrame.contains(point) else { return false }
+        return session.layerControlsFrame.isEmpty || point.y >= session.layerControlsFrame.minY
+    }
+
+    private func snapshot(of view: NSView) -> NSImage? {
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(rep)
+        return image
+    }
+
+    private func dragRows(pressed: Int, start: NSPoint, event first: NSEvent) {
+        guard let window, let scroll = enclosingScrollView, let content = window.contentView,
+              let coordinator = delegate as? NativeLayerList.Coordinator else { return }
+        let ids = draggedIDs(pressed: pressed)
+        guard !ids.isEmpty else { return }
+        let rowFrame = rect(ofRow: pressed)
+        let image = rowView(atRow: pressed, makeIfNecessary: false).flatMap(snapshot)
+        // The picked-up row: half strength, so the list shows through it. It sits over the whole window, so it can follow
+        // the pointer up over the blend and opacity controls.
+        let picture = NSImageView(frame: .zero)
+        picture.image = image
+        picture.imageScaling = .scaleNone
+        picture.alphaValue = 0.5
+        content.addSubview(picture, positioned: .above, relativeTo: nil)
+        let marker = NSView(frame: .zero)
+        marker.wantsLayer = true
+        addSubview(marker)
+        // The Layers panel readies its controls for the drag now, in case it leaves the list and comes straight back.
+        session?.layerDragIsOutside = true
+        var leftList = false
+        defer {
+            picture.removeFromSuperview()
+            marker.removeFromSuperview()
+            if !leftList { session?.layerDragIsOutside = false }
+        }
+        let grab = NSPoint(x: start.x - rowFrame.minX, y: start.y - rowFrame.minY)
+        var target: DropTarget?
+
+        func follow(_ event: NSEvent) {
+            var pointer = convert(event.locationInWindow, from: nil)
+            // Held at or past the list's top or bottom edge, the list scrolls on.
+            let visible = scroll.contentView.bounds
+            let most = max(0, bounds.height - visible.height)
+            if pointer.y < visible.minY + 6 { scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: max(0, visible.minY - 8))) }
+            else if pointer.y > visible.maxY - 6 { scroll.contentView.scroll(to: NSPoint(x: visible.minX, y: min(most, visible.minY + 8))) }
+            scroll.reflectScrolledClipView(scroll.contentView)
+            let shown = scroll.contentView.bounds
+            // The picture follows the pointer, up over the controls too, but no lower than the list's last rows.
+            let top = min(pointer.y - grab.y, shown.maxY - rowFrame.height)
+            let x = convert(event.locationInWindow, from: nil).x - grab.x
+            let corner = content.convert(NSPoint(x: x, y: top), from: self)
+            picture.frame = NSRect(x: corner.x, y: content.isFlipped ? corner.y : corner.y - rowFrame.height,
+                                   width: rowFrame.width, height: rowFrame.height)
+            // Above the list, the release puts the rows first.
+            pointer.y = min(max(pointer.y, shown.minY), shown.maxY - 1)
+            let candidate = dropTarget(at: pointer.y, for: ids)
+            if coordinator.canDrop(ids, at: candidate.row, intoFolder: candidate.intoFolder, bottomOf: candidate.bottomOf) {
+                target = candidate
+                let rows = displayedRows
+                if candidate.intoFolder {
+                    marker.frame = rect(ofRow: candidate.row).insetBy(dx: 2, dy: 1)
+                    marker.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+                    marker.layer?.cornerRadius = 5
+                } else {
+                    let lineY = candidate.row < rows.count ? rect(ofRow: candidate.row).minY : rect(ofRow: rows.count - 1).maxY
+                    // Indented to the depth the layer would land at: inside a folder, in line with its layers, and
+                    // clipped, in line with the clipped layers.
+                    let level: Int
+                    if let folder = candidate.bottomOf { level = depth(of: folder) + 1 }
+                    else if candidate.row < rows.count {
+                        let clipped = candidate.clippedTo != nil || (!candidate.unclipped && joinsClipping(at: candidate.row))
+                        level = depth(of: rows[candidate.row].id) + (clipped ? 1 : 0)
+                    } else { level = 0 }
+                    let indent = 4 + CGFloat(min(level, 8)) * 24
+                    marker.frame = NSRect(x: indent, y: max(0, lineY - 1), width: bounds.width - indent - 4, height: 2)
+                    marker.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+                    marker.layer?.cornerRadius = 1
+                }
+                marker.isHidden = false
+            } else {
+                target = nil
+                marker.isHidden = true
+            }
+            Self.rowDragStepForTesting?(self, picture, target)
+        }
+
+        follow(first)
+        var last = first
+        // A copy with Option held as the drag began or as it's dropped: let go of a moment before the button, it used to
+        // be a move, which right above the original changed nothing.
+        func release(option: Bool) {
+            guard let target else { return }
+            coordinator.drop(ids, at: target.row, intoFolder: target.intoFolder, bottomOf: target.bottomOf,
+                             clippedTo: target.clippedTo, unclipped: target.unclipped,
+                             copying: first.modifierFlags.contains(.option) || option)
+        }
+        while true {
+            guard let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown],
+                                               until: Date(timeIntervalSinceNow: 0.05), inMode: .eventTracking, dequeue: true) else {
+                if NSEvent.pressedMouseButtons & 1 != 0 {
+                    follow(last) // held near an edge: it keeps scrolling
+                    continue
+                }
+                // The button is up but its mouse-up hasn't arrived: let go just as the wait ran out, the mouse-up is
+                // usually on its way. Taken as no release at all, about one quick drag in three dropped nothing.
+                let up = window.nextEvent(matching: .leftMouseUp, until: Date(timeIntervalSinceNow: 0.25), inMode: .eventTracking, dequeue: true)
+                Self.rowDragEndForTesting?(up == nil ? "no up" : "late up")
+                if let up { follow(up) }
+                release(option: (up ?? last).modifierFlags.contains(.option) || NSEvent.modifierFlags.contains(.option))
+                return
+            }
+            switch event.type {
+            case .leftMouseUp:
+                Self.rowDragEndForTesting?("up")
+                follow(event)
+                release(option: event.modifierFlags.contains(.option))
+                return
+            case .keyDown where event.keyCode == 53:
+                return
+            case .leftMouseDragged:
+                last = event
+                if !dragStaysInList(event) {
+                    // Out of the Layers panel, or above its controls: the ordinary drag, to copy into another tab or
+                    // onto the canvas.
+                    let pointer = convert(event.locationInWindow, from: nil)
+                    let frame = NSRect(x: pointer.x - grab.x, y: pointer.y - grab.y, width: rowFrame.width, height: rowFrame.height)
+                    picture.removeFromSuperview()
+                    marker.removeFromSuperview()
+                    leftList = true
+                    beginsOutsideDrag(self, ids, image, frame, event)
+                    return
+                }
+                follow(event)
+            default:
+                break
+            }
+        }
+    }
+
+    /// The system's drag, carrying each row's layer as the list's own drags did, so the tabs and the canvas take it.
+    func beginSystemDrag(ids: [UUID], image row: NSImage?, frame: NSRect, event: NSEvent) {
+        // macOS draws a drag a little see-through on its own; faded further, the picture reads at the same half strength
+        // it has in the list, wherever it goes.
+        let image = row.map { row in
+            NSImage(size: row.size, flipped: false) { rect in
+                row.draw(in: rect, from: .zero, operation: .copy, fraction: 0.6)
+                return true
+            }
+        }
+        session?.layerDragImage = image
+        session?.layerDragIsOutside = true
+        let items = ids.enumerated().map { index, id in
+            let item = NSPasteboardItem()
+            item.setString(id.uuidString, forType: NativeLayerList.Coordinator.layerType)
+            let dragging = NSDraggingItem(pasteboardWriter: item)
+            dragging.setDraggingFrame(frame.offsetBy(dx: 0, dy: CGFloat(index) * 4), contents: image)
+            return dragging
+        }
+        // Its own source rather than the list, which would redo the dragged picture at its own, smaller size.
+        let source = LayerRowDragSource(table: self)
+        outsideDragSource = source
+        let dragging = beginDraggingSession(with: items, event: event, source: source)
+        // Kept as the row looks in the list, full size, rather than gathered into the smaller stacked image.
+        dragging.draggingFormation = .none
+        // Handed its picture afresh, macOS shows it smaller until it's set again; set again now, before the drag's first
+        // frame, rather than as it first moves.
+        if let image {
+            dragging.enumerateDraggingItems(options: [], for: nil, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
+                item.setDraggingFrame(NSRect(origin: item.draggingFrame.origin, size: image.size), contents: image)
+            }
+        }
     }
     override func keyDown(with event: NSEvent) {
         guard let event = ShortcutSettings.shared.canvasEvent(event) else { return }
@@ -803,6 +1223,9 @@ final class LayerTableView: NSTableView {
             session?.resetPaletteColors()
         } else if plain, event.charactersIgnoringModifiers?.lowercased() == "t" {
             session?.selectTool(.type)
+        } else if plain, event.charactersIgnoringModifiers?.lowercased() == "f" {
+            // Toggle Fullscreen, through its menu item, as on the canvas; the list used to take it as typing to a row.
+            _ = NSApp.mainMenu?.performKeyEquivalent(with: event)
         } else if plain, ["a", "v", "h", "z", "b", "e", "g", "l", "m", "w", "j", "s", "u", "r", "i", "c"].contains(event.charactersIgnoringModifiers?.lowercased() ?? "") {
             let key = event.charactersIgnoringModifiers?.lowercased()
             if key == "m" { if !event.isARepeat { session?.pressMarqueeKey() } }
@@ -816,10 +1239,14 @@ final class LayerTableView: NSTableView {
         } else if plain, let digit = Int(event.charactersIgnoringModifiers ?? ""), session?.usesOpacityKeys == true {
             session?.typeOpacityDigit(digit)
         // With the Move tool the arrows move the layer, as on the canvas, rather than changing the row selection.
-        } else if plain, session?.transformEdit != nil || session?.tool == .move, [123, 124, 125, 126].contains(event.keyCode) {
+        } else if event.modifierFlags.intersection([.command, .control]).isEmpty,
+                  session?.transformEdit != nil || session?.tool == .move, [123, 124, 125, 126].contains(event.keyCode) {
+            // Shift for 10 px; Option moves a copy, leaving the layer where it was.
             let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
-            session?.nudgeLayer(dx: event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0,
-                                dy: event.keyCode == 126 ? -step : event.keyCode == 125 ? step : 0)
+            let dx: CGFloat = event.keyCode == 123 ? -step : event.keyCode == 124 ? step : 0
+            let dy: CGFloat = event.keyCode == 126 ? -step : event.keyCode == 125 ? step : 0
+            if event.modifierFlags.contains(.option) { session?.duplicateAndNudgeLayer(dx: dx, dy: dy) }
+            else { session?.nudgeLayer(dx: dx, dy: dy) }
         } else if [51, 117].contains(event.keyCode), plain {
             session?.deleteKeyPressed()
         } else { super.keyDown(with: event) }
@@ -838,8 +1265,8 @@ private final class LayerCell: NSTableCellView, NSTextFieldDelegate {
     private let thumbnail = LayerThumbnailButton()
     private let maskThumbnail = LayerThumbnailButton()
     private let disabledMaskMark = MaskDisabledMark(labelWithString: "╱")
-    /// "16-Bit" or "HDR" after the size of a layer keeping more than 8 bits a channel (`DeepLayer`); gone once it's
-    /// rasterized to 8.
+    /// "GIF" after the size of an animated layer, or "16-Bit" or "HDR" after that of a layer keeping more than 8 bits a
+    /// channel (`DeepLayer`), gone once it's rasterized to 8.
     private let depthTag = LayerTag()
     /// Holds the tag inside the row while it shows; hidden, it gives its room back to the size.
     private var depthTagFits: NSLayoutConstraint!
@@ -1057,8 +1484,9 @@ private final class LayerCell: NSTableCellView, NSTextFieldDelegate {
         if !renaming { nameLabel.stringValue = (layer.maskSourceID == nil ? "" : "↳ ") + layer.name }
         dimensions.stringValue = layer.liveText != nil ? "Text · Double-click to edit" : layer.adjustment != nil ? "Adjustment · Double-click to edit" : layer.isGroup ? "Folder" : layer.sizeLabel
         depthTag.text = layer.depthLabel ?? ""
-        depthTag.toolTip = layer.asset?.isHDR == true ? "HDR layer: keeps light brighter than white, shown as white"
-                                                      : "16-bit layer: keeps 16 bits a channel"
+        depthTag.toolTip = layer.gifAnimation != nil ? "Animated GIF: select it to show its frames under the canvas"
+            : layer.asset?.isHDR == true ? "HDR layer: keeps light brighter than white, shown as white"
+            : "16-bit layer: keeps 16 bits a channel"
         depthTag.isHidden = layer.depthLabel == nil || layer.maskSourceID != nil
         depthTagFits.isActive = !depthTag.isHidden
         if let source = layer.maskSourceID {
@@ -1492,10 +1920,52 @@ extension ImageLayer {
         return text + " · " + percent.formatted(.number.precision(.fractionLength(0...1))) + "%"
     }
 
-    /// The tag after the size of a layer keeping 16 bits a channel, or light brighter than white (`DeepLayer`); nil
-    /// once it's rasterized to 8.
+    /// The tag after the size of an animated GIF layer, or of a layer keeping 16 bits a channel or light brighter than
+    /// white (`DeepLayer`), which goes once it's rasterized to 8.
     var depthLabel: String? {
+        if movie != nil { return "MOV" }
+        if gifAnimation != nil { return "GIF" }
         guard let asset, asset.deep != nil, liveText == nil, adjustment == nil, !isGroup else { return nil }
         return asset.isHDR ? "HDR" : "16-Bit"
+    }
+}
+
+/// The source of a row drag once it has left the Layers list (see `LayerTableView.beginSystemDrag`): moves within the
+/// app, copies with Option held, and when it ends, wherever that is, the panel's controls stop taking it back.
+final class LayerRowDragSource: NSObject, NSDraggingSource {
+    weak var table: LayerTableView?
+    init(table: LayerTableView) { self.table = table }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .withinApplication ? [.move, .copy] : []
+    }
+    /// Where the drag was when it last moved: over the blend and opacity controls, over the list, or elsewhere; nil
+    /// before it first moves.
+    private enum Area { case controls, list, elsewhere }
+    private var lastArea: Area?
+    /// macOS draws a drag as a smaller preview of its picture whenever it's handed one afresh (as the drag begins, and as
+    /// it leaves the controls or the list, which show it their own way) and keeps doing so until the picture is set
+    /// again. So it's set again each time the drag moves into a different area, and stays full size throughout.
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        guard let image = table?.session?.layerDragImage else { return }
+        let area = self.area(at: screenPoint)
+        defer { lastArea = area }
+        guard area != lastArea else { return }
+        session.draggingFormation = .none
+        session.enumerateDraggingItems(options: [], for: nil, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, _, _ in
+            item.setDraggingFrame(NSRect(origin: item.draggingFrame.origin, size: image.size), contents: image)
+        }
+    }
+    private func area(at screenPoint: NSPoint) -> Area {
+        guard let table, let window = table.window, let content = window.contentView, let session = table.session else { return .elsewhere }
+        let inWindow = window.convertPoint(fromScreen: screenPoint)
+        let point = CGPoint(x: inWindow.x, y: content.bounds.height - inWindow.y)
+        if session.layerControlsFrame.contains(point) { return .controls }
+        if let scroll = table.enclosingScrollView, scroll.bounds.contains(scroll.convert(inWindow, from: nil)) { return .list }
+        return .elsewhere
+    }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        table?.session?.layerDragIsOutside = false
+        table?.session?.layerDragImage = nil
+        table?.outsideDragSource = nil
     }
 }

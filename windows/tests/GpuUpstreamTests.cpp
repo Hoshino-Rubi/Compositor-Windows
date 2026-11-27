@@ -225,6 +225,71 @@ class GpuUpstreamTests : public QObject {
         manifest(path, [](QJsonObject &j) { j["version"] = 14; });
         QVERIFY(rejects("invalidProject", [&] { readProject(path); }));
     }
+    void latestUpstreamStaticProjectOpensWithoutChangingItsPixels() {
+        auto state = document(16);
+        QTemporaryDir dir;
+        const auto path = dir.path() + "/upstream.comp";
+        writeProject(path, state);
+        const auto original = readProject(path).state.layers[0].originalPng;
+        for (int version = 17; version <= 23; ++version) {
+            manifest(path, [version](QJsonObject &j) {
+                j["version"] = version;
+                j.remove("bitDepth");
+            });
+            const auto loaded = readProject(path).state;
+            QCOMPARE(loaded.layers[0].image, state.layers[0].image);
+            QCOMPARE(loaded.layers[0].originalPng, original);
+        }
+        writeProject(dir.path() + "/compatible.comp", readProject(path).state, {}, true);
+        const auto compatible = readProject(dir.path() + "/compatible.comp").state;
+        QCOMPARE(compatible.metadata["version"].toInt(), 12);
+        QCOMPARE(compatible.layers[0].originalPng, original);
+        manifest(path, [](QJsonObject &j) { j["version"] = 24; });
+        QVERIFY(rejects("unsupportedVersion", [&] { readProject(path); }));
+    }
+    void unsupportedUpstreamLayerFeaturesAreNotSilentlyFlattened() {
+        const auto state = document(8);
+        QTemporaryDir dir;
+        const auto check = [&](int version, const QString &key, const QJsonObject &feature) {
+            const auto path = dir.filePath(key + ".comp");
+            writeProject(path, state);
+            manifest(path, [&](QJsonObject &j) {
+                j["version"] = version;
+                auto layer = j["layers"].toArray().first().toObject();
+                for (auto it = feature.begin(); it != feature.end(); ++it)
+                    layer[it.key()] = it.value();
+                j["layers"] = QJsonArray{layer};
+            });
+            return rejects(key, [&] { readProject(path); });
+        };
+        QVERIFY(check(17, "unsupportedGifLayer", {{"gif", QJsonObject{{"selectedFrameIndex", 0}}}}));
+        QVERIFY(check(23, "unsupportedMovieLayer", {{"movie", QJsonObject{{"duration", 3}}}}));
+        QVERIFY(check(22, "unsupportedShapeStroke", {{"shape", QJsonObject{{"kind", "Rectangle"}, {"strokeWidth", 2}}}}));
+        QVERIFY(check(18, "unsupportedFeature", {{"adjustment", QJsonObject{{"kind", "Lens Effects"}}}}));
+    }
+    void rawLuminanceDenoiseRetainsAlphaAndWidePrecision() {
+        for (const int depth : {8, 16}) {
+            auto source = pixels(depth);
+            for (int y = 0; y < source.height(); ++y) {
+                for (int x = 0; x < source.width(); ++x) {
+                    const int noise = ((x * 7 + y * 13 + x * y * 17) % 19 - 9) * 770;
+                    const quint16 sample = quint16((x < 48 ? 16000 : 49000) + noise);
+                    source.setPixelColor(x, y, QColor::fromRgba64(sample, sample, sample, x == 0 ? 16384 : 65535));
+                }
+            }
+            const auto result = cameraRaw(source, {{"detail", QJsonObject{{"noiseLuminance", 100}, {"noiseLuminanceDetail", 0}}}});
+            QVERIFY(!result.isNull());
+            QCOMPARE(wideImage(result), depth == 16);
+            QCOMPARE(result.pixelColor(0, 23).alphaF(), source.pixelColor(0, 23).alphaF());
+            QVERIFY(result != source);
+            QVERIFY(result.pixelColor(65, 40).red() - result.pixelColor(28, 40).red() > 90);
+            if (depth == 16) QVERIFY(pixel64(result, 28, 40).red() % 257 != 0);
+        }
+        const auto flatRamp = pixels(16); // Near-zero measured noise, but large distances between patches.
+        const auto result = cameraRaw(flatRamp, {{"detail", QJsonObject{{"noiseLuminance", 1}, {"noiseLuminanceDetail", 100}}}});
+        QCOMPARE(result.size(), flatRamp.size());
+        QVERIFY(wideImage(result));
+    }
     void spectralSplitRetainsPrecisionAndHdr() {
         for (int depth : {8, 16}) {
             auto source = pixels(depth);

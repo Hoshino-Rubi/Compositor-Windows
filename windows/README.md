@@ -1,14 +1,20 @@
 # Compositor for Windows
 
-Native C++20 / Qt 6 Widgets, **0.5.4 (stable)**. The original Swift / AppKit / Metal project is retained.
+Native C++20 / Qt 6 Widgets, **0.5.5 (stable)**. The original Swift / AppKit / Metal project is retained.
 Detailed controls and compatibility notes are in [README.zh-CN.md](README.zh-CN.md).
 
 ## Run
 
-Download the stable [0.5.4 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.4), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
+Download the stable [0.5.5 release](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/tag/windows-v0.5.5), also available through [Latest](https://github.com/Hoshino-Rubi/Compositor-Windows/releases/latest).
 
-Extract `Compositor-0.5.4-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
+Extract `Compositor-0.5.5-win-x64.zip` and run `Compositor.exe`. Keep the DLLs, plugins, translations, models and licenses together.
 Windows 10 / 11 x64. No Qt SDK, Python, Node.js or browser runtime is needed. Eight interface languages switch immediately in Preferences: English, Simplified Chinese, Traditional Chinese, Japanese, Korean, German, French and Spanish.
+
+## Version 0.5.5 — Upstream 1.7.4 sync
+
+Merged 227 upstream commits through `7b85bfd71b25278345a0777b678c343ce99cd62f`. Windows can now open ordinary `.comp` projects saved in upstream formats through v23 as long as all their layer features are supported. Projects with animated GIF layers, linked movie layers, shape inside strokes or unsupported adjustments are rejected instead of opening an incomplete copy. The Windows save format and 16-bit mask compatibility mode are unchanged. New macOS tools and workflows are not included in the Windows binary; see the [release notes](releases/0.5.5.md).
+
+Camera Raw's existing luminance denoise uses upstream non-local means on the CPU in both 8- and 16-bit workflows. This is not the new standalone Reduce Noise filter or Metal acceleration.
 
 ## Version 0.5.4 — Upstream integration and layer workflows
 
